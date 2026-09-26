@@ -18,23 +18,32 @@ After the script finishes, run the dashboard in a terminal with:
 
 ```bash
 cd ~/Meshcore-Ollama-bot
-source .venv/bin/activate
-python mesh_ai_bot_dashboard.py
+.venv/bin/python mesh_ai_bot_dashboard.py
 ```
 
 ## Run the dashboard
 
-With the virtual environment active:
+From the project directory:
 
 ```bash
 cd Meshcore-Ollama-bot
-source .venv/bin/activate
-python mesh_ai_bot_dashboard.py
+.venv/bin/python mesh_ai_bot_dashboard.py
 ```
 
 You can also launch the app from the desktop shortcut created during setup.
 
 The script starts the web server on port `8080` and attempts to open the dashboard automatically at http://127.0.0.1:8080.
+
+## Customize the bot
+
+Send the bot a direct message with a request such as:
+
+- `Call yourself Nova.`
+- `Change your personality to concise and curious.`
+- `Be more playful.`
+
+The bot confirms each change and saves its name and personality under
+`~/.config/meshcore-ollama-bot/bot_settings.json` so they persist across restarts.
 
 Use the dashboard to choose Bluetooth or Serial, enter the Heltec Bluetooth MAC address or serial port, select the Ollama model, and connect. The default values are `/dev/ttyACM0` and the MAC address defined near the top of the script.
 

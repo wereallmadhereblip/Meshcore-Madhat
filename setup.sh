@@ -18,9 +18,8 @@ sudo systemctl enable --now bluetooth
 sudo rfkill unblock bluetooth
 
 python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -r requirements.txt
 
 export PATH="$PATH:/usr/local/bin:/usr/local/sbin"
 
@@ -29,14 +28,13 @@ if ! command -v ollama >/dev/null 2>&1; then
   export PATH="$PATH:/usr/local/bin:/usr/local/sbin"
 fi
 
-source .venv/bin/activate
-if ! curl -fsS http://127.0.0.1:11434/api/tags >/dev/null; then
+if ! curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
   nohup ollama serve >/tmp/ollama-serve.log 2>&1 &
 fi
 
 ollama_ready=false
 for attempt in {1..30}; do
-  if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null; then
+  if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
     ollama_ready=true
     break
   fi
@@ -59,7 +57,7 @@ Version=1.0
 Type=Application
 Name=MeshCore AI Bot Dashboard
 Comment=Launch the MeshCore AI Bot Dashboard
-Exec=/bin/bash -lc 'cd "$HOME/Meshcore-Ollama-bot" && source .venv/bin/activate && python mesh_ai_bot_dashboard.py'
+Exec=/bin/bash -lc 'cd "$HOME/Meshcore-Ollama-bot" && .venv/bin/python mesh_ai_bot_dashboard.py'
 Path=$HOME/Meshcore-Ollama-bot
 Terminal=true
 Icon=utilities-terminal
@@ -75,5 +73,4 @@ fi
 
 echo "Run the following in a new terminal:"
 echo "  cd ~/Meshcore-Ollama-bot"
-echo "  source .venv/bin/activate"
-echo "  python mesh_ai_bot_dashboard.py"
+echo "  .venv/bin/python mesh_ai_bot_dashboard.py"
