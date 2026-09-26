@@ -12,12 +12,12 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+from bleak import BleakScanner
 import ollama
 from aiohttp import web
 from meshcore import EventType, MeshCore
+from serial.tools import list_ports
 
-DEFAULT_BLE_MAC = "A4:CB:8F:A6:67:39"
-DEFAULT_SERIAL_PORT = "/dev/ttyACM0"
 DEFAULT_MODEL = "llama3.2:1b"
 WEB_HOST = "0.0.0.0"
 WEB_PORT = 8080
@@ -114,8 +114,8 @@ def update_bot_settings_from_prompt(prompt):
 
 app_state = {
     "connection_type": "bluetooth",
-    "ble_mac": DEFAULT_BLE_MAC,
-    "serial_port": DEFAULT_SERIAL_PORT,
+    "ble_mac": "",
+    "serial_port": "",
     "selected_model": DEFAULT_MODEL,
     "is_connected": False,
     "logs": [],
@@ -629,6 +629,45 @@ async def disconnect_hardware():
         app_state["gateway_telemetry"] = {}
 
 
+async def bluetooth_scan_handler(request):
+    try:
+        devices = await BleakScanner.discover(timeout=5.0)
+    except Exception as error:
+        log_to_dash(f"Bluetooth scan failed: {error}")
+        return web.json_response({"error": str(error)}, status=503)
+
+    return web.json_response({
+        "devices": [
+            {
+                "name": device.name or "Unnamed Bluetooth device",
+                "address": device.address,
+            }
+            for device in sorted(
+                devices,
+                key=lambda device: (device.name or device.address).casefold(),
+            )
+        ]
+    })
+
+
+async def serial_scan_handler(request):
+    try:
+        ports = list_ports.comports()
+    except Exception as error:
+        log_to_dash(f"Serial port scan failed: {error}")
+        return web.json_response({"error": str(error)}, status=503)
+
+    return web.json_response({
+        "ports": [
+            {
+                "device": port.device,
+                "description": port.description,
+            }
+            for port in sorted(ports, key=lambda port: port.device.casefold())
+        ]
+    })
+
+
 async def connect_hardware():
     global meshcore_instance
     await disconnect_hardware()
@@ -708,7 +747,12 @@ body[data-theme="cyberpunk"]{--page-bg:#090511;--panel-bg:#160b24;--panel-raised
 .nav-count{min-width:18px;padding:1px 5px;border-radius:10px;background:var(--panel-raised);font:10px ui-monospace,monospace;text-align:center}
 .view-panel[hidden]{display:none!important}
 .page-view{width:min(100%,1800px);flex:1;margin:0 auto}
-.connection-layout{display:grid;grid-template-columns:minmax(280px,520px) minmax(0,1fr);gap:12px;align-items:start}
+.connection-layout{width:min(100%,520px);display:grid;grid-template-columns:minmax(0,1fr);gap:12px;align-items:start}
+.settings-layout{width:min(100%,760px);display:grid;grid-template-columns:minmax(0,1fr);gap:12px;align-items:start}
+.settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.settings-item{min-width:0;padding:12px;border:1px solid var(--border);border-radius:6px;background:var(--panel-raised)}
+.settings-item select{margin-top:4px}
+.settings-description{margin:8px 0 0;color:var(--muted);font-size:11px}
 .card{min-width:0;margin-bottom:12px;padding:12px;background:var(--panel-bg);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12)}
 .panel-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
 .panel-heading h2{margin:0;color:var(--text);font-size:14px;font-weight:600;line-height:1.25}
@@ -722,6 +766,10 @@ button:hover{transform:translateY(-1px);border-color:var(--accent);background:va
 .connection-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
 .connection-actions button:first-child{border-color:var(--accent);background:var(--accent);color:var(--button-text)}
 .connection-actions button:first-child:hover{background:color-mix(in srgb,var(--accent) 85%,white)}
+.scan-control{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}
+.scan-control button{min-width:78px}
+.scan-status{min-height:18px;margin:5px 0 0;color:var(--muted);font-size:10px}
+.scan-status[data-state="error"]{color:var(--danger)}
 .chat-panel{height:min(680px,calc(100vh - 270px));min-height:360px;display:flex;flex-direction:column}
 .chat-target{margin-bottom:10px}
 #node-chat-history,#channel-chat-history{flex:1;min-height:220px;overflow-y:auto;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--log-bg);white-space:pre-wrap;overflow-wrap:anywhere}
@@ -762,15 +810,18 @@ button:hover{transform:translateY(-1px);border-color:var(--accent);background:va
 .leaflet-popup-content-wrapper,.leaflet-popup-tip{background:var(--panel-bg);color:var(--text)}
 .leaflet-popup-content{margin:10px 12px}
 .leaflet-control-attribution{font-size:9px!important}
-@media(max-width:1050px){.header-meta{gap:10px}.connection-layout{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:1050px){.header-meta{gap:10px}}
 @media(max-width:1050px){.dashboard-header{flex-wrap:wrap}.top-nav{order:3;flex-basis:100%}.map-layout{grid-template-columns:minmax(210px,260px) minmax(0,1fr)}}
-@media(max-width:720px){body{padding:8px}.dashboard-header{align-items:flex-start;flex-direction:column;gap:12px}.top-nav{order:0;max-width:100%;overflow-x:auto}.nav-tab{flex:none}.header-meta{width:100%;flex-wrap:wrap;justify-content:space-between}.header-controls{flex-wrap:wrap}.header-controls select{max-width:140px}.chat-panel{height:calc(100vh - 250px);min-height:340px}.map-layout{grid-template-columns:minmax(0,1fr)}.map-rail{min-height:180px;max-height:230px}.map-surface{min-height:48vh}#map-canvas{height:50vh;min-height:320px}.map-toolbar{align-items:flex-start;flex-direction:column}.console-card{height:120px;min-height:120px;max-height:120px}}
+@media(max-width:720px){body{padding:8px}.dashboard-header{align-items:flex-start;flex-direction:column;gap:12px}.top-nav{order:0;max-width:100%;overflow-x:auto}.nav-tab{flex:none}.header-meta{width:100%;flex-wrap:wrap;justify-content:space-between}.settings-grid{grid-template-columns:minmax(0,1fr)}.chat-panel{height:calc(100vh - 250px);min-height:340px}.map-layout{grid-template-columns:minmax(0,1fr)}.map-rail{min-height:180px;max-height:230px}.map-surface{min-height:48vh}#map-canvas{height:50vh;min-height:320px}.map-toolbar{align-items:flex-start;flex-direction:column}.console-card{height:120px;min-height:120px;max-height:120px}}
 </style>
 <script>
 let gatewayTelemetry={};
 function applyTheme(theme){document.body.dataset.theme=theme;localStorage.setItem('meshcore-theme',theme);document.getElementById('theme-select').value=theme}
 function loadTheme(){applyTheme(localStorage.getItem('meshcore-theme')||'midnight')}
 function fields(){let t=connection_type.value;document.getElementById('ble-field').style.display=t==='bluetooth'?'block':'none';document.getElementById('serial-field').style.display=t==='serial'?'block':'none'}
+async function scanDevices(kind){let bluetooth=kind==='bluetooth',select=document.getElementById(bluetooth?'ble_mac':'serial_port'),button=document.getElementById(bluetooth?'ble-scan':'serial-scan'),statusMessage=document.getElementById(bluetooth?'ble-scan-status':'serial-scan-status'),previous=select.value;button.disabled=true;button.textContent='Scanning';statusMessage.dataset.state='';statusMessage.textContent='Searching for available devices...';try{let response=await fetch('/api/scan/'+kind),data=await response.json();if(!response.ok)throw new Error(data.error||'Device scan failed');let devices=bluetooth?data.devices:data.ports;select.replaceChildren(new Option(bluetooth?'Select a Bluetooth device':'Select a serial port',''));for(let device of devices){let label=bluetooth?`${device.name} (${device.address})`:`${device.device} - ${device.description||'Serial port'}`;select.add(new Option(label,bluetooth?device.address:device.device))}if(previous&&[...select.options].some(option=>option.value===previous))select.value=previous;statusMessage.textContent=devices.length?`Found ${devices.length} device(s). Select one to connect.`:'No devices found. Check that the radio is powered and discoverable.'}catch(error){statusMessage.dataset.state='error';statusMessage.textContent=error.message}finally{button.disabled=false;button.textContent='Scan'}}
+function scanBluetooth(){return scanDevices('bluetooth')}
+function scanSerial(){return scanDevices('serial')}
 function updateClock(){document.getElementById('current-datetime').textContent=new Date().toLocaleString()}
 async function status(){let r=await fetch('/api/status'),d=await r.json();let b=document.getElementById('status');b.textContent=d.is_connected?'CONNECTED':'DISCONNECTED';b.className='header-status '+(d.is_connected?'connected':'disconnected');document.getElementById('console').innerText=d.logs.join('\n')}
 let mapNodes=[];
@@ -794,12 +845,11 @@ window.addEventListener('DOMContentLoaded',()=>{loadTheme();fields();status();pe
 </script></head><body>
 <header class="dashboard-header">
 <div class="brand-lockup"><div class="brand-mark">MC</div><div class="brand-copy"><span class="header-label">LOCAL MESH / RADIO CONTROL</span><h1>MESHCORE <span>AI GATEWAY</span></h1></div></div>
-<nav class="top-nav" aria-label="Dashboard pages"><button type="button" class="nav-tab" data-view="connection" aria-pressed="true" onclick="showView('connection')">Connection</button><button type="button" class="nav-tab" data-view="nodes" aria-pressed="false" onclick="showView('nodes')">Nodes</button><button type="button" class="nav-tab" data-view="channels" aria-pressed="false" onclick="showView('channels')">Channels</button><button type="button" class="nav-tab" data-view="map" aria-pressed="false" onclick="showView('map')">Map <span class="nav-count" id="map-node-count">0</span></button></nav>
+<nav class="top-nav" aria-label="Dashboard pages"><button type="button" class="nav-tab" data-view="connection" aria-pressed="true" onclick="showView('connection')">Connection</button><button type="button" class="nav-tab" data-view="nodes" aria-pressed="false" onclick="showView('nodes')">Nodes</button><button type="button" class="nav-tab" data-view="channels" aria-pressed="false" onclick="showView('channels')">Channels</button><button type="button" class="nav-tab" data-view="map" aria-pressed="false" onclick="showView('map')">Map <span class="nav-count" id="map-node-count">0</span></button><button type="button" class="nav-tab" data-view="settings" aria-pressed="false" onclick="showView('settings')">Settings</button></nav>
 <div class="header-meta">
 <div><span class="header-label">LINK</span><span id="status" class="header-status disconnected">DISCONNECTED</span></div>
 <div><span class="header-label">GATEWAY BATTERY</span><span id="gateway_battery" class="header-metric">Unavailable</span></div>
 <div><span class="header-label">LOCAL TIME</span><span id="current-datetime" class="header-metric">--</span></div>
-<div class="header-controls"><label for="theme-select">THEME</label><select id="theme-select" onchange="applyTheme(this.value)"><option value="midnight">Midnight</option><option value="light">Light</option><option value="ocean">Ocean</option><option value="amber">Amber</option><option value="linux">Linux Console</option><option value="macos">macOS</option><option value="cyberpunk">Hacker Cyberpunk</option></select><label for="model">MODEL</label><select id="model">{{MODEL_OPTIONS}}</select></div>
 </div>
 </header>
 <main id="connection-view" class="view-panel page-view">
@@ -807,8 +857,8 @@ window.addEventListener('DOMContentLoaded',()=>{loadTheme();fields();status();pe
 <section class="card connection-card">
 <div class="panel-heading"><div><span class="eyebrow">RADIO LINK</span><h2>Connection</h2></div><span class="panel-index">01</span></div>
 <label for="connection_type">Connection type</label><select id="connection_type" onchange="fields()"><option value="bluetooth">Bluetooth</option><option value="serial">Serial</option></select>
-<div id="ble-field"><label for="ble_mac">Bluetooth MAC</label><input id="ble_mac" value="A4:CB:8F:A6:67:39"></div>
-<div id="serial-field" style="display:none"><label for="serial_port">Serial port</label><input id="serial_port" value="/dev/ttyACM0"></div>
+<div id="ble-field"><label for="ble_mac">Bluetooth device</label><div class="scan-control"><select id="ble_mac"><option value="">Scan for Bluetooth devices</option></select><button id="ble-scan" type="button" onclick="scanBluetooth()">Scan</button></div><p id="ble-scan-status" class="scan-status" aria-live="polite"></p></div>
+<div id="serial-field" style="display:none"><label for="serial_port">Serial port</label><div class="scan-control"><select id="serial_port"><option value="">Scan for serial ports</option></select><button id="serial-scan" type="button" onclick="scanSerial()">Scan</button></div><p id="serial-scan-status" class="scan-status" aria-live="polite"></p></div>
 <div class="connection-actions"><button onclick="connect()">Connect</button><button onclick="disconnect()">Disconnect</button></div>
 </section>
 </div>
@@ -818,6 +868,16 @@ window.addEventListener('DOMContentLoaded',()=>{loadTheme();fields();status();pe
 </main>
 <main id="channels-view" class="view-panel page-view" hidden>
 <section class="card chat-panel"><div class="panel-heading"><div><span class="eyebrow">SHARED FREQUENCY</span><h2>Channel Messages</h2></div><span class="panel-index">03</span></div><select class="chat-target" id="channel" onchange="selectChannel()"><option value="">Select channel</option></select><div id="channel-chat-history"></div><form onsubmit="sendMessage(event,'channel','channel','channel-message','channel-chat-history')"><input id="channel-message" maxlength="200" placeholder="Message selected channel" required><button>Send to Channel</button></form></section>
+</main>
+<main id="settings-view" class="view-panel page-view" hidden>
+<div class="settings-layout">
+<section class="card"><div class="panel-heading"><div><span class="eyebrow">APPLICATION</span><h2>Settings</h2></div><span class="panel-index">04</span></div>
+<div class="settings-grid">
+<div class="settings-item"><label for="theme-select">Color theme</label><select id="theme-select" onchange="applyTheme(this.value)"><option value="midnight">Midnight</option><option value="light">Light</option><option value="ocean">Ocean</option><option value="amber">Amber</option><option value="linux">Linux Console</option><option value="macos">macOS</option><option value="cyberpunk">Hacker Cyberpunk</option></select><p class="settings-description">Changes the dashboard appearance and saves your choice in this browser.</p></div>
+<div class="settings-item"><label for="model">Ollama model</label><select id="model">{{MODEL_OPTIONS}}</select><p class="settings-description">The selected model will be used when connecting to the MeshCore bot.</p></div>
+</div>
+</section>
+</div>
 </main>
 <main id="map-view" class="map-workspace view-panel page-view" hidden>
 <section class="card map-toolbar"><div><span class="eyebrow">LIVE MESH POSITIONS</span><h2>Network Map</h2></div><span class="live-tag" id="map-node-summary">0 of 0 locations</span></section>
@@ -888,13 +948,13 @@ async def connect_handler(request):
     if connection_type not in {"bluetooth", "serial"}:
         return web.json_response({"error": "Invalid connection type"}, status=400)
     if connection_type == "bluetooth" and not ble_mac:
-        return web.json_response({"error": "Bluetooth MAC is required"}, status=400)
+        return web.json_response({"error": "Scan and select a Bluetooth device"}, status=400)
     if connection_type == "serial" and not serial_port:
-        return web.json_response({"error": "Serial port is required"}, status=400)
+        return web.json_response({"error": "Scan and select a serial port"}, status=400)
 
     app_state["connection_type"] = connection_type
-    app_state["ble_mac"] = ble_mac or DEFAULT_BLE_MAC
-    app_state["serial_port"] = serial_port or DEFAULT_SERIAL_PORT
+    app_state["ble_mac"] = ble_mac
+    app_state["serial_port"] = serial_port
     if data.get("model"):
         app_state["selected_model"] = str(data["model"])
 
@@ -956,6 +1016,8 @@ def create_app():
     app.router.add_get("/", index_handler)
     app.router.add_get("/api/status", status_handler)
     app.router.add_get("/api/peers", peers_handler)
+    app.router.add_get("/api/scan/bluetooth", bluetooth_scan_handler)
+    app.router.add_get("/api/scan/serial", serial_scan_handler)
     app.router.add_get("/api/chat-history", chat_history_handler)
     app.router.add_post("/api/connect", connect_handler)
     app.router.add_post("/api/disconnect", disconnect_handler)
