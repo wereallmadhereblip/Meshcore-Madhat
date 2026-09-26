@@ -12,6 +12,8 @@ rm -rf ~/Meshcore-Ollama-bot && git clone https://github.com/wereallmadhereblip/
 
 The setup script creates the virtual environment, installs the project dependencies, starts Ollama, and downloads the default model (`llama3.2:1b`).
 
+The installation also creates a desktop launcher named `MeshCore AI Bot Dashboard` on your desktop so you can start the app with a single click.
+
 After the script finishes, run the dashboard in a terminal with:
 
 ```bash
@@ -29,6 +31,8 @@ cd Meshcore-Ollama-bot
 source .venv/bin/activate
 python mesh_ai_bot_dashboard.py
 ```
+
+You can also launch the app from the desktop shortcut created during setup.
 
 The script starts the web server on port `8080` and attempts to open the dashboard automatically at http://127.0.0.1:8080.
 

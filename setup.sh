@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -e
 
+APP_DIR="$HOME/Meshcore-Ollama-bot"
+DESKTOP_DIR="$HOME/Desktop"
+
+mkdir -p "$DESKTOP_DIR"
+
 sudo apt update
 sudo apt install -y git python3 python3-venv python3-pip curl bluez
 
@@ -29,6 +34,28 @@ nohup ollama serve >/tmp/ollama-serve.log 2>&1 &
 ollama pull llama3.2:1b
 
 echo "Setup complete."
+echo "Desktop shortcut created: $DESKTOP_DIR/MeshCore AI Bot Dashboard.desktop"
+
+cat > "$DESKTOP_DIR/MeshCore AI Bot Dashboard.desktop" <<EOF
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=MeshCore AI Bot Dashboard
+Comment=Launch the MeshCore AI Bot Dashboard
+Exec=/bin/bash -lc 'cd "$HOME/Meshcore-Ollama-bot" && source .venv/bin/activate && python mesh_ai_bot_dashboard.py'
+Path=$HOME/Meshcore-Ollama-bot
+Terminal=true
+Icon=utilities-terminal
+StartupNotify=true
+Categories=Utility;
+EOF
+
+chmod +x "$DESKTOP_DIR/MeshCore AI Bot Dashboard.desktop"
+
+if command -v gio >/dev/null 2>&1; then
+  gio set "$DESKTOP_DIR/MeshCore AI Bot Dashboard.desktop" metadata::trusted true || true
+fi
+
 echo "Run the following in a new terminal:"
 echo "  cd ~/Meshcore-Ollama-bot"
 echo "  source .venv/bin/activate"
