@@ -2,6 +2,7 @@ import asyncio
 import html
 import inspect
 import json
+import math
 import os
 import re
 import shutil
@@ -771,7 +772,16 @@ button:hover{transform:translateY(-1px);border-color:var(--accent);background:va
 .scan-status{min-height:18px;margin:5px 0 0;color:var(--muted);font-size:10px}
 .scan-status[data-state="error"]{color:var(--danger)}
 .chat-panel{height:min(680px,calc(100vh - 270px));min-height:360px;display:flex;flex-direction:column}
-.chat-target{margin-bottom:10px}
+.messages-layout{display:grid;grid-template-columns:minmax(210px,280px) minmax(0,1fr);gap:12px}
+.conversation-rail{min-height:360px;margin:0;display:flex;flex-direction:column}
+.conversation-target-list{display:grid;align-content:start;gap:6px;min-height:0;overflow:auto}
+.conversation-target{display:grid;width:100%;gap:3px;padding:9px;text-align:left}
+.conversation-target strong{overflow-wrap:anywhere;color:var(--text);font-size:11px}
+.conversation-target small{overflow-wrap:anywhere;color:var(--muted);font-size:10px}
+.conversation-target.active{border-color:var(--accent);background:var(--accent-dim)}
+.chat-header{display:grid;gap:2px;min-height:38px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+.chat-header strong{color:var(--text);font-size:13px}
+.chat-header span{color:var(--muted);font-size:10px;overflow-wrap:anywhere}
 #node-chat-history,#channel-chat-history{flex:1;min-height:220px;overflow-y:auto;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--log-bg);white-space:pre-wrap;overflow-wrap:anywhere}
 #node-chat-history:empty::before,#channel-chat-history:empty::before{display:block;padding:8px;color:var(--muted);font-size:11px;content:"No messages in this view yet"}
 .chat-message{max-width:92%;width:fit-content;margin:6px 0;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--panel-raised);color:var(--text);text-align:left;white-space:pre-wrap;overflow-wrap:anywhere}
@@ -780,6 +790,18 @@ button:hover{transform:translateY(-1px);border-color:var(--accent);background:va
 .chat-panel form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-top:10px}
 .chat-panel form input{min-width:0}
 .chat-panel form button{border-color:var(--accent);background:var(--accent);color:var(--button-text);white-space:nowrap}
+.chat-panel form button:disabled{opacity:.55;cursor:not-allowed}
+.device-settings-layout{width:min(100%,820px);display:grid;gap:12px}
+.device-settings-layout form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.device-settings-layout label{margin:0}
+.device-settings-layout label span{display:block;margin-bottom:5px}
+.device-settings-layout .settings-description{grid-column:1/-1;margin:0}
+.device-settings-layout .settings-actions{grid-column:1/-1;display:flex;align-items:center;gap:10px}
+.custom-radio-fields{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.custom-radio-fields[hidden],#custom-power-field[hidden]{display:none}
+.settings-status{min-height:18px;margin:0;color:var(--muted);font-size:11px}
+.settings-status[data-state="error"]{color:var(--danger)}
+.settings-status[data-state="success"]{color:var(--accent)}
 .console-dock{position:sticky;bottom:0;z-index:800;width:min(100%,1800px);margin:12px auto 0;padding:8px 0 0;background:linear-gradient(transparent,var(--page-bg) 12px)}
 .console-card{height:132px;min-height:132px;max-height:132px;margin:0;padding:10px;display:flex;flex-direction:column}
 .console-card .panel-heading{margin-bottom:6px}
@@ -812,10 +834,17 @@ button:hover{transform:translateY(-1px);border-color:var(--accent);background:va
 .leaflet-control-attribution{font-size:9px!important}
 @media(max-width:1050px){.header-meta{gap:10px}}
 @media(max-width:1050px){.dashboard-header{flex-wrap:wrap}.top-nav{order:3;flex-basis:100%}.map-layout{grid-template-columns:minmax(210px,260px) minmax(0,1fr)}}
-@media(max-width:720px){body{padding:8px}.dashboard-header{align-items:flex-start;flex-direction:column;gap:12px}.top-nav{order:0;max-width:100%;overflow-x:auto}.nav-tab{flex:none}.header-meta{width:100%;flex-wrap:wrap;justify-content:space-between}.settings-grid{grid-template-columns:minmax(0,1fr)}.chat-panel{height:calc(100vh - 250px);min-height:340px}.map-layout{grid-template-columns:minmax(0,1fr)}.map-rail{min-height:180px;max-height:230px}.map-surface{min-height:48vh}#map-canvas{height:50vh;min-height:320px}.map-toolbar{align-items:flex-start;flex-direction:column}.console-card{height:120px;min-height:120px;max-height:120px}}
+@media(max-width:720px){body{padding:8px}.dashboard-header{align-items:flex-start;flex-direction:column;gap:12px}.top-nav{order:0;max-width:100%;overflow-x:auto}.nav-tab{flex:none}.header-meta{width:100%;flex-wrap:wrap;justify-content:space-between}.settings-grid,.device-settings-layout form{grid-template-columns:minmax(0,1fr)}.messages-layout{grid-template-columns:minmax(0,1fr)}.conversation-rail{min-height:0;max-height:190px}.chat-panel{height:calc(100vh - 250px);min-height:340px}.device-settings-layout .settings-description,.device-settings-layout .settings-actions{grid-column:1}.map-layout{grid-template-columns:minmax(0,1fr)}.map-rail{min-height:180px;max-height:230px}.map-surface{min-height:48vh}#map-canvas{height:50vh;min-height:320px}.map-toolbar{align-items:flex-start;flex-direction:column}.console-card{height:120px;min-height:120px;max-height:120px}}
 </style>
 <script>
 let gatewayTelemetry={};
+let meshChannels=[];
+let selectedNodeId='';
+let selectedChannelId='';
+let activeView='connection';
+let deviceSettingsLoaded=false;
+let loadedDeviceSettings=null;
+const commonRadioProfiles={balanced:{radio_bw:125,radio_sf:7,radio_cr:5},long_range:{radio_bw:125,radio_sf:10,radio_cr:5},high_throughput:{radio_bw:250,radio_sf:7,radio_cr:5}};
 function applyTheme(theme){document.body.dataset.theme=theme;localStorage.setItem('meshcore-theme',theme);document.getElementById('theme-select').value=theme}
 function loadTheme(){applyTheme(localStorage.getItem('meshcore-theme')||'midnight')}
 function fields(){let t=connection_type.value;document.getElementById('ble-field').style.display=t==='bluetooth'?'block':'none';document.getElementById('serial-field').style.display=t==='serial'?'block':'none'}
@@ -828,24 +857,32 @@ let mapNodes=[];
 let dashboardMap=null;
 let mapMarkers=null;
 let mapBoundsSignature='';
-function showView(view){let target=document.getElementById(view+'-view');if(!target)return;document.querySelectorAll('.view-panel').forEach(panel=>panel.hidden=panel!==target);document.querySelectorAll('.nav-tab').forEach(tab=>tab.setAttribute('aria-pressed',String(tab.dataset.view===view)));if(view==='map')openMap()}
+function showView(view){let target=document.getElementById(view+'-view');if(!target)return;activeView=view;document.querySelectorAll('.view-panel').forEach(panel=>panel.hidden=panel!==target);document.querySelectorAll('.nav-tab').forEach(tab=>tab.setAttribute('aria-pressed',String(tab.dataset.view===view)));if(view==='map')openMap();if(view==='device-settings'&&!deviceSettingsLoaded)loadDeviceSettings()}
 function openMap(){if(!window.L){document.getElementById('map-message').textContent='Map library unavailable. Check your internet connection and reload.';return}if(!dashboardMap){dashboardMap=L.map('map-canvas',{zoomControl:true}).setView([20,0],2);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(dashboardMap);mapMarkers=L.layerGroup().addTo(dashboardMap)}setTimeout(()=>dashboardMap.invalidateSize(),80);renderMapMarkers()}
 function popupContent(title,detail){let content=document.createElement('div');let heading=document.createElement('strong');heading.textContent=title;content.appendChild(heading);if(detail){let line=document.createElement('div');line.textContent=detail;content.appendChild(line)}return content}
 function focusMapPoint(latitude,longitude){showView('map');if(dashboardMap)dashboardMap.setView([latitude,longitude],12)}
 function renderMapMarkers(){if(!dashboardMap||!mapMarkers)return;mapMarkers.clearLayers();let bounds=[];for(let peer of mapNodes){if(!Number.isFinite(peer.latitude)||!Number.isFinite(peer.longitude))continue;let point=[peer.latitude,peer.longitude];L.circleMarker(point,{radius:7,color:'#0d1117',weight:2,fillColor:'#4ade80',fillOpacity:.95}).bindPopup(popupContent(peer.name,peer.id)).addTo(mapMarkers);bounds.push(point)}if(Number.isFinite(gatewayTelemetry.latitude)&&Number.isFinite(gatewayTelemetry.longitude)){let point=[gatewayTelemetry.latitude,gatewayTelemetry.longitude];L.circleMarker(point,{radius:9,color:'#0d1117',weight:2,fillColor:'#36d1dc',fillOpacity:1}).bindPopup(popupContent('This gateway','Current radio location')).addTo(mapMarkers);bounds.push(point)}let signature=JSON.stringify(bounds);if(bounds.length&&signature!==mapBoundsSignature){dashboardMap.fitBounds(bounds,{padding:[36,36],maxZoom:12});mapBoundsSignature=signature}else if(!bounds.length){mapBoundsSignature=''}document.getElementById('map-message').hidden=bounds.length>0;document.getElementById('map-message').textContent='No peer or gateway location data is available yet.'}
 function renderMapNodes(){let list=document.getElementById('map-node-list');list.replaceChildren();let located=0;for(let peer of mapNodes){let row=document.createElement('div');row.className='map-node-row';let details=document.createElement('div');let name=document.createElement('strong');name.textContent=peer.name;let id=document.createElement('span');id.textContent=peer.id;details.append(name,id);let location=document.createElement('span');let hasLocation=Number.isFinite(peer.latitude)&&Number.isFinite(peer.longitude);location.className='map-location '+(hasLocation?'located':'unlocated');location.textContent=hasLocation?'LOCATED':'NO FIX';if(hasLocation){located++;row.tabIndex=0;row.setAttribute('role','button');row.addEventListener('click',()=>focusMapPoint(peer.latitude,peer.longitude));row.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();row.click()}})}row.append(details,location);list.appendChild(row)}let gatewayLocated=Number.isFinite(gatewayTelemetry.latitude)&&Number.isFinite(gatewayTelemetry.longitude);if(gatewayLocated){located++;let row=document.createElement('div');row.className='map-node-row';let details=document.createElement('div');let name=document.createElement('strong');name.textContent='This gateway';let id=document.createElement('span');id.textContent='Local radio';details.append(name,id);let location=document.createElement('span');location.className='map-location located';location.textContent='LOCATED';row.tabIndex=0;row.setAttribute('role','button');row.addEventListener('click',()=>focusMapPoint(gatewayTelemetry.latitude,gatewayTelemetry.longitude));row.append(details,location);list.appendChild(row)}if(!mapNodes.length&&!gatewayLocated){let empty=document.createElement('div');empty.className='map-empty';empty.textContent='No peers are available yet. Connect to a MeshCore radio to load contacts.';list.appendChild(empty)}document.getElementById('map-node-count').textContent=String(located);document.getElementById('map-peer-total').textContent=String(mapNodes.length);document.getElementById('map-node-summary').textContent=`${located} located / ${mapNodes.length} peers`;renderMapMarkers()}
-async function peers(){let r=await fetch('/api/peers'),d=await r.json();gatewayTelemetry=d.gateway_telemetry||{};mapNodes=d.nodes||[];gateway_battery.textContent=gatewayTelemetry.battery!=null?gatewayTelemetry.battery+'%':'Unavailable';node.innerHTML='<option value="">Select node</option>';channel.innerHTML='<option value="">Select channel</option>';for(let n of mapNodes){node.add(new Option(n.name,n.id))}for(let c of d.channels||[]){channel.add(new Option(c.name,c.id))}renderMapNodes()}
-async function history(t,id,boxId){let box=document.getElementById(boxId);if(!id){box.innerHTML='';return}let r=await fetch('/api/chat-history?target_type='+encodeURIComponent(t)+'&target='+encodeURIComponent(id)),d=await r.json();box.innerHTML='';for(let m of d.messages||[]){let e=document.createElement('div');e.className='chat-message '+m.direction;e.textContent='['+m.timestamp+'] '+m.text;box.appendChild(e)}box.scrollTop=box.scrollHeight}
-function selectNode(){if(!node.value)return;history('node',node.value,'node-chat-history')}
-function selectChannel(){if(!channel.value)return;history('channel',channel.value,'channel-chat-history')}
+function renderConversationTargets(type){let isNode=type==='node',items=isNode?mapNodes:meshChannels,list=document.getElementById(isNode?'node-target-list':'channel-target-list'),selected=isNode?selectedNodeId:selectedChannelId;list.replaceChildren();if(!items.length){let empty=document.createElement('p');empty.className='map-empty';empty.textContent=isNode?'No nodes found. Connect to a MeshCore radio to load contacts.':'No channels found on this device.';list.appendChild(empty);return}for(let item of items){let button=document.createElement('button');button.type='button';button.className='conversation-target'+(selected===String(item.id)?' active':'');button.onclick=()=>selectConversation(type,item.id);let title=document.createElement('strong');title.textContent=item.name;let detail=document.createElement('small');detail.textContent=String(item.id);button.append(title,detail);list.appendChild(button)}}
+function selectConversation(type,id){let normalized=String(id);if(type==='node'){selectedNodeId=normalized;document.getElementById('node-chat-title').textContent=mapNodes.find(item=>String(item.id)===normalized)?.name||normalized;document.getElementById('node-chat-detail').textContent=normalized;document.getElementById('node-send').disabled=false;renderConversationTargets('node');history('node',normalized,'node-chat-history')}else{selectedChannelId=normalized;document.getElementById('channel-chat-title').textContent=meshChannels.find(item=>String(item.id)===normalized)?.name||'Channel '+normalized;document.getElementById('channel-chat-detail').textContent='Channel '+normalized;document.getElementById('channel-send').disabled=false;renderConversationTargets('channel');history('channel',normalized,'channel-chat-history')}}
+async function peers(){let r=await fetch('/api/peers'),d=await r.json();gatewayTelemetry=d.gateway_telemetry||{};mapNodes=d.nodes||[];meshChannels=d.channels||[];gateway_battery.textContent=gatewayTelemetry.battery!=null?gatewayTelemetry.battery+'%':'Unavailable';if(!mapNodes.some(item=>String(item.id)===selectedNodeId))selectedNodeId='';if(!meshChannels.some(item=>String(item.id)===selectedChannelId))selectedChannelId='';renderConversationTargets('node');renderConversationTargets('channel');renderMapNodes()}
+async function history(type,id,boxId){let box=document.getElementById(boxId);if(!id){box.replaceChildren();return}try{let response=await fetch('/api/chat-history?target_type='+encodeURIComponent(type)+'&target='+encodeURIComponent(id)),data=await response.json();if(!response.ok)throw new Error(data.error||'Message history could not be loaded');box.replaceChildren();for(let message of data.messages||[]){let item=document.createElement('div');item.className='chat-message '+(message.direction==='outgoing'?'outgoing':'incoming');item.textContent='['+message.timestamp+'] '+message.text;box.appendChild(item)}box.scrollTop=box.scrollHeight}catch(error){box.textContent=error.message}}
+function selectNode(id){selectConversation('node',id)}
+function selectChannel(id){selectConversation('channel',id)}
+function refreshActiveHistory(){if(activeView==='nodes'&&selectedNodeId)history('node',selectedNodeId,'node-chat-history');if(activeView==='channels'&&selectedChannelId)history('channel',selectedChannelId,'channel-chat-history')}
+function setCustomRadioMode(){let custom=document.getElementById('custom-radio-fields'),enabled=document.getElementById('radio-profile').value==='custom';custom.hidden=!enabled;custom.querySelectorAll('input,select').forEach(input=>input.disabled=!enabled)}
+function setCustomPowerMode(){let custom=document.getElementById('custom-power-field'),enabled=document.getElementById('tx-power-mode').value==='custom';custom.hidden=!enabled;custom.querySelector('input').disabled=!enabled}
+function populatePowerOptions(maximum,current){let select=document.getElementById('tx-power-mode'),common=[10,14,17,20];select.replaceChildren();for(let value of common){if(value<=maximum)select.add(new Option(value+' dBm',String(value)))}if(!common.includes(Number(current))&&Number(current)<=maximum)select.add(new Option(current+' dBm (current)',String(current)));let currentIsCommon=[...select.options].some(option=>Number(option.value)===Number(current));select.add(new Option('Custom...','custom'));select.value=currentIsCommon?String(current):'custom';document.getElementById('custom-tx-power').value=current??'';document.getElementById('custom-tx-power').max=maximum;setCustomPowerMode()}
+async function loadDeviceSettings(){deviceSettingsLoaded=false;loadedDeviceSettings=null;let statusMessage=document.getElementById('device-settings-status');statusMessage.dataset.state='';statusMessage.textContent='Loading settings from device...';try{let response=await fetch('/api/device-settings'),data=await response.json();if(!response.ok)throw new Error(data.error||'Device settings could not be loaded');loadedDeviceSettings=data;document.getElementById('device-name').value=data.name||'';document.getElementById('custom-radio-frequency').value=data.radio_freq??'';document.getElementById('custom-radio-bandwidth').value=data.radio_bw??'';document.getElementById('custom-radio-spreading-factor').value=data.radio_sf??'';document.getElementById('custom-radio-coding-rate').value=data.radio_cr??'';let matchingProfile=Object.entries(commonRadioProfiles).find(([,profile])=>Number(profile.radio_bw)===Number(data.radio_bw)&&Number(profile.radio_sf)===Number(data.radio_sf)&&Number(profile.radio_cr)===Number(data.radio_cr));document.getElementById('radio-profile').value=matchingProfile?.[0]||'custom';setCustomRadioMode();let maximum=Number(data.max_tx_power??30);populatePowerOptions(maximum,data.tx_power);document.getElementById('tx-power-limit').textContent='Device maximum: '+maximum+' dBm';deviceSettingsLoaded=true;statusMessage.textContent='Settings loaded from device.';statusMessage.dataset.state='success'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
+async function saveDeviceSettings(event){event.preventDefault();let statusMessage=document.getElementById('device-settings-status'),form=new FormData(event.currentTarget);if(!loadedDeviceSettings){statusMessage.textContent='Load settings from the connected device first.';statusMessage.dataset.state='error';return}let profile=form.get('radio_profile'),values={name:String(form.get('name')||'').trim()},radio=profile==='custom'?{radio_freq:Number(form.get('radio_freq')),radio_bw:Number(form.get('radio_bw')),radio_sf:Number(form.get('radio_sf')),radio_cr:Number(form.get('radio_cr'))}:{radio_freq:Number(loadedDeviceSettings.radio_freq),...commonRadioProfiles[profile]};Object.assign(values,radio);let powerMode=form.get('tx_power_mode');values.tx_power=Number(powerMode==='custom'?form.get('custom_tx_power'):powerMode);statusMessage.dataset.state='';statusMessage.textContent='Saving settings to device...';try{let response=await fetch('/api/device-settings',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({values})}),data=await response.json();if(!response.ok)throw new Error(data.error||'Settings could not be saved');deviceSettingsLoaded=false;await loadDeviceSettings();statusMessage.textContent='Device settings saved.';statusMessage.dataset.state='success'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
 async function connect(){let r=await fetch('/api/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({connection_type:connection_type.value,ble_mac:ble_mac.value,serial_port:serial_port.value,model:model.value})});let d=await r.json();if(!r.ok)alert(d.error);await status();await peers()}
 async function disconnect(){await fetch('/api/disconnect',{method:'POST'});await status();await peers()}
-async function sendMessage(e,targetId,type,messageId,historyId){e.preventDefault();let selected=document.getElementById(targetId).value;let input=document.getElementById(messageId);if(!selected)return alert('Select a '+type+' first');let r=await fetch('/api/transmit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:selected,target_type:type,text:input.value})});let d=await r.json();if(!r.ok)return alert(d.error);input.value='';await history(type,selected,historyId)}
-window.addEventListener('DOMContentLoaded',()=>{loadTheme();fields();status();peers();updateClock();setInterval(updateClock,1000)});setInterval(status,2000);setInterval(peers,10000);
+async function sendMessage(event,type,messageId,historyId){event.preventDefault();let selected=type==='node'?selectedNodeId:selectedChannelId,input=document.getElementById(messageId);if(!selected)return;let message=input.value.trim();if(!message)return;let response=await fetch('/api/transmit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:selected,target_type:type,text:message})}),data=await response.json();if(!response.ok){alert(data.error||'Message could not be sent');return}input.value='';await history(type,selected,historyId)}
+window.addEventListener('DOMContentLoaded',()=>{loadTheme();fields();status();peers();updateClock();setInterval(updateClock,1000);setInterval(refreshActiveHistory,3000)});setInterval(status,2000);setInterval(peers,10000);
 </script></head><body>
 <header class="dashboard-header">
 <div class="brand-lockup"><div class="brand-mark">MC</div><div class="brand-copy"><span class="header-label">LOCAL MESH / RADIO CONTROL</span><h1>MESHCORE <span>AI GATEWAY</span></h1></div></div>
-<nav class="top-nav" aria-label="Dashboard pages"><button type="button" class="nav-tab" data-view="connection" aria-pressed="true" onclick="showView('connection')">Connection</button><button type="button" class="nav-tab" data-view="nodes" aria-pressed="false" onclick="showView('nodes')">Nodes</button><button type="button" class="nav-tab" data-view="channels" aria-pressed="false" onclick="showView('channels')">Channels</button><button type="button" class="nav-tab" data-view="map" aria-pressed="false" onclick="showView('map')">Map <span class="nav-count" id="map-node-count">0</span></button><button type="button" class="nav-tab" data-view="settings" aria-pressed="false" onclick="showView('settings')">Settings</button></nav>
+<nav class="top-nav" aria-label="Dashboard pages"><button type="button" class="nav-tab" data-view="connection" aria-pressed="true" onclick="showView('connection')">Connection</button><button type="button" class="nav-tab" data-view="nodes" aria-pressed="false" onclick="showView('nodes')">Nodes</button><button type="button" class="nav-tab" data-view="channels" aria-pressed="false" onclick="showView('channels')">Channels</button><button type="button" class="nav-tab" data-view="map" aria-pressed="false" onclick="showView('map')">Map <span class="nav-count" id="map-node-count">0</span></button><button type="button" class="nav-tab" data-view="settings" aria-pressed="false" onclick="showView('settings')">App Settings</button><button type="button" class="nav-tab" data-view="device-settings" aria-pressed="false" onclick="showView('device-settings')">Device Settings</button></nav>
 <div class="header-meta">
 <div><span class="header-label">LINK</span><span id="status" class="header-status disconnected">DISCONNECTED</span></div>
 <div><span class="header-label">GATEWAY BATTERY</span><span id="gateway_battery" class="header-metric">Unavailable</span></div>
@@ -864,10 +901,16 @@ window.addEventListener('DOMContentLoaded',()=>{loadTheme();fields();status();pe
 </div>
 </main>
 <main id="nodes-view" class="view-panel page-view" hidden>
-<section class="card chat-panel"><div class="panel-heading"><div><span class="eyebrow">DIRECT MESSAGES</span><h2>Node Messages</h2></div><span class="panel-index">02</span></div><select class="chat-target" id="node" onchange="selectNode()"><option value="">Select node</option></select><div id="node-chat-history"></div><form onsubmit="sendMessage(event,'node','node','node-message','node-chat-history')"><input id="node-message" maxlength="200" placeholder="Message selected node" required><button>Send to Node</button></form></section>
+<div class="messages-layout">
+<aside class="card conversation-rail"><div class="panel-heading"><div><span class="eyebrow">DIRECT MESSAGES</span><h2>Nodes</h2></div><span class="panel-index">02</span></div><div class="conversation-target-list" id="node-target-list"><p class="map-empty">Waiting for nodes...</p></div></aside>
+<section class="card chat-panel"><div class="chat-header"><strong id="node-chat-title">Select a node</strong><span id="node-chat-detail">Choose a node to view its conversation.</span></div><div id="node-chat-history"></div><form onsubmit="sendMessage(event,'node','node-message','node-chat-history')"><input id="node-message" maxlength="100" placeholder="Message selected node" required><button id="node-send" disabled>Send to Node</button></form></section>
+</div>
 </main>
 <main id="channels-view" class="view-panel page-view" hidden>
-<section class="card chat-panel"><div class="panel-heading"><div><span class="eyebrow">SHARED FREQUENCY</span><h2>Channel Messages</h2></div><span class="panel-index">03</span></div><select class="chat-target" id="channel" onchange="selectChannel()"><option value="">Select channel</option></select><div id="channel-chat-history"></div><form onsubmit="sendMessage(event,'channel','channel','channel-message','channel-chat-history')"><input id="channel-message" maxlength="200" placeholder="Message selected channel" required><button>Send to Channel</button></form></section>
+<div class="messages-layout">
+<aside class="card conversation-rail"><div class="panel-heading"><div><span class="eyebrow">SHARED FREQUENCY</span><h2>Channels</h2></div><span class="panel-index">03</span></div><div class="conversation-target-list" id="channel-target-list"><p class="map-empty">Waiting for channels...</p></div></aside>
+<section class="card chat-panel"><div class="chat-header"><strong id="channel-chat-title">Select a channel</strong><span id="channel-chat-detail">Choose a channel to view its conversation.</span></div><div id="channel-chat-history"></div><form onsubmit="sendMessage(event,'channel','channel-message','channel-chat-history')"><input id="channel-message" maxlength="100" placeholder="Message selected channel" required><button id="channel-send" disabled>Send to Channel</button></form></section>
+</div>
 </main>
 <main id="settings-view" class="view-panel page-view" hidden>
 <div class="settings-layout">
@@ -876,6 +919,26 @@ window.addEventListener('DOMContentLoaded',()=>{loadTheme();fields();status();pe
 <div class="settings-item"><label for="theme-select">Color theme</label><select id="theme-select" onchange="applyTheme(this.value)"><option value="midnight">Midnight</option><option value="light">Light</option><option value="ocean">Ocean</option><option value="amber">Amber</option><option value="linux">Linux Console</option><option value="macos">macOS</option><option value="cyberpunk">Hacker Cyberpunk</option></select><p class="settings-description">Changes the dashboard appearance and saves your choice in this browser.</p></div>
 <div class="settings-item"><label for="model">Ollama model</label><select id="model">{{MODEL_OPTIONS}}</select><p class="settings-description">The selected model will be used when connecting to the MeshCore bot.</p></div>
 </div>
+</section>
+</div>
+</main>
+<main id="device-settings-view" class="view-panel page-view" hidden>
+<div class="device-settings-layout">
+<section class="card"><div class="panel-heading"><div><span class="eyebrow">CONNECTED RADIO</span><h2>MeshCore Device Settings</h2></div><span class="panel-index">05</span></div>
+<form onsubmit="saveDeviceSettings(event)">
+<label><span>Device name</span><input id="device-name" name="name" maxlength="32" required></label>
+<label><span>Common radio profile</span><select id="radio-profile" name="radio_profile" onchange="setCustomRadioMode()"><option value="balanced">Balanced · 125 kHz / SF7 / CR 4/5</option><option value="long_range">Long range · 125 kHz / SF10 / CR 4/5</option><option value="high_throughput">Higher throughput · 250 kHz / SF7 / CR 4/5</option><option value="custom">Custom settings...</option></select></label>
+<div id="custom-radio-fields" class="custom-radio-fields" hidden>
+<label><span>Radio frequency (MHz)</span><input id="custom-radio-frequency" name="radio_freq" type="number" min="100" max="3000" step="0.001" required disabled></label>
+<label><span>Bandwidth (kHz)</span><input id="custom-radio-bandwidth" name="radio_bw" type="number" min="7.8" max="1000" step="0.1" required disabled></label>
+<label><span>Spreading factor</span><input id="custom-radio-spreading-factor" name="radio_sf" type="number" min="5" max="12" step="1" required disabled></label>
+<label><span>Coding rate</span><select id="custom-radio-coding-rate" name="radio_cr" disabled><option value="5">4/5</option><option value="6">4/6</option><option value="7">4/7</option><option value="8">4/8</option></select></label>
+</div>
+<label><span>Transmit power (dBm)</span><select id="tx-power-mode" name="tx_power_mode" onchange="setCustomPowerMode()"></select><small id="tx-power-limit" class="settings-description"></small></label>
+<label id="custom-power-field" hidden><span>Custom transmit power (dBm)</span><input id="custom-tx-power" name="custom_tx_power" type="number" min="0" step="1" required disabled></label>
+<p class="settings-description">Common profiles keep the current frequency. Custom settings let you edit each radio value. Confirm your local frequency plan and device limits before saving.</p>
+<div class="settings-actions"><button type="submit">Save device settings</button><button class="secondary" type="button" onclick="loadDeviceSettings()">Refresh from device</button><p id="device-settings-status" class="settings-status" aria-live="polite"></p></div>
+</form>
 </section>
 </div>
 </main>
@@ -933,6 +996,111 @@ async def chat_history_handler(request):
     target_type = request.query.get("target_type", "node")
     target = request.query.get("target", "")
     return web.json_response({"messages": chat_history.get(chat_key(target_type, target), [])})
+
+
+def validate_device_settings(current, values):
+    if not isinstance(values, dict) or not values:
+        raise ValueError("Provide at least one device setting to update")
+
+    allowed = {"name", "radio_freq", "radio_bw", "radio_sf", "radio_cr", "tx_power"}
+    unsupported = set(values) - allowed
+    if unsupported:
+        raise ValueError(f"Unsupported device settings: {', '.join(sorted(unsupported))}")
+
+    updated = {key: current.get(key) for key in allowed}
+    updated.update(values)
+
+    name = updated.get("name")
+    if not isinstance(name, str) or not name.strip() or len(name.encode("utf-8")) > 32:
+        raise ValueError("Device name must contain 1 to 32 UTF-8 bytes")
+    updated["name"] = name.strip()
+
+    for key, minimum, maximum in (
+        ("radio_freq", 100, 3000),
+        ("radio_bw", 7.8, 1000),
+    ):
+        try:
+            value = float(updated[key])
+        except (TypeError, ValueError):
+            raise ValueError(f"{key} must be a number") from None
+        if not math.isfinite(value) or not minimum <= value <= maximum:
+            raise ValueError(f"{key} must be between {minimum} and {maximum}")
+        updated[key] = value
+
+    for key, minimum, maximum in (
+        ("radio_sf", 5, 12),
+        ("radio_cr", 5, 8),
+        ("tx_power", 0, int(current.get("max_tx_power", 30))),
+    ):
+        value = updated[key]
+        if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
+            raise ValueError(f"{key} must be an integer between {minimum} and {maximum}")
+    return updated
+
+
+async def device_settings_handler(request):
+    if not meshcore_instance or not app_state["is_connected"]:
+        return web.json_response({"error": "MeshCore is not connected"}, status=503)
+
+    try:
+        async with hardware_lock:
+            result = await meshcore_instance.commands.send_appstart()
+        if result.type == EventType.ERROR:
+            return web.json_response({"error": str(result.payload)}, status=502)
+        return web.json_response(result.payload)
+    except Exception as error:
+        log_to_dash(f"Device settings read error: {error}")
+        return web.json_response({"error": str(error)}, status=502)
+
+
+async def update_device_settings_handler(request):
+    if not meshcore_instance or not app_state["is_connected"]:
+        return web.json_response({"error": "MeshCore is not connected"}, status=503)
+    try:
+        payload = await request.json()
+        values = payload.get("values", payload)
+    except Exception:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+
+    try:
+        async with hardware_lock:
+            commands = meshcore_instance.commands
+            current_result = await commands.send_appstart()
+            if current_result.type == EventType.ERROR:
+                return web.json_response({"error": str(current_result.payload)}, status=502)
+            current = current_result.payload
+            updated = validate_device_settings(current, values)
+
+            if updated["name"] != current.get("name"):
+                result = await commands.set_name(updated["name"])
+                if result.type == EventType.ERROR:
+                    raise RuntimeError(str(result.payload))
+
+            radio_keys = ("radio_freq", "radio_bw", "radio_sf", "radio_cr")
+            if any(updated[key] != current.get(key) for key in radio_keys):
+                result = await commands.set_radio(
+                    updated["radio_freq"],
+                    updated["radio_bw"],
+                    updated["radio_sf"],
+                    updated["radio_cr"],
+                )
+                if result.type == EventType.ERROR:
+                    raise RuntimeError(str(result.payload))
+
+            if updated["tx_power"] != current.get("tx_power"):
+                result = await commands.set_tx_power(updated["tx_power"])
+                if result.type == EventType.ERROR:
+                    raise RuntimeError(str(result.payload))
+
+            refreshed = await commands.send_appstart()
+            if refreshed.type == EventType.ERROR:
+                raise RuntimeError(str(refreshed.payload))
+            return web.json_response(refreshed.payload)
+    except ValueError as error:
+        return web.json_response({"error": str(error)}, status=400)
+    except Exception as error:
+        log_to_dash(f"Device settings update error: {error}")
+        return web.json_response({"error": str(error)}, status=409)
 
 
 async def connect_handler(request):
@@ -1019,9 +1187,11 @@ def create_app():
     app.router.add_get("/api/scan/bluetooth", bluetooth_scan_handler)
     app.router.add_get("/api/scan/serial", serial_scan_handler)
     app.router.add_get("/api/chat-history", chat_history_handler)
+    app.router.add_get("/api/device-settings", device_settings_handler)
     app.router.add_post("/api/connect", connect_handler)
     app.router.add_post("/api/disconnect", disconnect_handler)
     app.router.add_post("/api/transmit", transmit_handler)
+    app.router.add_patch("/api/device-settings", update_device_settings_handler)
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
     return app
