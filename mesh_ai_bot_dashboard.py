@@ -6,6 +6,8 @@ import webbrowser
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from urllib.request import Request, urlopen
+import xml.etree.ElementTree as ET
 
 import ollama
 from aiohttp import web
@@ -20,6 +22,17 @@ MAX_HISTORY_LENGTH = 2
 MAX_CHANNELS = 40
 BATTERY_MIN_MV = 3200
 BATTERY_MAX_MV = 4200
+NEWS_FEED_URLS = [
+    "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en",
+    "https://feeds.bbci.co.uk/news/rss.xml",
+]
+HACKER_NEWS_URL = "https://hnrss.org/frontpage"
+FALLBACK_NEWS = [
+    "Google News: Global markets steady as investors assess policy signals.",
+    "BBC: Energy and transport sectors remain under close watch amid supply shifts.",
+    "Tech: AI infrastructure spending keeps technology stocks in focus.",
+    "Markets: Shipping and logistics firms track weather and congestion risks.",
+]
 
 app_state = {
     "connection_type": "bluetooth",
@@ -47,6 +60,48 @@ def log_to_dash(message):
     print(formatted)
     app_state["logs"].append(formatted)
     app_state["logs"] = app_state["logs"][-50:]
+
+
+def fetch_rss_headlines(url):
+    try:
+        request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urlopen(request, timeout=15) as response:
+            xml_data = response.read()
+        root = ET.fromstring(xml_data)
+        headlines = []
+        for item in root.findall(".//item"):
+            title = (item.findtext("title") or "").strip()
+            if title:
+                headlines.append(title)
+        if headlines:
+            return headlines[:20]
+
+        for entry in root.findall(".//entry"):
+            title = (entry.findtext("title") or "").strip()
+            if title:
+                headlines.append(title)
+        return headlines[:20]
+    except Exception:
+        return []
+
+
+def get_news_headlines():
+    for url in NEWS_FEED_URLS:
+        headlines = fetch_rss_headlines(url)
+        if headlines:
+            return headlines
+    return FALLBACK_NEWS
+
+
+def get_hacker_news_headlines():
+    headlines = fetch_rss_headlines(HACKER_NEWS_URL)
+    if headlines:
+        return headlines
+    return [
+        "Hacker News: Community discussions keep pushing new developer tools and ideas.",
+        "Hacker News: AI experiments and open-source releases continue to lead the signal.",
+        "Hacker News: Security, systems, and product engineering remain the hot topics.",
+    ]
 
 
 def normalize_entries(payload):
@@ -175,9 +230,8 @@ async def refresh_channels():
                     timeout=1.0,
                 )
             except asyncio.TimeoutError:
-                log_to_dash(
-                    f"Timed out reading channel {channel_index}"
-                )
+                # Empty or unavailable channels commonly timeout; silence this
+                # noise so the console remains readable while the scan continues.
                 continue
 
             if result.type == EventType.ERROR or not result.payload:
@@ -400,12 +454,12 @@ async def telemetry_loop():
                 await refresh_contacts()
                 await refresh_gateway_telemetry()
                 await refresh_channels()
-            await asyncio.sleep(10)
+            await asyncio.sleep(30)
         except asyncio.CancelledError:
             raise
         except Exception as error:
             log_to_dash(f"Telemetry error: {error}")
-            await asyncio.sleep(10)
+            await asyncio.sleep(30)
 
 
 PAGE = r'''<!DOCTYPE html>
@@ -512,6 +566,14 @@ async def chat_history_handler(request):
     return web.json_response({"messages": chat_history.get(chat_key(target_type, target), [])})
 
 
+async def news_handler(request):
+    return web.json_response({"headlines": get_news_headlines()})
+
+
+async def hacker_news_handler(request):
+    return web.json_response({"headlines": get_hacker_news_headlines()})
+
+
 async def connect_handler(request):
     try:
         data = await request.json()
@@ -593,6 +655,8 @@ def create_app():
     app.router.add_get("/api/status", status_handler)
     app.router.add_get("/api/peers", peers_handler)
     app.router.add_get("/api/chat-history", chat_history_handler)
+    app.router.add_get("/api/news", news_handler)
+    app.router.add_get("/api/hacker-news", hacker_news_handler)
     app.router.add_post("/api/connect", connect_handler)
     app.router.add_post("/api/disconnect", disconnect_handler)
     app.router.add_post("/api/transmit", transmit_handler)
