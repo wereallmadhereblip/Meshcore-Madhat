@@ -1,0 +1,17 @@
+{
+  "model": "llama3.2:1b",
+  "theme": "midnight",
+  "connection": {
+    "type": "bluetooth",
+    "ble_mac": "",
+    "serial_port": ""
+  },
+  "weather": {
+    "city": "",
+    "state": ""
+  },
+  "bot": {
+    "name": "MeshCore Assistant",
+    "personality": "helpful, friendly, and concise"
+  }
+}
