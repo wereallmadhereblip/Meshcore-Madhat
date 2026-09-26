@@ -491,6 +491,7 @@ async def refresh_channels():
         return
 
     channels = {}
+    seen_names = set()
     try:
         for channel_index in range(MAX_CHANNELS):
             try:
@@ -508,7 +509,10 @@ async def refresh_channels():
 
             channel_name = result.payload.get("channel_name", "").strip()
 
-            if channel_name:
+            # Some devices report the same channel (e.g. "Public") at more
+            # than one index; keep only the first one so it isn't listed twice.
+            if channel_name and channel_name.casefold() not in seen_names:
+                seen_names.add(channel_name.casefold())
                 channels[str(channel_index)] = {
                     "name": channel_name,
                     "channel_idx": channel_index,
@@ -912,7 +916,11 @@ async def handle_incoming_channel_message(event):
     add_chat_message("channel", channel_target, "incoming", text)
     log_to_dash(f"Received channel {channel_target} message: {text}")
 
-    bot_command = re.match(r"^/bot(?:\s+|$)", message_text, re.IGNORECASE)
+    # Some MeshCore clients prefix channel text with the sender's name
+    # (e.g. "[Alice] /bot ..." or "Alice: /bot ...") before it reaches us,
+    # so look for /bot anywhere after a word boundary rather than only at
+    # the very start of the message.
+    bot_command = re.search(r"(?:^|\s)/bot(?:\s+|$)", message_text, re.IGNORECASE)
     if bot_command is None:
         return
     prompt = message_text[bot_command.end():].strip()
