@@ -30,7 +30,24 @@ if ! command -v ollama >/dev/null 2>&1; then
 fi
 
 source .venv/bin/activate
-nohup ollama serve >/tmp/ollama-serve.log 2>&1 &
+if ! curl -fsS http://127.0.0.1:11434/api/tags >/dev/null; then
+  nohup ollama serve >/tmp/ollama-serve.log 2>&1 &
+fi
+
+ollama_ready=false
+for attempt in {1..30}; do
+  if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null; then
+    ollama_ready=true
+    break
+  fi
+  sleep 1
+done
+
+if [[ "$ollama_ready" != true ]]; then
+  echo "Ollama server did not become ready. Check /tmp/ollama-serve.log or run 'ollama serve'." >&2
+  exit 1
+fi
+
 ollama pull llama3.2:1b
 
 echo "Setup complete."

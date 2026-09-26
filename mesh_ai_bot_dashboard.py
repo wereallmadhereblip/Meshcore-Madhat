@@ -1,6 +1,8 @@
 import asyncio
 import html
 import inspect
+import shutil
+import subprocess
 import threading
 import webbrowser
 from collections import defaultdict
@@ -39,6 +41,7 @@ conversation_history = defaultdict(list)
 chat_history = defaultdict(list)
 processed_messages = set()
 meshcore_instance = None
+ollama_process = None
 
 
 def log_to_dash(message):
@@ -133,15 +136,55 @@ def battery_percentage(battery_mv):
     return round(max(0, min(100, percentage)))
 
 
+async def fetch_available_models():
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(executor, ollama.list)
+    models = [m.get("name") for m in result.get("models", []) if m.get("name")]
+    if models:
+        app_state["available_models"] = models
+
+
 async def update_available_models():
+    global ollama_process
+
     try:
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(executor, ollama.list)
-        models = [m.get("name") for m in result.get("models", []) if m.get("name")]
-        if models:
-            app_state["available_models"] = models
-    except Exception as error:
-        log_to_dash(f"Failed to fetch Ollama models: {error}")
+        await fetch_available_models()
+        return
+    except Exception as initial_error:
+        ollama_executable = shutil.which("ollama")
+        if ollama_executable is None:
+            log_to_dash(
+                "Ollama is not installed or running. Install Ollama, then restart "
+                f"the dashboard. Details: {initial_error}"
+            )
+            return
+
+    if ollama_process is None or ollama_process.poll() is not None:
+        try:
+            ollama_process = subprocess.Popen(
+                [ollama_executable, "serve"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError as error:
+            log_to_dash(f"Failed to start Ollama: {error}")
+            return
+
+    for _ in range(30):
+        await asyncio.sleep(1)
+        try:
+            await fetch_available_models()
+            log_to_dash("Ollama server is ready.")
+            return
+        except Exception:
+            continue
+
+    log_to_dash(
+        "Could not connect to Ollama after starting it. Check the Ollama server "
+        "and confirm it is listening on 127.0.0.1:11434."
+    )
 
 
 async def refresh_contacts():
@@ -572,15 +615,16 @@ async def transmit_handler(request):
 
 async def on_startup(app):
     app["telemetry_task"] = asyncio.create_task(telemetry_loop())
-    await update_available_models()
+    app["ollama_task"] = asyncio.create_task(update_available_models())
 
 
 async def on_cleanup(app):
-    app["telemetry_task"].cancel()
-    try:
-        await app["telemetry_task"]
-    except asyncio.CancelledError:
-        pass
+    for task in (app["telemetry_task"], app["ollama_task"]):
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     await disconnect_hardware()
     executor.shutdown(wait=False)
 

@@ -87,12 +87,14 @@ groups "$USER"
 
 ### Ollama model fails to load or respond
 
-- Ensure Ollama is running:
+- The dashboard starts the local Ollama server automatically when Ollama is installed but not already running.
+- If the Ollama command is missing, install Ollama:
 
 ```bash
-ollama serve
+curl -fsSL https://ollama.com/install.sh | sh
 ```
 
+- To start the server manually, run `ollama serve` in a separate terminal.
 - Pull the model again if needed:
 
 ```bash
