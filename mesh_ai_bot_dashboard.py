@@ -178,15 +178,44 @@ def display_name(entry_id, entry):
     return f"Node {entry_id}"
 
 
+def coordinates_from_entry(entry):
+    if not isinstance(entry, dict):
+        return None
+
+    candidates = [entry]
+    for key in ("position", "location", "gps", "telemetry", "contact"):
+        nested = entry.get(key)
+        if isinstance(nested, dict):
+            candidates.append(nested)
+
+    for candidate in candidates:
+        latitude = candidate.get("latitude", candidate.get("lat"))
+        longitude = candidate.get("longitude", candidate.get("lon", candidate.get("lng")))
+        if latitude is None or longitude is None:
+            latitude = candidate.get("latitude_i")
+            longitude = candidate.get("longitude_i")
+            if latitude is not None and longitude is not None:
+                latitude = float(latitude) / 10_000_000
+                longitude = float(longitude) / 10_000_000
+        try:
+            latitude = float(latitude)
+            longitude = float(longitude)
+        except (TypeError, ValueError):
+            continue
+        if -90 <= latitude <= 90 and -180 <= longitude <= 180:
+            return latitude, longitude
+    return None
+
+
 def chat_key(target_type, target):
     return f"{target_type}:{target}"
 
 
-def split_reply_into_messages(reply):
-    if len(reply) <= MAX_MESHCORE_MESSAGE_LENGTH:
-        return [reply]
+def split_reply_into_messages(reply, prefix=""):
+    if len(reply) + len(prefix) <= MAX_MESHCORE_MESSAGE_LENGTH:
+        return [f"{prefix}{reply}"]
 
-    content_length = MAX_MESHCORE_MESSAGE_LENGTH - 10
+    content_length = MAX_MESHCORE_MESSAGE_LENGTH - 10 - len(prefix)
     parts = []
     remaining = reply
     while remaining:
@@ -200,7 +229,7 @@ def split_reply_into_messages(reply):
 
     part_count = len(parts)
     return [
-        f"[{part_number}/{part_count}] {part}"
+        f"[{part_number}/{part_count}] {prefix}{part}"
         for part_number, part in enumerate(parts, start=1)
     ]
 
@@ -219,6 +248,8 @@ def parse_lpp_telemetry(telemetry):
     values = {
         "battery": None,
         "battery_mv": None,
+        "latitude": None,
+        "longitude": None,
     }
 
     if isinstance(telemetry, dict):
@@ -232,6 +263,10 @@ def parse_lpp_telemetry(telemetry):
             values["battery"] = sensor_value
         elif sensor_type == "voltage":
             values["battery_mv"] = round(float(sensor_value) * 1000)
+        elif sensor_type == "gps" and isinstance(sensor_value, dict):
+            coordinates = coordinates_from_entry(sensor_value)
+            if coordinates:
+                values["latitude"], values["longitude"] = coordinates
 
     return values
 
@@ -411,10 +446,11 @@ def sync_generate(messages, model):
     return result["message"]["content"]
 
 
-async def generate_ai_response(sender_id, prompt):
-    settings_reply = update_bot_settings_from_prompt(prompt)
-    if settings_reply is not None:
-        return settings_reply
+async def generate_ai_response(sender_id, prompt, allow_settings_update=True):
+    if allow_settings_update:
+        settings_reply = update_bot_settings_from_prompt(prompt)
+        if settings_reply is not None:
+            return settings_reply
 
     normalized = prompt.strip().lower()
     if normalized in {"hello", "hi", "hey"}:
@@ -515,6 +551,63 @@ async def handle_incoming_message(event):
             log_to_dash(f"Message send error: {error}")
 
 
+async def handle_incoming_channel_message(event):
+    if not meshcore_instance or not app_state["is_connected"]:
+        return
+
+    packet = event.payload or {}
+    channel_index = packet.get("channel_idx")
+    text = packet.get("text", "").strip()
+    if channel_index is None or not text:
+        return
+
+    bot_prefix = f"{bot_settings['name']}:"
+    message_text = text
+    if message_text.startswith("[") and "] " in message_text:
+        message_text = message_text.split("] ", 1)[1]
+    if message_text.casefold().startswith(bot_prefix.casefold()):
+        return
+
+    channel_target = str(channel_index)
+    message_id = packet.get("id") or (
+        f"channel:{channel_target}:{packet.get('sender_timestamp', '')}:"
+        f"{text}"
+    )
+    if message_id in processed_messages:
+        return
+    processed_messages.add(message_id)
+    add_chat_message("channel", channel_target, "incoming", text)
+    log_to_dash(f"Received channel {channel_target} message: {text}")
+
+    reply = await generate_ai_response(
+        f"channel:{channel_target}",
+        text,
+        allow_settings_update=False,
+    )
+    log_to_dash(f"AI channel reply: {reply}")
+    reply_parts = split_reply_into_messages(
+        reply,
+        prefix=f"{bot_settings['name']}: ",
+    )
+
+    async with hardware_lock:
+        try:
+            for part_number, part in enumerate(reply_parts, start=1):
+                result = await send_to_target(channel_target, "channel", part)
+                if result.type == EventType.ERROR:
+                    log_to_dash(
+                        f"Hardware rejected channel reply part {part_number}/"
+                        f"{len(reply_parts)}: {result.payload}"
+                    )
+                    return
+                add_chat_message("channel", channel_target, "outgoing", part)
+            log_to_dash(
+                f"Channel reply sent in {len(reply_parts)} message(s)."
+            )
+        except Exception as error:
+            log_to_dash(f"Channel message send error: {error}")
+
+
 async def disconnect_hardware():
     global meshcore_instance
     if meshcore_instance is None:
@@ -549,6 +642,10 @@ async def connect_hardware():
 
         await meshcore_instance.start_auto_message_fetching()
         meshcore_instance.subscribe(EventType.CONTACT_MSG_RECV, handle_incoming_message)
+        meshcore_instance.subscribe(
+            EventType.CHANNEL_MSG_RECV,
+            handle_incoming_channel_message,
+        )
         app_state["is_connected"] = True
         await refresh_contacts()
         await refresh_channels()
@@ -577,41 +674,97 @@ async def telemetry_loop():
 PAGE = r'''<!DOCTYPE html>
 <html><head><title>MeshCore AI Bot</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
-body{--page-bg:#121212;--panel-bg:#1e1e1e;--text:#eee;--muted:#999;--accent:#00ff66;--input-bg:#2d2d2d;--input-border:#444;--button-text:#121212;--log-bg:#000;--font:sans-serif;--radius:8px;--shadow:none;--panel-border:0 solid transparent;--page-pattern:none;--button-transform:none;font-family:var(--font);background:var(--page-bg);background-image:var(--page-pattern);color:var(--text);margin:20px}
-body[data-theme="light"]{--page-bg:#eef2f5;--panel-bg:#fff;--text:#17202a;--muted:#607080;--accent:#087f5b;--input-bg:#f7f9fb;--input-border:#b8c4ce;--button-text:#fff;--log-bg:#17202a;--font:"Trebuchet MS",sans-serif;--radius:14px;--shadow:0 8px 24px rgba(26,44,62,.12);--panel-border:1px solid #d8e0e7;--page-pattern:radial-gradient(#d6e0e8 1px,transparent 1px);--button-transform:none}
-body[data-theme="ocean"]{--page-bg:#071a2b;--panel-bg:#0d2b43;--text:#e5f6ff;--muted:#91b8ca;--accent:#36d1dc;--input-bg:#123b56;--input-border:#28617c;--button-text:#071a2b;--log-bg:#04111d;--font:"Segoe UI",sans-serif;--radius:4px;--shadow:0 12px 30px rgba(0,0,0,.28);--panel-border:1px solid #1d5571;--page-pattern:linear-gradient(135deg,rgba(54,209,220,.05) 25%,transparent 25%,transparent 50%,rgba(54,209,220,.05) 50%,rgba(54,209,220,.05) 75%,transparent 75%);--button-transform:none}
-body[data-theme="amber"]{--page-bg:#21180d;--panel-bg:#342311;--text:#fff4dd;--muted:#c5a879;--accent:#ffb703;--input-bg:#4a3215;--input-border:#80602c;--button-text:#21180d;--log-bg:#160f08;--font:"Courier New",monospace;--radius:0;--shadow:4px 4px 0 rgba(255,183,3,.16);--panel-border:1px solid #795722;--page-pattern:repeating-linear-gradient(0deg,rgba(255,183,3,.035) 0,rgba(255,183,3,.035) 1px,transparent 1px,transparent 4px);--button-transform:uppercase}
-body[data-theme="linux"]{--page-bg:#020502;--panel-bg:#081008;--text:#d7ffd0;--muted:#6e9b6a;--accent:#39ff14;--input-bg:#050b05;--input-border:#245b24;--button-text:#020502;--log-bg:#000;--font:"DejaVu Sans Mono",monospace;--radius:0;--shadow:0 0 0 1px rgba(57,255,20,.2);--panel-border:1px solid #245b24;--page-pattern:repeating-linear-gradient(0deg,rgba(57,255,20,.025) 0,rgba(57,255,20,.025) 1px,transparent 1px,transparent 3px);--button-transform:uppercase}
-body[data-theme="macos"]{--page-bg:#e7ebf0;--panel-bg:rgba(255,255,255,.92);--text:#1d1d1f;--muted:#6e6e73;--accent:#007aff;--input-bg:#f5f5f7;--input-border:#c7c7cc;--button-text:#fff;--log-bg:#1d1d1f;--font:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--radius:14px;--shadow:0 10px 30px rgba(0,0,0,.12);--panel-border:1px solid rgba(0,0,0,.08);--page-pattern:linear-gradient(135deg,#eef1f5,#dfe5ec);--button-transform:none}
-body[data-theme="cyberpunk"]{--page-bg:#090511;--panel-bg:#160b24;--text:#f8eaff;--muted:#a56fba;--accent:#ff2bd6;--input-bg:#211033;--input-border:#74358c;--button-text:#090511;--log-bg:#050208;--font:"Courier New",monospace;--radius:2px;--shadow:0 0 18px rgba(255,43,214,.22),inset 0 0 12px rgba(0,234,255,.06);--panel-border:1px solid #8d2da2;--page-pattern:repeating-linear-gradient(135deg,rgba(0,234,255,.045) 0,rgba(0,234,255,.045) 1px,transparent 1px,transparent 12px);--button-transform:uppercase}
-body[data-theme="macos"] #node-chat-history,body[data-theme="macos"] #channel-chat-history{background:#f5f5f7;border:1px solid #d1d1d6;border-radius:12px;color:#1d1d1f}
-body[data-theme="macos"] .chat-message{max-width:78%;width:fit-content;margin:6px 0;padding:9px 13px;border-radius:18px;background:#e5e5ea;color:#1d1d1f;text-align:left;white-space:pre-wrap}
-body[data-theme="macos"] .chat-message.incoming{margin-right:auto}
-body[data-theme="macos"] .chat-message.outgoing{margin-left:auto;background:#007aff;color:#fff;text-align:left}
-body[data-theme="macos"] .card:has(#node-chat-history),body[data-theme="macos"] .card:has(#channel-chat-history){background:rgba(255,255,255,.96)}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
-.card{background:var(--panel-bg);padding:20px;border:var(--panel-border);border-radius:var(--radius);box-shadow:var(--shadow);margin-bottom:20px;cursor:grab}
-.card.dragging{opacity:.45;cursor:grabbing}
-.console-card{box-sizing:border-box;width:100%}
-.dashboard-header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:20px}
-.dashboard-header h1{margin:0}
-.header-meta{display:flex;gap:18px;align-items:flex-start;text-align:right}
-.header-metric{color:var(--accent);font-weight:bold;white-space:nowrap}
-.header-label{display:block;color:var(--muted);font-size:12px;margin-bottom:3px}
-.header-status{display:inline-block;padding:4px 8px;border-radius:4px;font-size:12px;font-weight:bold;white-space:nowrap}
-.header-status.connected{background:#1b5e20;color:#b7e1cd}
-.header-status.disconnected{background:#b71c1c;color:#f4c7c7}
-h1,h2{color:var(--accent)}label{display:block;margin:9px 0 4px;font-weight:bold}
-input,select,button{box-sizing:border-box;width:100%;padding:10px;margin-bottom:10px;border-radius:var(--radius)}
-input,select{background:var(--input-bg);color:var(--text);border:1px solid var(--input-border)}
-button{background:var(--accent);color:var(--button-text);border:0;font-weight:bold;text-transform:var(--button-transform);cursor:pointer}
-.status{display:inline-block;padding:8px;border-radius:4px;font-weight:bold}
-.connected{background:#1b5e20}.disconnected{background:#b71c1c}
-.metric{color:var(--accent);font-size:22px;font-weight:bold}
-pre,#node-chat-history,#channel-chat-history{height:220px;overflow-y:auto;padding:12px;background:var(--log-bg);white-space:pre-wrap}
-.chat-message{padding:6px}.incoming{color:#fff}.outgoing{color:#00ff66;text-align:right}
-@media(max-width:768px){.grid{grid-template-columns:1fr}.console-card{width:100%}.dashboard-header{display:block}.header-meta{margin-top:12px;text-align:left;justify-content:space-between}}
+:root{color-scheme:dark;--page-bg:#0d1117;--panel-bg:#161b22;--panel-raised:#21262d;--text:#c9d1d9;--muted:#8b949e;--accent:#4ade80;--accent-dim:#1a3a25;--border:#30363d;--input-bg:#0d1117;--input-border:#3b444e;--button-text:#07130b;--log-bg:#0b1016;--danger:#f85149}
+*{box-sizing:border-box}
+body{min-height:100vh;margin:0;padding:10px;display:flex;flex-direction:column;background-color:var(--page-bg);background-image:linear-gradient(rgba(74,222,128,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(74,222,128,.025) 1px,transparent 1px);background-size:28px 28px;color:var(--text);font:13px/1.45 "Segoe UI",system-ui,sans-serif}
+body[data-theme="light"]{color-scheme:light;--page-bg:#eef2f5;--panel-bg:#fff;--panel-raised:#f2f5f7;--text:#17202a;--muted:#607080;--accent:#087f5b;--accent-dim:#e2f2eb;--border:#d8e0e7;--input-bg:#f7f9fb;--input-border:#b8c4ce;--button-text:#fff;--log-bg:#17202a}
+body[data-theme="ocean"]{--page-bg:#081a26;--panel-bg:#102737;--panel-raised:#183648;--accent:#36d1dc;--accent-dim:#123c43;--border:#284657;--input-bg:#0b202e;--input-border:#35596a;--button-text:#071a2b;--log-bg:#06131d}
+body[data-theme="amber"]{--page-bg:#21180d;--panel-bg:#342311;--panel-raised:#443018;--accent:#ffb703;--accent-dim:#493611;--border:#795722;--input-bg:#24190c;--input-border:#80602c;--button-text:#21180d;--log-bg:#160f08}
+body[data-theme="linux"]{--page-bg:#020702;--panel-bg:#081008;--panel-raised:#0d190d;--accent:#39ff14;--accent-dim:#10260d;--border:#245b24;--input-bg:#050b05;--input-border:#245b24;--button-text:#020502;--log-bg:#000}
+body[data-theme="macos"]{color-scheme:light;--page-bg:#e7ebf0;--panel-bg:#fff;--panel-raised:#f3f5f8;--text:#1d1d1f;--muted:#6e6e73;--accent:#007aff;--accent-dim:#e5f1ff;--border:#c7c7cc;--input-bg:#f5f5f7;--input-border:#c7c7cc;--button-text:#fff;--log-bg:#1d1d1f}
+body[data-theme="cyberpunk"]{--page-bg:#090511;--panel-bg:#160b24;--panel-raised:#211033;--accent:#ff2bd6;--accent-dim:#351040;--border:#74358c;--input-bg:#10081a;--input-border:#74358c;--button-text:#090511;--log-bg:#050208}
+.dashboard-header,.grid{width:min(100%,1800px);margin-right:auto;margin-left:auto}
+.dashboard-header{min-height:58px;margin-bottom:12px;padding:8px 12px;display:flex;align-items:center;justify-content:space-between;gap:18px;background:var(--panel-bg);border:1px solid var(--border);border-radius:8px}
+.brand-lockup{display:flex;align-items:center;gap:10px;min-width:max-content}
+.brand-mark{width:34px;height:34px;display:grid;place-items:center;border:1px solid color-mix(in srgb,var(--accent) 38%,var(--border));border-radius:7px;background:var(--accent-dim);color:var(--accent);font:700 12px/1 ui-monospace,monospace}
+.brand-copy h1{margin:0;color:var(--text);font-size:16px;font-weight:600;line-height:1.2}
+.brand-copy h1 span{color:var(--accent);font-weight:500}
+.header-label,.eyebrow{display:block;margin-bottom:3px;color:var(--muted);font-size:9px;font-weight:700;letter-spacing:.8px;text-transform:uppercase}
+.header-meta{display:flex;align-items:center;gap:16px;min-width:0}
+.header-metric{color:var(--text);font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.header-status,.live-tag{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border:1px solid var(--border);border-radius:5px;background:var(--panel-raised);color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.5px;white-space:nowrap}
+.header-status::before,.live-tag::before{width:6px;height:6px;border-radius:50%;background:var(--danger);content:""}
+.header-status.connected{border-color:color-mix(in srgb,var(--accent) 35%,var(--border));background:var(--accent-dim);color:var(--accent)}
+.header-status.connected::before,.live-tag::before{background:var(--accent);box-shadow:0 0 8px color-mix(in srgb,var(--accent) 65%,transparent)}
+.header-controls{display:flex;align-items:center;gap:8px}
+.header-controls label{margin:0;color:var(--muted);font-size:10px}
+.header-controls select{width:auto;min-width:108px;margin:0;padding:6px 24px 6px 8px}
+.top-nav{display:flex;align-items:center;gap:4px;flex:1;min-width:max-content}
+.nav-tab{display:inline-flex;align-items:center;gap:7px;min-height:32px;padding:6px 10px;border-color:transparent;background:transparent;color:var(--muted);font-size:11px}
+.nav-tab:hover,.nav-tab[aria-pressed="true"]{border-color:var(--border);background:var(--accent-dim);color:var(--accent);transform:none}
+.nav-count{min-width:18px;padding:1px 5px;border-radius:10px;background:var(--panel-raised);font:10px ui-monospace,monospace;text-align:center}
+.view-panel[hidden]{display:none!important}
+.page-view{width:min(100%,1800px);flex:1;margin:0 auto}
+.connection-layout{display:grid;grid-template-columns:minmax(280px,520px) minmax(0,1fr);gap:12px;align-items:start}
+.card{min-width:0;margin-bottom:12px;padding:12px;background:var(--panel-bg);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12)}
+.panel-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+.panel-heading h2{margin:0;color:var(--text);font-size:14px;font-weight:600;line-height:1.25}
+.panel-index{color:var(--muted);font:11px ui-monospace,monospace}
+label{display:block;margin:9px 0 5px;color:var(--muted);font-size:11px;font-weight:600}
+input,select,button{font:inherit}
+input,select{width:100%;min-width:0;margin:0;padding:9px 10px;border:1px solid var(--input-border);border-radius:5px;background:var(--input-bg);color:var(--text);outline:none}
+input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 18%,transparent)}
+button{min-height:36px;padding:8px 12px;border:1px solid var(--border);border-radius:5px;background:var(--panel-raised);color:var(--text);font-size:11px;font-weight:650;cursor:pointer;transition:background .15s,border-color .15s,transform .15s}
+button:hover{transform:translateY(-1px);border-color:var(--accent);background:var(--accent-dim)}
+.connection-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+.connection-actions button:first-child{border-color:var(--accent);background:var(--accent);color:var(--button-text)}
+.connection-actions button:first-child:hover{background:color-mix(in srgb,var(--accent) 85%,white)}
+.chat-panel{height:min(680px,calc(100vh - 270px));min-height:360px;display:flex;flex-direction:column}
+.chat-target{margin-bottom:10px}
+#node-chat-history,#channel-chat-history{flex:1;min-height:220px;overflow-y:auto;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--log-bg);white-space:pre-wrap;overflow-wrap:anywhere}
+#node-chat-history:empty::before,#channel-chat-history:empty::before{display:block;padding:8px;color:var(--muted);font-size:11px;content:"No messages in this view yet"}
+.chat-message{max-width:92%;width:fit-content;margin:6px 0;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--panel-raised);color:var(--text);text-align:left;white-space:pre-wrap;overflow-wrap:anywhere}
+.chat-message.incoming{margin-right:auto}
+.chat-message.outgoing{margin-left:auto;border-color:color-mix(in srgb,var(--accent) 36%,var(--border));background:var(--accent-dim);color:var(--text)}
+.chat-panel form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-top:10px}
+.chat-panel form input{min-width:0}
+.chat-panel form button{border-color:var(--accent);background:var(--accent);color:var(--button-text);white-space:nowrap}
+.console-dock{position:sticky;bottom:0;z-index:800;width:min(100%,1800px);margin:12px auto 0;padding:8px 0 0;background:linear-gradient(transparent,var(--page-bg) 12px)}
+.console-card{height:132px;min-height:132px;max-height:132px;margin:0;padding:10px;display:flex;flex-direction:column}
+.console-card .panel-heading{margin-bottom:6px}
+.console-card pre{flex:1;min-height:0;max-height:none;margin:0;padding:8px;overflow:auto;border:1px solid var(--border);border-radius:6px;background:var(--log-bg);color:var(--muted);font:11px/1.45 ui-monospace,"SFMono-Regular",monospace;white-space:pre-wrap;overflow-wrap:anywhere}
+.map-workspace{width:min(100%,1800px);margin:0 auto}
+.map-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:12px;padding:12px 14px}
+.map-toolbar h2{margin:0;color:var(--text);font-size:15px;font-weight:600}
+.map-layout{display:grid;grid-template-columns:minmax(230px,300px) minmax(0,1fr);gap:12px}
+.map-rail{min-height:520px;margin:0;display:flex;flex-direction:column}
+.map-rail-summary{margin:0 0 12px;color:var(--muted);font-size:11px}
+#map-node-list{flex:1;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--log-bg)}
+.map-empty{padding:12px;color:var(--muted);font-size:11px}
+.map-node-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px;border-bottom:1px solid var(--border)}
+.map-node-row:last-child{border-bottom:0}
+.map-node-row[role="button"]{cursor:pointer}
+.map-node-row[role="button"]:hover,.map-node-row[role="button"]:focus{outline:0;background:var(--panel-raised)}
+.map-node-row strong,.map-node-row div>span{display:block;overflow-wrap:anywhere}
+.map-node-row strong{color:var(--text);font-size:11px}
+.map-node-row div>span{margin-top:2px;color:var(--muted);font:10px ui-monospace,monospace}
+.map-location{flex:none;font:9px ui-monospace,monospace;letter-spacing:.35px}
+.map-location.located{color:var(--accent)}
+.map-location.unlocated{color:var(--muted)}
+.map-surface{position:relative;min-width:0;min-height:520px;margin:0;padding:0;overflow:hidden}
+#map-canvas{width:100%;height:min(720px,calc(100vh - 170px));min-height:520px;background:#d9e2df}
+.map-message{position:absolute;z-index:500;top:14px;left:50%;max-width:calc(100% - 28px);padding:8px 12px;transform:translateX(-50%);border:1px solid var(--border);border-radius:5px;background:var(--panel-bg);color:var(--muted);font-size:11px;text-align:center;box-shadow:0 4px 14px rgba(0,0,0,.2)}
+.map-message[hidden]{display:none}
+.leaflet-container{font:12px/1.4 "Segoe UI",system-ui,sans-serif}
+.leaflet-popup-content-wrapper,.leaflet-popup-tip{background:var(--panel-bg);color:var(--text)}
+.leaflet-popup-content{margin:10px 12px}
+.leaflet-control-attribution{font-size:9px!important}
+@media(max-width:1050px){.header-meta{gap:10px}.connection-layout{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:1050px){.dashboard-header{flex-wrap:wrap}.top-nav{order:3;flex-basis:100%}.map-layout{grid-template-columns:minmax(210px,260px) minmax(0,1fr)}}
+@media(max-width:720px){body{padding:8px}.dashboard-header{align-items:flex-start;flex-direction:column;gap:12px}.top-nav{order:0;max-width:100%;overflow-x:auto}.nav-tab{flex:none}.header-meta{width:100%;flex-wrap:wrap;justify-content:space-between}.header-controls{flex-wrap:wrap}.header-controls select{max-width:140px}.chat-panel{height:calc(100vh - 250px);min-height:340px}.map-layout{grid-template-columns:minmax(0,1fr)}.map-rail{min-height:180px;max-height:230px}.map-surface{min-height:48vh}#map-canvas{height:50vh;min-height:320px}.map-toolbar{align-items:flex-start;flex-direction:column}.console-card{height:120px;min-height:120px;max-height:120px}}
 </style>
 <script>
 let gatewayTelemetry={};
@@ -620,23 +773,61 @@ function loadTheme(){applyTheme(localStorage.getItem('meshcore-theme')||'midnigh
 function fields(){let t=connection_type.value;document.getElementById('ble-field').style.display=t==='bluetooth'?'block':'none';document.getElementById('serial-field').style.display=t==='serial'?'block':'none'}
 function updateClock(){document.getElementById('current-datetime').textContent=new Date().toLocaleString()}
 async function status(){let r=await fetch('/api/status'),d=await r.json();let b=document.getElementById('status');b.textContent=d.is_connected?'CONNECTED':'DISCONNECTED';b.className='header-status '+(d.is_connected?'connected':'disconnected');document.getElementById('console').innerText=d.logs.join('\n')}
-async function peers(){let r=await fetch('/api/peers'),d=await r.json();gatewayTelemetry=d.gateway_telemetry||{};gateway_battery.textContent=gatewayTelemetry.battery!=null?gatewayTelemetry.battery+'%':'Unavailable';node.innerHTML='<option value="">Select node</option>';channel.innerHTML='<option value="">Select channel</option>';for(let n of d.nodes||[]){node.add(new Option(n.name,n.id))}for(let c of d.channels||[]){channel.add(new Option(c.name,c.id))}}
+let mapNodes=[];
+let dashboardMap=null;
+let mapMarkers=null;
+let mapBoundsSignature='';
+function showView(view){let target=document.getElementById(view+'-view');if(!target)return;document.querySelectorAll('.view-panel').forEach(panel=>panel.hidden=panel!==target);document.querySelectorAll('.nav-tab').forEach(tab=>tab.setAttribute('aria-pressed',String(tab.dataset.view===view)));if(view==='map')openMap()}
+function openMap(){if(!window.L){document.getElementById('map-message').textContent='Map library unavailable. Check your internet connection and reload.';return}if(!dashboardMap){dashboardMap=L.map('map-canvas',{zoomControl:true}).setView([20,0],2);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(dashboardMap);mapMarkers=L.layerGroup().addTo(dashboardMap)}setTimeout(()=>dashboardMap.invalidateSize(),80);renderMapMarkers()}
+function popupContent(title,detail){let content=document.createElement('div');let heading=document.createElement('strong');heading.textContent=title;content.appendChild(heading);if(detail){let line=document.createElement('div');line.textContent=detail;content.appendChild(line)}return content}
+function focusMapPoint(latitude,longitude){showView('map');if(dashboardMap)dashboardMap.setView([latitude,longitude],12)}
+function renderMapMarkers(){if(!dashboardMap||!mapMarkers)return;mapMarkers.clearLayers();let bounds=[];for(let peer of mapNodes){if(!Number.isFinite(peer.latitude)||!Number.isFinite(peer.longitude))continue;let point=[peer.latitude,peer.longitude];L.circleMarker(point,{radius:7,color:'#0d1117',weight:2,fillColor:'#4ade80',fillOpacity:.95}).bindPopup(popupContent(peer.name,peer.id)).addTo(mapMarkers);bounds.push(point)}if(Number.isFinite(gatewayTelemetry.latitude)&&Number.isFinite(gatewayTelemetry.longitude)){let point=[gatewayTelemetry.latitude,gatewayTelemetry.longitude];L.circleMarker(point,{radius:9,color:'#0d1117',weight:2,fillColor:'#36d1dc',fillOpacity:1}).bindPopup(popupContent('This gateway','Current radio location')).addTo(mapMarkers);bounds.push(point)}let signature=JSON.stringify(bounds);if(bounds.length&&signature!==mapBoundsSignature){dashboardMap.fitBounds(bounds,{padding:[36,36],maxZoom:12});mapBoundsSignature=signature}else if(!bounds.length){mapBoundsSignature=''}document.getElementById('map-message').hidden=bounds.length>0;document.getElementById('map-message').textContent='No peer or gateway location data is available yet.'}
+function renderMapNodes(){let list=document.getElementById('map-node-list');list.replaceChildren();let located=0;for(let peer of mapNodes){let row=document.createElement('div');row.className='map-node-row';let details=document.createElement('div');let name=document.createElement('strong');name.textContent=peer.name;let id=document.createElement('span');id.textContent=peer.id;details.append(name,id);let location=document.createElement('span');let hasLocation=Number.isFinite(peer.latitude)&&Number.isFinite(peer.longitude);location.className='map-location '+(hasLocation?'located':'unlocated');location.textContent=hasLocation?'LOCATED':'NO FIX';if(hasLocation){located++;row.tabIndex=0;row.setAttribute('role','button');row.addEventListener('click',()=>focusMapPoint(peer.latitude,peer.longitude));row.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();row.click()}})}row.append(details,location);list.appendChild(row)}let gatewayLocated=Number.isFinite(gatewayTelemetry.latitude)&&Number.isFinite(gatewayTelemetry.longitude);if(gatewayLocated){located++;let row=document.createElement('div');row.className='map-node-row';let details=document.createElement('div');let name=document.createElement('strong');name.textContent='This gateway';let id=document.createElement('span');id.textContent='Local radio';details.append(name,id);let location=document.createElement('span');location.className='map-location located';location.textContent='LOCATED';row.tabIndex=0;row.setAttribute('role','button');row.addEventListener('click',()=>focusMapPoint(gatewayTelemetry.latitude,gatewayTelemetry.longitude));row.append(details,location);list.appendChild(row)}if(!mapNodes.length&&!gatewayLocated){let empty=document.createElement('div');empty.className='map-empty';empty.textContent='No peers are available yet. Connect to a MeshCore radio to load contacts.';list.appendChild(empty)}document.getElementById('map-node-count').textContent=String(located);document.getElementById('map-peer-total').textContent=String(mapNodes.length);document.getElementById('map-node-summary').textContent=`${located} located / ${mapNodes.length} peers`;renderMapMarkers()}
+async function peers(){let r=await fetch('/api/peers'),d=await r.json();gatewayTelemetry=d.gateway_telemetry||{};mapNodes=d.nodes||[];gateway_battery.textContent=gatewayTelemetry.battery!=null?gatewayTelemetry.battery+'%':'Unavailable';node.innerHTML='<option value="">Select node</option>';channel.innerHTML='<option value="">Select channel</option>';for(let n of mapNodes){node.add(new Option(n.name,n.id))}for(let c of d.channels||[]){channel.add(new Option(c.name,c.id))}renderMapNodes()}
 async function history(t,id,boxId){let box=document.getElementById(boxId);if(!id){box.innerHTML='';return}let r=await fetch('/api/chat-history?target_type='+encodeURIComponent(t)+'&target='+encodeURIComponent(id)),d=await r.json();box.innerHTML='';for(let m of d.messages||[]){let e=document.createElement('div');e.className='chat-message '+m.direction;e.textContent='['+m.timestamp+'] '+m.text;box.appendChild(e)}box.scrollTop=box.scrollHeight}
 function selectNode(){if(!node.value)return;history('node',node.value,'node-chat-history')}
 function selectChannel(){if(!channel.value)return;history('channel',channel.value,'channel-chat-history')}
 async function connect(){let r=await fetch('/api/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({connection_type:connection_type.value,ble_mac:ble_mac.value,serial_port:serial_port.value,model:model.value})});let d=await r.json();if(!r.ok)alert(d.error);await status();await peers()}
 async function disconnect(){await fetch('/api/disconnect',{method:'POST'});await status();await peers()}
 async function sendMessage(e,targetId,type,messageId,historyId){e.preventDefault();let selected=document.getElementById(targetId).value;let input=document.getElementById(messageId);if(!selected)return alert('Select a '+type+' first');let r=await fetch('/api/transmit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:selected,target_type:type,text:input.value})});let d=await r.json();if(!r.ok)return alert(d.error);input.value='';await history(type,selected,historyId)}
-function enableCardDragging(){let dragged=null;let cards=[...document.querySelectorAll('.grid .card')];let columns=[...document.querySelectorAll('.grid>div')];function place(column,y){if(!dragged)return;let targets=[...column.querySelectorAll(':scope>.card:not(.dragging)')];let before=targets.find(card=>y<card.getBoundingClientRect().top+card.offsetHeight/2);if(before)column.insertBefore(dragged,before);else column.appendChild(dragged)}cards.forEach(card=>{card.draggable=true;card.addEventListener('dragstart',e=>{dragged=card;card.classList.add('dragging');e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain','dashboard-card')});card.addEventListener('dragend',()=>{card.classList.remove('dragging');dragged=null})});columns.forEach(column=>{column.addEventListener('dragover',e=>{if(!dragged)return;e.preventDefault();e.dataTransfer.dropEffect='move';place(column,e.clientY)});column.addEventListener('drop',e=>{e.preventDefault();place(column,e.clientY)})})}
-window.addEventListener('DOMContentLoaded',()=>{loadTheme();fields();status();peers();enableCardDragging();updateClock();setInterval(updateClock,1000)});setInterval(status,2000);setInterval(peers,10000);
+window.addEventListener('DOMContentLoaded',()=>{loadTheme();fields();status();peers();updateClock();setInterval(updateClock,1000)});setInterval(status,2000);setInterval(peers,10000);
 </script></head><body>
-<div class="dashboard-header"><h1>MeshCore AI Bot Dashboard</h1><div class="header-meta"><div><span class="header-label">Node Battery</span><span id="gateway_battery" class="header-metric">Unavailable</span></div><div><span class="header-label">Status</span><span id="status" class="header-status disconnected">DISCONNECTED</span></div><div><span class="header-label">Local Time</span><span id="current-datetime" class="header-metric">--</span></div><div><span class="header-label">Theme</span><select id="theme-select" onchange="applyTheme(this.value)"><option value="midnight">Midnight</option><option value="light">Light</option><option value="ocean">Ocean</option><option value="amber">Amber</option><option value="linux">Linux Console</option><option value="macos">macOS</option><option value="cyberpunk">Hacker Cyberpunk</option></select></div><div><span class="header-label">Ollama Model</span><select id="model">{{MODEL_OPTIONS}}</select></div></div></div><div class="grid"><div>
-<div class="card"><h2>Connection</h2><label>Connection Type</label><select id="connection_type" onchange="fields()"><option value="bluetooth">Bluetooth</option><option value="serial">Serial</option></select><div id="ble-field"><label>Bluetooth MAC</label><input id="ble_mac" value="A4:CB:8F:A6:67:39"></div><div id="serial-field" style="display:none"><label>Serial Port</label><input id="serial_port" value="/dev/ttyACM0"></div><button onclick="connect()">Connect</button><button onclick="disconnect()">Disconnect</button></div>
-<div class="card console-card"><h2>Console</h2><pre id="console"></pre></div>
-</div><div>
-<div class="card"><h2>Node Messages</h2><select id="node" onchange="selectNode()"><option value="">Select node</option></select><div id="node-chat-history"></div><form onsubmit="sendMessage(event,'node','node','node-message','node-chat-history')"><input id="node-message" maxlength="200" placeholder="Message selected node" required><button>Send to Node</button></form></div>
-<div class="card"><h2>Channel Messages</h2><select id="channel" onchange="selectChannel()"><option value="">Select channel</option></select><div id="channel-chat-history"></div><form onsubmit="sendMessage(event,'channel','channel','channel-message','channel-chat-history')"><input id="channel-message" maxlength="200" placeholder="Message selected channel" required><button>Send to Channel</button></form></div>
-</div></div></body></html>'''
+<header class="dashboard-header">
+<div class="brand-lockup"><div class="brand-mark">MC</div><div class="brand-copy"><span class="header-label">LOCAL MESH / RADIO CONTROL</span><h1>MESHCORE <span>AI GATEWAY</span></h1></div></div>
+<nav class="top-nav" aria-label="Dashboard pages"><button type="button" class="nav-tab" data-view="connection" aria-pressed="true" onclick="showView('connection')">Connection</button><button type="button" class="nav-tab" data-view="nodes" aria-pressed="false" onclick="showView('nodes')">Nodes</button><button type="button" class="nav-tab" data-view="channels" aria-pressed="false" onclick="showView('channels')">Channels</button><button type="button" class="nav-tab" data-view="map" aria-pressed="false" onclick="showView('map')">Map <span class="nav-count" id="map-node-count">0</span></button></nav>
+<div class="header-meta">
+<div><span class="header-label">LINK</span><span id="status" class="header-status disconnected">DISCONNECTED</span></div>
+<div><span class="header-label">GATEWAY BATTERY</span><span id="gateway_battery" class="header-metric">Unavailable</span></div>
+<div><span class="header-label">LOCAL TIME</span><span id="current-datetime" class="header-metric">--</span></div>
+<div class="header-controls"><label for="theme-select">THEME</label><select id="theme-select" onchange="applyTheme(this.value)"><option value="midnight">Midnight</option><option value="light">Light</option><option value="ocean">Ocean</option><option value="amber">Amber</option><option value="linux">Linux Console</option><option value="macos">macOS</option><option value="cyberpunk">Hacker Cyberpunk</option></select><label for="model">MODEL</label><select id="model">{{MODEL_OPTIONS}}</select></div>
+</div>
+</header>
+<main id="connection-view" class="view-panel page-view">
+<div class="connection-layout">
+<section class="card connection-card">
+<div class="panel-heading"><div><span class="eyebrow">RADIO LINK</span><h2>Connection</h2></div><span class="panel-index">01</span></div>
+<label for="connection_type">Connection type</label><select id="connection_type" onchange="fields()"><option value="bluetooth">Bluetooth</option><option value="serial">Serial</option></select>
+<div id="ble-field"><label for="ble_mac">Bluetooth MAC</label><input id="ble_mac" value="A4:CB:8F:A6:67:39"></div>
+<div id="serial-field" style="display:none"><label for="serial_port">Serial port</label><input id="serial_port" value="/dev/ttyACM0"></div>
+<div class="connection-actions"><button onclick="connect()">Connect</button><button onclick="disconnect()">Disconnect</button></div>
+</section>
+</div>
+</main>
+<main id="nodes-view" class="view-panel page-view" hidden>
+<section class="card chat-panel"><div class="panel-heading"><div><span class="eyebrow">DIRECT MESSAGES</span><h2>Node Messages</h2></div><span class="panel-index">02</span></div><select class="chat-target" id="node" onchange="selectNode()"><option value="">Select node</option></select><div id="node-chat-history"></div><form onsubmit="sendMessage(event,'node','node','node-message','node-chat-history')"><input id="node-message" maxlength="200" placeholder="Message selected node" required><button>Send to Node</button></form></section>
+</main>
+<main id="channels-view" class="view-panel page-view" hidden>
+<section class="card chat-panel"><div class="panel-heading"><div><span class="eyebrow">SHARED FREQUENCY</span><h2>Channel Messages</h2></div><span class="panel-index">03</span></div><select class="chat-target" id="channel" onchange="selectChannel()"><option value="">Select channel</option></select><div id="channel-chat-history"></div><form onsubmit="sendMessage(event,'channel','channel','channel-message','channel-chat-history')"><input id="channel-message" maxlength="200" placeholder="Message selected channel" required><button>Send to Channel</button></form></section>
+</main>
+<main id="map-view" class="map-workspace view-panel page-view" hidden>
+<section class="card map-toolbar"><div><span class="eyebrow">LIVE MESH POSITIONS</span><h2>Network Map</h2></div><span class="live-tag" id="map-node-summary">0 of 0 locations</span></section>
+<div class="map-layout">
+<aside class="card map-rail"><div class="panel-heading"><div><span class="eyebrow">KNOWN PEERS</span><h2>Nodes</h2></div><span class="panel-index" id="map-peer-total">0</span></div><p class="map-rail-summary">Select a located node to center the map.</p><div id="map-node-list"><div class="map-empty">Waiting for nodes...</div></div></aside>
+<section class="card map-surface" aria-label="Mesh node map"><div id="map-canvas"></div><div class="map-message" id="map-message">Waiting for map data...</div></section>
+</div>
+</main>
+<footer id="console-dock" class="console-dock"><section class="card console-card"><div class="panel-heading"><div><span class="eyebrow">SYSTEM ACTIVITY</span><h2>Console</h2></div><span class="live-tag">LIVE</span></div><pre id="console"></pre></section></footer>
+</body></html>'''
 
 
 async def index_handler(request):
@@ -659,11 +850,17 @@ async def status_handler(request):
 
 async def peers_handler(request):
     await refresh_contacts()
+    nodes = []
+    for node_id, entry in app_state["contacts"].items():
+        coordinates = coordinates_from_entry(entry)
+        nodes.append({
+            "id": str(node_id),
+            "name": display_name(node_id, entry),
+            "latitude": coordinates[0] if coordinates else None,
+            "longitude": coordinates[1] if coordinates else None,
+        })
     return web.json_response({
-        "nodes": [
-            {"id": str(i), "name": display_name(i, value)}
-            for i, value in app_state["contacts"].items()
-        ],
+        "nodes": nodes,
         "channels": [
             {"id": str(i), "name": display_name(i, value)}
             for i, value in app_state["channels"].items()
