@@ -1,46 +1,23 @@
 # MeshCore AI Bot Dashboard
 
-This project includes Jupyter notebooks and `mesh_ai_bot_dashboard.py`, a local web dashboard for a MeshCore device and an Ollama-powered mesh message assistant.
+This project includes a local dashboard for a MeshCore device and an Ollama-powered mesh assistant. It can connect over Bluetooth or a serial port.
 
 ## Kali Linux setup
 
-Install the system packages:
+Use this one-liner to remove any previous clone, download the project, and run the setup script:
 
 ```bash
-sudo apt update
-sudo apt install -y git python3 python3-venv python3-pip curl bluez
+rm -rf ~/Meshcore-Ollama-bot && git clone https://github.com/wereallmadhereblip/Meshcore-Ollama-bot.git ~/Meshcore-Ollama-bot && cd ~/Meshcore-Ollama-bot && bash setup.sh
 ```
 
-For a serial-connected device, add your user to the serial-device group and then log out and back in:
+The setup script creates the virtual environment, installs the project dependencies, starts Ollama, and downloads the default model (`llama3.2:1b`).
+
+After the script finishes, run the dashboard in a terminal with:
 
 ```bash
-sudo usermod -aG dialout "$USER"
-```
-
-Create a virtual environment and install the Python dependencies:
-
-```bash
-git clone <YOUR_REPOSITORY_URL>
-cd codespaces-jupyter
-python3 -m venv .venv
+cd ~/Meshcore-Ollama-bot
 source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
-
-Install and start Ollama, then download the default model:
-
-```bash
-curl -fsSL https://ollama.com/install.sh | sh
-ollama serve
-```
-
-Open a second terminal, activate the environment again, and pull the model:
-
-```bash
-cd codespaces-jupyter
-source .venv/bin/activate
-ollama pull llama3.2:1b
+python mesh_ai_bot_dashboard.py
 ```
 
 ## Run the dashboard
@@ -48,6 +25,8 @@ ollama pull llama3.2:1b
 With the virtual environment active:
 
 ```bash
+cd Meshcore-Ollama-bot
+source .venv/bin/activate
 python mesh_ai_bot_dashboard.py
 ```
 
@@ -62,6 +41,61 @@ Use the dashboard to choose Bluetooth or Serial, enter the Heltec Bluetooth MAC 
 - If the browser does not open automatically, visit http://127.0.0.1:8080 manually.
 - Gateway battery telemetry requires firmware support and telemetry enabled on the connected Heltec device.
 - Channel discovery and telemetry depend on the MeshCore firmware and Python package version.
+
+## Troubleshooting
+
+### Bluetooth connection fails
+
+- Make sure Bluetooth is enabled with:
+
+```bash
+sudo systemctl enable --now bluetooth
+sudo rfkill unblock bluetooth
+bluetoothctl power on
+```
+
+- Confirm the MeshCore device is powered on and discoverable.
+- Check that the MAC address entered in the app is correct.
+- If the device is paired but still not connecting, try removing it from the OS Bluetooth list and reconnecting.
+
+### Serial connection fails
+
+- Verify the device port with:
+
+```bash
+ls /dev/ttyACM* /dev/ttyUSB*
+```
+
+- Common device ports are `/dev/ttyACM0` and `/dev/ttyUSB0`.
+- Ensure your user is in the `dialout` group:
+
+```bash
+groups "$USER"
+```
+
+- Log out and back in after adding yourself to the group.
+
+### Dashboard does not open in the browser
+
+- Open http://127.0.0.1:8080 manually in a browser.
+- Make sure the script is still running in the terminal and that no errors were printed.
+- Check whether another process is already listening on port `8080`.
+
+### Ollama model fails to load or respond
+
+- Ensure Ollama is running:
+
+```bash
+ollama serve
+```
+
+- Pull the model again if needed:
+
+```bash
+ollama pull llama3.2:1b
+```
+
+- Confirm your virtual environment is active before running the dashboard.
 
 ## Stop the dashboard
 
