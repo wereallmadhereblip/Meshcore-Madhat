@@ -10,16 +10,7 @@ Use this one-liner to remove any previous clone, download the project, and run t
 rm -rf ~/Meshcore-Ollama-bot && git clone https://github.com/wereallmadhereblip/Meshcore-Ollama-bot.git ~/Meshcore-Ollama-bot && cd ~/Meshcore-Ollama-bot && bash setup.sh
 ```
 
-The setup script creates the virtual environment, installs the project dependencies, starts Ollama, and downloads the default model (`llama3.2:1b`).
-
 The installation also creates a desktop launcher named `MeshCore AI Bot Dashboard` on your desktop so you can start the app with a single click.
-
-After the script finishes, run the dashboard in a terminal with:
-
-```bash
-cd ~/Meshcore-Ollama-bot
-.venv/bin/python mesh_ai_bot_dashboard.py
-```
 
 ## Run the dashboard
 
@@ -27,7 +18,7 @@ From the project directory:
 
 ```bash
 cd Meshcore-Ollama-bot
-.venv/bin/python mesh_ai_bot_dashboard.py
+.venv/bin/python meshcore_ai_bot.py
 ```
 
 You can also launch the app from the desktop shortcut created during setup.
