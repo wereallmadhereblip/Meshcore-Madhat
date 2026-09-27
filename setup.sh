@@ -71,6 +71,6 @@ if command -v gio >/dev/null 2>&1; then
   gio set "$DESKTOP_DIR/MeshCore AI Bot Dashboard.desktop" metadata::trusted true || true
 fi
 
-echo "Run the following in a new terminal:"
-echo "  cd ~/Meshcore-Ollama-bot"
-echo "  .venv/bin/python mesh_ai_bot_dashboard.py"
+echo "Starting the MeshCore AI Bot Dashboard..."
+cd "$APP_DIR"
+exec .venv/bin/python mesh_ai_bot_dashboard.py
