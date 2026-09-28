@@ -23,7 +23,6 @@ from serial.tools import list_ports
 DEFAULT_MODEL = "llama3.2:1b"
 WEB_HOST = "0.0.0.0"
 WEB_PORT = 8080
-MAX_HISTORY_LENGTH = 2
 MAX_CHANNELS = 40
 MAX_MESHCORE_MESSAGE_LENGTH = 100
 BATTERY_MIN_MV = 3200
@@ -821,11 +820,27 @@ def sync_generate(messages, model):
     return result["message"]["content"]
 
 
+def clear_chat_memory_reply(sender_id, prompt):
+    if not re.search(
+        r"\b(?:clear|forget|reset|wipe|erase)\b.*\b(?:chat|conversation)?\s*"
+        r"(?:memory|history)\b",
+        prompt,
+        re.IGNORECASE,
+    ):
+        return None
+    conversation_history.pop(sender_id, None)
+    return "Done. I've cleared our chat memory."
+
+
 async def generate_ai_response(sender_id, prompt, allow_settings_update=True):
     if allow_settings_update:
         settings_reply = update_bot_settings_from_prompt(prompt)
         if settings_reply is not None:
             return settings_reply
+
+        clear_reply = clear_chat_memory_reply(sender_id, prompt)
+        if clear_reply is not None:
+            return clear_reply
 
     weather_reply = await fetch_weather_response(prompt, sender_id)
     if weather_reply is not None:
@@ -837,12 +852,10 @@ async def generate_ai_response(sender_id, prompt, allow_settings_update=True):
     if normalized in {"how", "what", "why"}:
         return "Could you clarify your question?"
 
+    # Keep the full conversation in memory for this session; it's only
+    # cleared when the user asks or the dashboard is restarted.
     history = conversation_history[sender_id]
     history.append({"role": "user", "content": prompt})
-    limit = MAX_HISTORY_LENGTH * 2
-    if len(history) > limit:
-        conversation_history[sender_id] = history[-limit:]
-        history = conversation_history[sender_id]
 
     system = (
         f"You are {bot_settings['name']}, an AI assistant for a mesh messaging bot. "
