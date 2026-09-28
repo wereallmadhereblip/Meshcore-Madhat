@@ -25,7 +25,7 @@ WEB_HOST = "0.0.0.0"
 WEB_PORT = 8080
 MAX_CHANNELS = 40
 MAX_MESHCORE_MESSAGE_LENGTH = 100
-MAX_AI_REPLY_PACKETS = 4
+MAX_AI_REPLY_PACKETS = 8
 BATTERY_MIN_MV = 3200
 BATTERY_MAX_MV = 4200
 DEFAULT_BOT_NAME = "MeshCore Assistant"
@@ -495,7 +495,8 @@ async def refresh_contacts():
     if not meshcore_instance or not app_state["is_connected"]:
         return
     try:
-        result = await meshcore_instance.commands.get_contacts()
+        async with hardware_lock:
+            result = await meshcore_instance.commands.get_contacts()
         if result.type != EventType.ERROR:
             app_state["contacts"] = normalize_entries(result.payload)
     except Exception as error:
@@ -517,10 +518,14 @@ async def refresh_channels():
     try:
         for channel_index in range(MAX_CHANNELS):
             try:
-                result = await asyncio.wait_for(
-                    getter(channel_index),
-                    timeout=1.0,
-                )
+                # Lock per-channel (not the whole scan) so a long scan of
+                # many empty channels doesn't block message sends for tens
+                # of seconds.
+                async with hardware_lock:
+                    result = await asyncio.wait_for(
+                        getter(channel_index),
+                        timeout=1.0,
+                    )
             except asyncio.TimeoutError:
                 # Empty or unavailable channels commonly timeout; silence this
                 # noise so the console remains readable while the scan continues.
@@ -570,7 +575,8 @@ async def refresh_gateway_telemetry():
 
     if request_self_telemetry is not None:
         try:
-            result = await request_self_telemetry()
+            async with hardware_lock:
+                result = await request_self_telemetry()
 
             if result.type != EventType.ERROR:
                 gateway_values = parse_lpp_telemetry(result.payload)
@@ -580,7 +586,8 @@ async def refresh_gateway_telemetry():
 
     if request_self_info is not None:
         try:
-            result = await request_self_info()
+            async with hardware_lock:
+                result = await request_self_info()
             if result.type != EventType.ERROR and result.payload:
                 latitude = result.payload.get("adv_lat")
                 longitude = result.payload.get("adv_lon")
@@ -597,7 +604,8 @@ async def refresh_gateway_telemetry():
 
     if request_battery is not None:
         try:
-            result = await request_battery()
+            async with hardware_lock:
+                result = await request_battery()
 
             if (
                 result.type != EventType.ERROR
@@ -1208,12 +1216,12 @@ async def telemetry_loop():
     while True:
         try:
             if app_state["is_connected"] and meshcore_instance:
-                # Serialize with message-send handlers; interleaving commands
-                # on the wire puts the device firmware into ERR_CODE_BAD_STATE.
-                async with hardware_lock:
-                    await refresh_contacts()
-                    await refresh_gateway_telemetry()
-                    await refresh_channels()
+                # Each refresh_* call locks its own hardware commands, so
+                # message sends can interleave instead of waiting out an
+                # entire multi-second scan.
+                await refresh_contacts()
+                await refresh_gateway_telemetry()
+                await refresh_channels()
             await asyncio.sleep(30)
         except asyncio.CancelledError:
             raise
@@ -1673,8 +1681,7 @@ async def restart_dashboard_handler(request):
 
 
 async def peers_handler(request):
-    async with hardware_lock:
-        await refresh_contacts()
+    await refresh_contacts()
     nodes = []
     for node_id, entry in app_state["contacts"].items():
         coordinates = coordinates_from_entry(entry)
