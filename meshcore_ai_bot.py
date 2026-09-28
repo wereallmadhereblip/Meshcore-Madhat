@@ -1152,19 +1152,40 @@ async def serial_scan_handler(request):
     })
 
 
+HARDWARE_CONNECT_ATTEMPTS = 3
+HARDWARE_CONNECT_RETRY_DELAY_SECONDS = 3
+
+
 async def connect_hardware():
     global meshcore_instance
     await disconnect_hardware()
     try:
-        if app_state["connection_type"] == "bluetooth":
-            log_to_dash(f"Connecting via Bluetooth to {app_state['ble_mac']}...")
-            meshcore_instance = await MeshCore.create_ble(app_state["ble_mac"])
-        else:
-            log_to_dash(f"Connecting via serial to {app_state['serial_port']}...")
-            meshcore_instance = await MeshCore.create_serial(app_state["serial_port"])
+        # A device that just rebooted may accept the transport connection but
+        # not yet answer the firmware app-start handshake in time, so retry a
+        # few times before giving up.
+        for attempt in range(1, HARDWARE_CONNECT_ATTEMPTS + 1):
+            if app_state["connection_type"] == "bluetooth":
+                log_to_dash(f"Connecting via Bluetooth to {app_state['ble_mac']}...")
+                meshcore_instance = await MeshCore.create_ble(app_state["ble_mac"])
+            else:
+                log_to_dash(f"Connecting via serial to {app_state['serial_port']}...")
+                meshcore_instance = await MeshCore.create_serial(app_state["serial_port"])
+
+            if meshcore_instance is not None:
+                break
+
+            if attempt < HARDWARE_CONNECT_ATTEMPTS:
+                log_to_dash(
+                    f"No response from device (attempt {attempt}/{HARDWARE_CONNECT_ATTEMPTS}); "
+                    f"retrying in {HARDWARE_CONNECT_RETRY_DELAY_SECONDS}s..."
+                )
+                await asyncio.sleep(HARDWARE_CONNECT_RETRY_DELAY_SECONDS)
 
         if meshcore_instance is None:
-            raise RuntimeError("MeshCore did not return a connection instance; check device address/port.")
+            raise RuntimeError(
+                "MeshCore did not return a connection instance; check device address/port, "
+                "or wait for the device to finish booting and try connecting again."
+            )
 
         await meshcore_instance.start_auto_message_fetching()
         meshcore_instance.subscribe(EventType.CONTACT_MSG_RECV, handle_incoming_message)
@@ -1187,9 +1208,12 @@ async def telemetry_loop():
     while True:
         try:
             if app_state["is_connected"] and meshcore_instance:
-                await refresh_contacts()
-                await refresh_gateway_telemetry()
-                await refresh_channels()
+                # Serialize with message-send handlers; interleaving commands
+                # on the wire puts the device firmware into ERR_CODE_BAD_STATE.
+                async with hardware_lock:
+                    await refresh_contacts()
+                    await refresh_gateway_telemetry()
+                    await refresh_channels()
             await asyncio.sleep(30)
         except asyncio.CancelledError:
             raise
@@ -1649,7 +1673,8 @@ async def restart_dashboard_handler(request):
 
 
 async def peers_handler(request):
-    await refresh_contacts()
+    async with hardware_lock:
+        await refresh_contacts()
     nodes = []
     for node_id, entry in app_state["contacts"].items():
         coordinates = coordinates_from_entry(entry)

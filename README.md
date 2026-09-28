@@ -36,7 +36,7 @@ Send the bot a direct message with a request such as:
 The bot confirms each change and saves its name and personality under
 `~/.config/meshcore-ollama-bot/bot_settings.json` so they persist across restarts.
 
-Use the dashboard to choose Bluetooth or Serial, enter the Heltec Bluetooth MAC address or serial port, select the Ollama model, and connect. The default values are `/dev/ttyACM0` and the MAC address defined near the top of the script.
+Use the dashboard to choose Bluetooth or Serial, enter the Device Bluetooth MAC address or serial port, and connect. The default values are `/dev/ttyACM0` and the MAC address defined near the top of the script.
 
 ## Hardware notes
 
