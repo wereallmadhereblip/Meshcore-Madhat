@@ -252,6 +252,9 @@ app_state = {
 
 executor = ThreadPoolExecutor(max_workers=1)
 hardware_lock = asyncio.Lock()
+# Sending back-to-back before the radio finishes the previous transmit
+# trips firmware's ERR_CODE_BAD_STATE, so pace multi-part replies.
+HARDWARE_SEND_INTERVAL = 1.5
 conversation_history = defaultdict(list)
 chat_history = defaultdict(list)
 processed_messages = set()
@@ -885,6 +888,8 @@ async def handle_incoming_message(event):
             if contacts.type != EventType.ERROR and contacts.payload:
                 recipient = contacts.payload.get(sender, sender)
             for part_number, part in enumerate(reply_parts, start=1):
+                if part_number > 1:
+                    await asyncio.sleep(HARDWARE_SEND_INTERVAL)
                 result = await meshcore_instance.commands.send_msg(recipient, part)
                 if result.type == EventType.ERROR:
                     log_to_dash(
@@ -953,6 +958,8 @@ async def handle_incoming_channel_message(event):
     async with hardware_lock:
         try:
             for part_number, part in enumerate(reply_parts, start=1):
+                if part_number > 1:
+                    await asyncio.sleep(HARDWARE_SEND_INTERVAL)
                 result = await send_to_target(channel_target, "channel", part)
                 if result.type == EventType.ERROR:
                     log_to_dash(
@@ -995,8 +1002,12 @@ async def handle_new_contact(event):
     greeting_parts = split_reply_into_messages(greeting, prefix=prefix)
     announced_contact_adverts[str(public_key)] = advert_timestamp
     async with hardware_lock:
+        first_send = True
         for channel in channels:
             for part in greeting_parts:
+                if not first_send:
+                    await asyncio.sleep(HARDWARE_SEND_INTERVAL)
+                first_send = False
                 try:
                     result = await send_to_target(channel, "channel", part)
                     if result.type == EventType.ERROR:
