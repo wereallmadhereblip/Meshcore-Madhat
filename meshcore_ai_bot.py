@@ -682,9 +682,13 @@ def weather_location_from_prompt(prompt):
 async def geocode_location(session, location):
     # Open-Meteo's geocoding search wants just a place name, so a combined
     # "city state"/"city country" string (e.g. "hartford connecticut") often
-    # returns no matches. Retry with trailing words dropped until it hits.
+    # returns no matches. Retry with trailing words dropped, but don't shrink
+    # past 2 words unless the whole location was 1-2 words to begin with --
+    # otherwise stray words from an unrelated sentence ("the", "for") can
+    # fuzzy-match a real place and produce a bogus weather reply.
     words = location.split()
-    for word_count in range(len(words), 0, -1):
+    minimum_words = 1 if len(words) <= 2 else 2
+    for word_count in range(len(words), minimum_words - 1, -1):
         candidate = " ".join(words[:word_count])
         async with session.get(
             "https://geocoding-api.open-meteo.com/v1/search",
@@ -697,6 +701,21 @@ async def geocode_location(session, location):
     return None
 
 
+# Words that can end up looking like a "location" after prompt parsing but
+# are never actually place names, so treat them as no location found.
+NON_LOCATION_WORDS = {
+    "weather", "forecast", "temperature", "conditions", "today", "tonight",
+    "tomorrow", "now", "here", "there", "it", "this", "that", "the", "a", "an",
+}
+
+
+def is_plausible_location(location):
+    if not location or len(location.split()) > 5:
+        return False
+    words = {word.casefold() for word in re.findall(r"[a-z']+", location, re.IGNORECASE)}
+    return bool(words - NON_LOCATION_WORDS)
+
+
 async def fetch_weather_response(prompt, sender_id=None):
     weather_requested = bool(re.search(
         r"\b(?:weather|forecast|temperature|raining|rain|snow|humidity|windy|"
@@ -705,10 +724,18 @@ async def fetch_weather_response(prompt, sender_id=None):
         re.IGNORECASE,
     ))
     is_location_followup = sender_id in pending_weather_requests and not weather_requested
+    if is_location_followup and sender_id is not None:
+        # One-shot: whether or not this turns out to be a real location,
+        # don't keep hijacking the sender's later messages as weather answers.
+        pending_weather_requests.discard(sender_id)
     if not weather_requested and not is_location_followup:
         return None
 
     location = prompt.strip(" \t\r\n.,?!") if is_location_followup else weather_location_from_prompt(prompt)
+    if not is_plausible_location(location):
+        if is_location_followup:
+            return None
+        location = None
     use_metric = bool(re.search(
         r"\b(?:celsius|centigrade|metric|kmh|kph|kilometers? per hour|"
         r"kilometres? per hour|c)\b|°\s*c\b",
