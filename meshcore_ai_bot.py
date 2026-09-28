@@ -1068,6 +1068,9 @@ async def connect_hardware():
             log_to_dash(f"Connecting via serial to {app_state['serial_port']}...")
             meshcore_instance = await MeshCore.create_serial(app_state["serial_port"])
 
+        if meshcore_instance is None:
+            raise RuntimeError("MeshCore did not return a connection instance; check device address/port.")
+
         await meshcore_instance.start_auto_message_fetching()
         meshcore_instance.subscribe(EventType.CONTACT_MSG_RECV, handle_incoming_message)
         meshcore_instance.subscribe(
