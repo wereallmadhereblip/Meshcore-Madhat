@@ -25,7 +25,9 @@ WEB_HOST = "0.0.0.0"
 WEB_PORT = 8080
 MAX_CHANNELS = 40
 MAX_MESHCORE_MESSAGE_LENGTH = 100
-MAX_AI_REPLY_PACKETS = 8
+MAX_AI_REPLY_PACKETS = 12
+RESPONSE_LENGTH_PACKET_LIMITS = {"short": 3, "medium": 6, "long": MAX_AI_REPLY_PACKETS}
+DEFAULT_RESPONSE_LENGTH = "medium"
 BATTERY_MIN_MV = 3200
 BATTERY_MAX_MV = 4200
 DEFAULT_BOT_NAME = "MeshCore Assistant"
@@ -44,6 +46,7 @@ def load_bot_settings():
     settings = {
         "name": DEFAULT_BOT_NAME,
         "personality": DEFAULT_BOT_PERSONALITY,
+        "response_length": DEFAULT_RESPONSE_LENGTH,
     }
     try:
         saved_settings = json.loads(BOT_SETTINGS_PATH.read_text(encoding="utf-8"))
@@ -58,6 +61,9 @@ def load_bot_settings():
             value = clean_bot_setting(value, limit)
             if value:
                 settings[key] = value
+    response_length = saved_settings.get("response_length")
+    if response_length in RESPONSE_LENGTH_PACKET_LIMITS:
+        settings["response_length"] = response_length
     return settings
 
 
@@ -105,6 +111,9 @@ def load_app_config():
                 value = clean_bot_setting(value, limit)
                 if value:
                     config["bot"][key] = value
+        response_length = saved_bot.get("response_length")
+        if response_length in RESPONSE_LENGTH_PACKET_LIMITS:
+            config["bot"]["response_length"] = response_length
     if not {"model", "theme", "connection", "weather", "bot"}.issubset(saved_config):
         try:
             write_app_config(config)
@@ -153,8 +162,8 @@ def validate_app_config(value):
         raise ValueError("Enter a city when specifying a state")
 
     bot = value.get("bot", app_config["bot"])
-    if not isinstance(bot, dict) or set(bot) - {"name", "personality"}:
-        raise ValueError("Bot settings must contain only name and personality")
+    if not isinstance(bot, dict) or set(bot) - {"name", "personality", "response_length"}:
+        raise ValueError("Bot settings must contain only name, personality, and response_length")
     validated_bot = {}
     for key, limit in (("name", 40), ("personality", 120)):
         setting = bot.get(key, app_config["bot"][key])
@@ -164,6 +173,10 @@ def validate_app_config(value):
         if not setting:
             raise ValueError(f"Bot {key} cannot be empty")
         validated_bot[key] = setting
+    response_length = bot.get("response_length", app_config["bot"]["response_length"])
+    if response_length not in RESPONSE_LENGTH_PACKET_LIMITS:
+        raise ValueError("Bot response_length must be short, medium, or long")
+    validated_bot["response_length"] = response_length
     return {
         "model": model.strip(),
         "theme": theme,
@@ -183,12 +196,25 @@ app_config = load_app_config()
 bot_settings = app_config["bot"]
 
 
+def current_reply_packet_limit():
+    return RESPONSE_LENGTH_PACKET_LIMITS.get(
+        bot_settings.get("response_length", DEFAULT_RESPONSE_LENGTH),
+        RESPONSE_LENGTH_PACKET_LIMITS[DEFAULT_RESPONSE_LENGTH],
+    )
+
+
 def update_bot_settings_from_prompt(prompt):
     global app_config, bot_settings
 
     name_match = re.search(
         r"\b(?:call yourself|your name is|change your name to|set your name to|"
         r"rename yourself to)\s+(.+?)\s*[.!?]*$",
+        prompt,
+        re.IGNORECASE,
+    )
+    response_length_match = re.search(
+        r"\b(?:make|keep|set)\s+(?:your\s+)?(?:responses?|replies)\s+"
+        r"(short|medium|mid|long)\b",
         prompt,
         re.IGNORECASE,
     )
@@ -208,6 +234,11 @@ def update_bot_settings_from_prompt(prompt):
     if name_match:
         key = "name"
         value = clean_bot_setting(name_match.group(1), 40)
+    elif response_length_match:
+        key = "response_length"
+        value = response_length_match.group(1).lower()
+        if value == "mid":
+            value = "medium"
     elif personality_match:
         key = "personality"
         if personality_match.lastindex == 2:
@@ -235,6 +266,8 @@ def update_bot_settings_from_prompt(prompt):
     bot_settings = app_config["bot"]
     if key == "name":
         return f"Understood. I'll go by {value} from now on."
+    if key == "response_length":
+        return f"Understood. I'll keep my responses {value} from now on."
     return f"Understood. I'll be {value} from now on."
 
 app_state = {
@@ -885,7 +918,8 @@ async def generate_ai_response(sender_id, prompt, allow_settings_update=True):
     history = conversation_history[sender_id]
     history.append({"role": "user", "content": prompt})
     reply_prefix = f"{bot_settings['name']}: " if str(sender_id).startswith("channel:") else ""
-    reply_limit = MAX_AI_REPLY_PACKETS * (
+    reply_limit_packets = current_reply_packet_limit()
+    reply_limit = reply_limit_packets * (
         MAX_MESHCORE_MESSAGE_LENGTH - 10 - len(reply_prefix)
     )
 
@@ -896,7 +930,7 @@ async def generate_ai_response(sender_id, prompt, allow_settings_update=True):
         f"The current date and time is {datetime.now():%A, %B %d, %Y at %I:%M %p}. "
         "Answer the user's actual question directly. Do not mention network "
         f"delays unless asked. Keep replies under {reply_limit} characters, "
-        f"within {MAX_AI_REPLY_PACKETS} mesh-radio packets; "
+        f"within {reply_limit_packets} mesh-radio packets; "
         "use one or two compact sentences and include only the most useful details."
     )
     try:
@@ -952,7 +986,7 @@ async def handle_incoming_message(event):
 
     reply = await generate_ai_response(sender, text)
     log_to_dash(f"AI reply: {reply}")
-    reply_parts = split_reply_into_messages(reply, max_parts=MAX_AI_REPLY_PACKETS)
+    reply_parts = split_reply_into_messages(reply, max_parts=current_reply_packet_limit())
 
     async with hardware_lock:
         try:
@@ -1026,7 +1060,7 @@ async def handle_incoming_channel_message(event):
     reply_parts = split_reply_into_messages(
         reply,
         prefix=f"{bot_settings['name']}: ",
-        max_parts=MAX_AI_REPLY_PACKETS,
+        max_parts=current_reply_packet_limit(),
     )
 
     async with hardware_lock:
@@ -1319,6 +1353,8 @@ button:hover{transform:translateY(-1px);border-color:var(--accent);background:va
 .conversation-filters{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:8px}
 .conversation-filters label{min-width:0;margin:0;font-size:10px}
 .conversation-filters select{margin-top:4px;padding:7px 20px 7px 7px;font-size:10px}
+.conversation-filters .node-search-label{grid-column:1/-1}
+.conversation-filters .node-search-label input{margin-top:4px;padding:7px;font-size:10px;width:100%;box-sizing:border-box;background:var(--input-bg,var(--panel-bg));color:inherit;border:1px solid var(--border);border-radius:4px}
 .conversation-entry{display:grid;grid-template-columns:minmax(0,1fr) 34px;gap:4px}
 .conversation-target{display:grid;width:100%;gap:3px;padding:9px;text-align:left}
 .conversation-target strong{overflow-wrap:anywhere;color:var(--text);font-size:11px}
@@ -1370,6 +1406,8 @@ button:hover{transform:translateY(-1px);border-color:var(--accent);background:va
 .map-peer-filters{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:8px}
 .map-peer-filters label{min-width:0;margin:0;font-size:10px}
 .map-peer-filters select{margin-top:4px;padding:7px 20px 7px 7px;font-size:10px}
+.map-peer-filters .node-search-label{grid-column:1/-1}
+.map-peer-filters .node-search-label input{margin-top:4px;padding:7px;font-size:10px;width:100%;box-sizing:border-box;background:var(--input-bg,var(--panel-bg));color:inherit;border:1px solid var(--border);border-radius:4px}
 #map-node-list{flex:1;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--log-bg)}
 .map-empty{padding:12px;color:var(--muted);font-size:11px}
 .map-node-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px;border-bottom:1px solid var(--border)}
@@ -1413,12 +1451,12 @@ let activeView='connection';
 let deviceSettingsLoaded=false;
 let loadedDeviceSettings=null;
 let favoriteNodeIds=new Set();
-let appConfig={model:'llama3.2:1b',theme:'midnight',connection:{type:'bluetooth',ble_mac:'',serial_port:''},bot:{name:'MeshCore Assistant',personality:'helpful, friendly, and concise'}};
+let appConfig={model:'llama3.2:1b',theme:'midnight',connection:{type:'bluetooth',ble_mac:'',serial_port:''},bot:{name:'MeshCore Assistant',personality:'helpful, friendly, and concise',response_length:'medium'}};
 let configEditorLoaded=false;
 const commonRadioProfiles={balanced:{radio_bw:125,radio_sf:7,radio_cr:5},long_range:{radio_bw:125,radio_sf:10,radio_cr:5},high_throughput:{radio_bw:250,radio_sf:7,radio_cr:5}};
 function applyTheme(theme,persist=true){document.body.dataset.theme=theme;document.getElementById('theme-select').value=theme;if(persist)saveAppConfig({...appConfig,theme})}
 function showSettingsTab(tab){document.querySelectorAll('.settings-tab').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.settingsTab===tab)));for(let panel of document.querySelectorAll('.settings-tab-panel'))panel.hidden=panel.id!=='settings-'+tab+'-panel';if(tab==='config'&&!configEditorLoaded)loadConfigEditor()}
-function syncConfigControls(){document.getElementById('theme-select').value=appConfig.theme;let modelSelect=document.getElementById('model');if(![...modelSelect.options].some(option=>option.value===appConfig.model))modelSelect.add(new Option(appConfig.model,appConfig.model));modelSelect.value=appConfig.model;document.getElementById('weather-city').value=appConfig.weather.city;document.getElementById('weather-state').value=appConfig.weather.state;applyTheme(appConfig.theme,false)}
+function syncConfigControls(){document.getElementById('theme-select').value=appConfig.theme;let modelSelect=document.getElementById('model');if(![...modelSelect.options].some(option=>option.value===appConfig.model))modelSelect.add(new Option(appConfig.model,appConfig.model));modelSelect.value=appConfig.model;document.getElementById('weather-city').value=appConfig.weather.city;document.getElementById('weather-state').value=appConfig.weather.state;document.getElementById('bot-name').value=appConfig.bot.name;document.getElementById('bot-personality').value=appConfig.bot.personality;document.getElementById('bot-response-length').value=appConfig.bot.response_length;applyTheme(appConfig.theme,false)}
 const weatherIcons={sun:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>',partly:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="16" cy="7" r="3"/><path d="M16 2v1m0 8v1m5-5h-1m-8 0h-1M5 19h12a3 3 0 0 0 .3-6A5 5 0 0 0 8 11.5 3.8 3.8 0 0 0 5 19Z"/></svg>',cloud:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19h13a4 4 0 0 0 .4-8A6 6 0 0 0 7 9.5 4.8 4.8 0 0 0 5 19Z"/></svg>',fog:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm-2 4h14m-10 3h14"/></svg>',rain:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 15h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 7 4 4 0 0 0 5 15Zm2 3-1 2m7-2-1 2m7-2-1 2"/></svg>',snow:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm2 4h.01M12 19h.01M18 18h.01"/></svg>',storm:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm8 1-3 4h3l-1 3 4-5h-3l1-2"/></svg>'};
 function weatherIconName(code){if(code===null||code===undefined||!Number.isFinite(Number(code)))return 'cloud';code=Number(code);if(code===0)return 'sun';if(code===1||code===2)return 'partly';if(code===45||code===48)return 'fog';if(code===51||code===53||code===55||code===56||code===57||code===61||code===63||code===65||code===66||code===67||code===80||code===81||code===82)return 'rain';if(code===71||code===73||code===75||code===77||code===85||code===86)return 'snow';if(code===95||code===96||code===99)return 'storm';return 'cloud'}
 function renderWeatherIcon(code,condition='Weather condition unavailable'){let icon=document.getElementById('weather-icon');icon.innerHTML=weatherIcons[weatherIconName(code)]||weatherIcons.cloud;icon.setAttribute('aria-label',condition);icon.title=condition}
@@ -1426,6 +1464,7 @@ async function loadLocalWeather(){let temperature=document.getElementById('weath
 async function loadAppConfig(){try{let response=await fetch('/api/config'),data=await response.json();if(!response.ok)throw new Error(data.error||'Settings could not be loaded');appConfig=data;syncConfigControls();loadLocalWeather()}catch(error){let statusMessage=document.getElementById('preferences-status');statusMessage.dataset.state='error';statusMessage.textContent=error.message}}
 async function saveAppConfig(config,statusId='preferences-status'){let statusMessage=document.getElementById(statusId);statusMessage.dataset.state='';statusMessage.textContent='Saving config.json...';try{let response=await fetch('/api/config',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)}),data=await response.json();if(!response.ok)throw new Error(data.error||'Settings could not be saved');appConfig=data;syncConfigControls();if(statusId==='config-status'){document.getElementById('config-json-editor').value=JSON.stringify(appConfig,null,2);configEditorLoaded=true}statusMessage.textContent='Saved to config.json.';statusMessage.dataset.state='success'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
 async function savePreference(key,value){await saveAppConfig({...appConfig,[key]:value})}
+async function saveBotSettings(event){event.preventDefault();let name=document.getElementById('bot-name').value.trim(),personality=document.getElementById('bot-personality').value.trim(),responseLength=document.getElementById('bot-response-length').value,statusMessage=document.getElementById('bot-settings-status');if(!name||!personality){statusMessage.textContent='Enter a bot name and personality.';statusMessage.dataset.state='error';return}await saveAppConfig({...appConfig,bot:{name,personality,response_length:responseLength}},'bot-settings-status')}
 async function saveWeatherLocation(event){event.preventDefault();let city=document.getElementById('weather-city').value.trim(),state=document.getElementById('weather-state').value.trim();if(!city){let statusMessage=document.getElementById('weather-settings-status');statusMessage.textContent='Enter a city.';statusMessage.dataset.state='error';return}await saveAppConfig({...appConfig,weather:{city,state}},'weather-settings-status');if(document.getElementById('weather-settings-status').dataset.state==='success')loadLocalWeather()}
 async function loadConfigEditor(){let statusMessage=document.getElementById('config-status');statusMessage.dataset.state='';statusMessage.textContent='Loading config.json...';try{let response=await fetch('/api/config'),data=await response.json();if(!response.ok)throw new Error(data.error||'config.json could not be loaded');appConfig=data;syncConfigControls();document.getElementById('config-json-editor').value=JSON.stringify(appConfig,null,2);configEditorLoaded=true;statusMessage.textContent='Loaded config.json.'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
 async function saveConfigFile(){let statusMessage=document.getElementById('config-status'),config;try{config=JSON.parse(document.getElementById('config-json-editor').value)}catch(error){statusMessage.textContent='Invalid JSON: '+error.message;statusMessage.dataset.state='error';return}await saveAppConfig(config,'config-status')}
@@ -1451,13 +1490,13 @@ function appendPeerDetail(container,label,value){if(value===null||value===undefi
 async function loadPeerTelemetry(nodeId,panelId){let panel=document.getElementById(panelId);panel.hidden=false;panel.replaceChildren();let heading=document.createElement('h3');heading.textContent='Peer details';let statusMessage=document.createElement('p');statusMessage.textContent='Requesting telemetry...';let details=document.createElement('dl');panel.append(heading,statusMessage,details);try{let response=await fetch('/api/peer-telemetry?node_id='+encodeURIComponent(nodeId)),data=await response.json();if(!response.ok)throw new Error(data.error||'Peer details could not be loaded');let node=data.node||{},types={0:'Unknown',1:'User',2:'Repeater',3:'Room server',4:'Sensor'};details.replaceChildren();appendPeerDetail(details,'Type',types[Number(node.type)]||'Unknown');let heard=Number(node.last_heard);appendPeerDetail(details,'Last heard',heard>0?new Date(heard*1000).toLocaleString():'Not available');if(Number.isFinite(node.latitude)&&Number.isFinite(node.longitude))appendPeerDetail(details,'Location',node.latitude.toFixed(5)+', '+node.longitude.toFixed(5));let telemetry=data.telemetry||[];for(let item of telemetry){let label=String(item.type||'Telemetry');let value=item.value;if(value&&typeof value==='object')value=Object.entries(value).map(([key,entry])=>key+': '+entry).join(', ');if(value!==null&&value!==undefined)appendPeerDetail(details,label,value)}statusMessage.textContent=telemetry.length?'Latest telemetry reported by this peer.':'No telemetry has been reported by this peer.'}catch(error){statusMessage.textContent=error.message}}
 const peerMarkerSvgs={users:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 21a7 7 0 0 1 14 0"/></svg>',repeaters:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V8M8 20h8M6 11a8 8 0 0 1 12 0M3 8a12 12 0 0 1 18 0"/><circle cx="12" cy="5" r="1"/></svg>','room-servers':'<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="13" width="16" height="7" rx="1.5"/><path d="M8 7.5h.01M8 16.5h.01M12 7.5h5M12 16.5h5"/></svg>',sensors:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 14.76V5a3 3 0 0 0-6 0v9.76a5 5 0 1 0 6 0Z"/><path d="M11 11v6"/></svg>',unknown:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/></svg>'};
 function peerMarkerIcon(peer){let category=nodeCategory(peer);return L.divIcon({className:'',html:`<span class="map-peer-icon map-peer-icon-${category}" aria-label="${category}">${peerMarkerSvgs[category]||peerMarkerSvgs.unknown}</span>`,iconSize:[32,32],iconAnchor:[16,16]})}
-function renderMapMarkers(){if(!dashboardMap||!mapMarkers)return;mapMarkers.clearLayers();let bounds=[];for(let peer of sortedFilteredNodes('map-node-sort','map-node-type-filter')){if(!Number.isFinite(peer.latitude)||!Number.isFinite(peer.longitude))continue;let point=[peer.latitude,peer.longitude],marker=L.marker(point,{icon:peerMarkerIcon(peer),title:peer.name+' ('+nodeCategory(peer)+')'}).bindPopup(popupContent(peer.name,peer.id)).addTo(mapMarkers);marker.on('click',()=>loadPeerTelemetry(peer.id,'map-peer-details'));bounds.push(point)}if(Number.isFinite(gatewayTelemetry.latitude)&&Number.isFinite(gatewayTelemetry.longitude)){let point=[gatewayTelemetry.latitude,gatewayTelemetry.longitude];L.circleMarker(point,{radius:9,color:'#0d1117',weight:2,fillColor:'#36d1dc',fillOpacity:1}).bindPopup(popupContent('This gateway','Current radio location')).addTo(mapMarkers);bounds.push(point)}let signature=JSON.stringify(bounds);if(bounds.length&&signature!==mapBoundsSignature){dashboardMap.fitBounds(bounds,{padding:[36,36],maxZoom:12});mapBoundsSignature=signature}else if(!bounds.length){mapBoundsSignature=''}document.getElementById('map-message').hidden=bounds.length>0;document.getElementById('map-message').textContent='No peer or gateway location data is available yet.'}
+function renderMapMarkers(){if(!dashboardMap||!mapMarkers)return;mapMarkers.clearLayers();let bounds=[];for(let peer of sortedFilteredNodes('map-node-sort','map-node-type-filter','map-node-search')){if(!Number.isFinite(peer.latitude)||!Number.isFinite(peer.longitude))continue;let point=[peer.latitude,peer.longitude],marker=L.marker(point,{icon:peerMarkerIcon(peer),title:peer.name+' ('+nodeCategory(peer)+')'}).bindPopup(popupContent(peer.name,peer.id)).addTo(mapMarkers);marker.on('click',()=>loadPeerTelemetry(peer.id,'map-peer-details'));bounds.push(point)}if(Number.isFinite(gatewayTelemetry.latitude)&&Number.isFinite(gatewayTelemetry.longitude)){let point=[gatewayTelemetry.latitude,gatewayTelemetry.longitude];L.circleMarker(point,{radius:9,color:'#0d1117',weight:2,fillColor:'#36d1dc',fillOpacity:1}).bindPopup(popupContent('This gateway','Current radio location')).addTo(mapMarkers);bounds.push(point)}let signature=JSON.stringify(bounds);if(bounds.length&&signature!==mapBoundsSignature){dashboardMap.fitBounds(bounds,{padding:[36,36],maxZoom:12});mapBoundsSignature=signature}else if(!bounds.length){mapBoundsSignature=''}document.getElementById('map-message').hidden=bounds.length>0;document.getElementById('map-message').textContent='No peer or gateway location data is available yet.'}
 function renderMapNodes(){let list=document.getElementById('map-node-list');list.replaceChildren();let located=0;for(let peer of mapNodes){let row=document.createElement('div');row.className='map-node-row';let details=document.createElement('div');let name=document.createElement('strong');name.textContent=peer.name;let id=document.createElement('span');id.textContent=peer.id;details.append(name,id);let location=document.createElement('span');let hasLocation=Number.isFinite(peer.latitude)&&Number.isFinite(peer.longitude);location.className='map-location '+(hasLocation?'located':'unlocated');location.textContent=hasLocation?'LOCATED':'NO FIX';if(hasLocation){located++;row.tabIndex=0;row.setAttribute('role','button');row.addEventListener('click',()=>focusMapPoint(peer.latitude,peer.longitude));row.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();row.click()}})}row.append(details,location);list.appendChild(row)}let gatewayLocated=Number.isFinite(gatewayTelemetry.latitude)&&Number.isFinite(gatewayTelemetry.longitude);if(gatewayLocated){located++;let row=document.createElement('div');row.className='map-node-row';let details=document.createElement('div');let name=document.createElement('strong');name.textContent='This gateway';let id=document.createElement('span');id.textContent='Local radio';details.append(name,id);let location=document.createElement('span');location.className='map-location located';location.textContent='LOCATED';row.tabIndex=0;row.setAttribute('role','button');row.addEventListener('click',()=>focusMapPoint(gatewayTelemetry.latitude,gatewayTelemetry.longitude));row.append(details,location);list.appendChild(row)}if(!mapNodes.length&&!gatewayLocated){let empty=document.createElement('div');empty.className='map-empty';empty.textContent='No peers are available yet. Connect to a MeshCore radio to load contacts.';list.appendChild(empty)}document.getElementById('map-node-count').textContent=String(located);document.getElementById('map-peer-total').textContent=String(mapNodes.length);document.getElementById('map-node-summary').textContent=`${located} located / ${mapNodes.length} peers`;renderMapMarkers()}
 function nodeCategory(node){let type=String(node.type??'').toLowerCase();if(type==='1'||type==='client')return 'users';if(type==='2'||type==='repeater')return 'repeaters';if(type==='3'||type==='room server'||type==='room_server')return 'room-servers';if(type==='4'||type==='sensor')return 'sensors';return 'unknown'}
-function sortedFilteredNodes(sortId='node-sort',typeId='node-type-filter'){let category=document.getElementById(typeId).value,nodes=mapNodes.filter(node=>category==='all'||(category==='favorites'?favoriteNodeIds.has(String(node.id)):nodeCategory(node)===category)),sort=document.getElementById(sortId).value;nodes.sort((left,right)=>{if(sort==='heard')return Number(right.last_heard||0)-Number(left.last_heard||0)||left.name.localeCompare(right.name);if(sort==='messages')return Number(right.last_message_at||0)-Number(left.last_message_at||0)||left.name.localeCompare(right.name);return left.name.localeCompare(right.name)})
+function sortedFilteredNodes(sortId='node-sort',typeId='node-type-filter',searchId='node-search'){let category=document.getElementById(typeId).value,query=document.getElementById(searchId)?.value.trim().toLowerCase()||'',nodes=mapNodes.filter(node=>(category==='all'||(category==='favorites'?favoriteNodeIds.has(String(node.id)):nodeCategory(node)===category))&&(!query||String(node.name||'').toLowerCase().includes(query)||String(node.id).toLowerCase().includes(query))),sort=document.getElementById(sortId).value;nodes.sort((left,right)=>{if(sort==='heard')return Number(right.last_heard||0)-Number(left.last_heard||0)||left.name.localeCompare(right.name);if(sort==='messages')return Number(right.last_message_at||0)-Number(left.last_message_at||0)||left.name.localeCompare(right.name);return left.name.localeCompare(right.name)})
 return nodes}
 function updateMapPeerFilters(){renderKnownPeers();renderMapMarkers()}
-function renderKnownPeers(){let list=document.getElementById('map-node-list');if(!list)return;let peers=sortedFilteredNodes('map-node-sort','map-node-type-filter');list.replaceChildren();if(!peers.length){let empty=document.createElement('div');empty.className='map-empty';empty.textContent=mapNodes.length?'No peers match this filter.':'No peers are available yet. Connect to a MeshCore radio to load contacts.';list.appendChild(empty);return}for(let peer of peers){let row=document.createElement('div');row.className='map-node-row';let target=document.createElement('button');target.type='button';target.className='map-peer-target';target.title=Number.isFinite(peer.latitude)&&Number.isFinite(peer.longitude)?'Center map and view peer details':'View peer details';target.onclick=()=>{focusMapPoint(peer.latitude,peer.longitude);loadPeerTelemetry(peer.id,'map-peer-details')};let details=document.createElement('div');let name=document.createElement('strong');name.textContent=peer.name;let id=document.createElement('span');id.textContent=String(peer.id);details.append(name,id);target.appendChild(details);row.append(target,createNodeFavoriteButton(peer.id));list.appendChild(row)}}
+function renderKnownPeers(){let list=document.getElementById('map-node-list');if(!list)return;let peers=sortedFilteredNodes('map-node-sort','map-node-type-filter','map-node-search');list.replaceChildren();if(!peers.length){let empty=document.createElement('div');empty.className='map-empty';empty.textContent=mapNodes.length?'No peers match this filter.':'No peers are available yet. Connect to a MeshCore radio to load contacts.';list.appendChild(empty);return}for(let peer of peers){let row=document.createElement('div');row.className='map-node-row';let target=document.createElement('button');target.type='button';target.className='map-peer-target';target.title=Number.isFinite(peer.latitude)&&Number.isFinite(peer.longitude)?'Center map and view peer details':'View peer details';target.onclick=()=>{focusMapPoint(peer.latitude,peer.longitude);loadPeerTelemetry(peer.id,'map-peer-details')};let details=document.createElement('div');let name=document.createElement('strong');name.textContent=peer.name;let id=document.createElement('span');id.textContent=String(peer.id);details.append(name,id);target.appendChild(details);row.append(target,createNodeFavoriteButton(peer.id));list.appendChild(row)}}
 function renderConversationTargets(type){let isNode=type==='node',items=isNode?sortedFilteredNodes():meshChannels,list=document.getElementById(isNode?'node-target-list':'channel-target-list'),selected=isNode?selectedNodeId:selectedChannelId;list.replaceChildren();if(!items.length){let empty=document.createElement('p');empty.className='map-empty';empty.textContent=isNode?(mapNodes.length?'No nodes match this filter.':'No nodes found. Connect to a MeshCore radio to load contacts.'):'No channels found on this device.';list.appendChild(empty);return}for(let item of items){let button=document.createElement('button');button.type='button';button.className='conversation-target'+(selected===String(item.id)?' active':'');button.onclick=()=>selectConversation(type,item.id);let title=document.createElement('strong');title.textContent=item.name;let detail=document.createElement('small');detail.textContent=String(item.id);button.append(title,detail);if(isNode){let entry=document.createElement('div');entry.className='conversation-entry';entry.append(button,createNodeFavoriteButton(item.id));list.appendChild(entry)}else list.appendChild(button)}}
 function selectConversation(type,id){let normalized=String(id);if(type==='node'){selectedNodeId=normalized;document.getElementById('node-chat-title').textContent=mapNodes.find(item=>String(item.id)===normalized)?.name||normalized;document.getElementById('node-chat-detail').textContent=normalized;document.getElementById('node-send').disabled=false;renderConversationTargets('node');history('node',normalized,'node-chat-history');loadPeerTelemetry(normalized,'node-peer-details')}else{selectedChannelId=normalized;document.getElementById('channel-chat-title').textContent=meshChannels.find(item=>String(item.id)===normalized)?.name||'Channel '+normalized;document.getElementById('channel-chat-detail').textContent='Channel '+normalized;document.getElementById('channel-send').disabled=false;renderConversationTargets('channel');history('channel',normalized,'channel-chat-history')}}
 async function peers(){let r=await fetch('/api/peers'),d=await r.json();gatewayTelemetry=d.gateway_telemetry||{};mapNodes=d.nodes||[];meshChannels=d.channels||[];gateway_battery.textContent=gatewayTelemetry.battery!=null?gatewayTelemetry.battery+'%':'Unavailable';if(!mapNodes.some(item=>String(item.id)===selectedNodeId))selectedNodeId='';if(!meshChannels.some(item=>String(item.id)===selectedChannelId))selectedChannelId='';renderConversationTargets('node');renderConversationTargets('channel');renderMapNodes();renderKnownPeers()}
@@ -1498,7 +1537,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 </main>
 <main id="nodes-view" class="view-panel page-view" hidden>
 <div class="messages-layout">
-<aside class="card conversation-rail"><div class="panel-heading"><div><span class="eyebrow">DIRECT MESSAGES</span><h2>Nodes</h2></div><span class="panel-index">02</span></div><div class="conversation-filters"><label for="node-sort">Sort<select id="node-sort" onchange="renderConversationTargets('node')"><option value="az">A-Z</option><option value="heard">Heard recently</option><option value="messages">Latest messages</option></select></label><label for="node-type-filter">Type<select id="node-type-filter" onchange="renderConversationTargets('node')"><option value="all">All</option><option value="favorites">Favorites</option><option value="users">Users</option><option value="repeaters">Repeaters</option><option value="room-servers">Room servers</option><option value="sensors">Sensors</option></select></label></div><div class="conversation-target-list" id="node-target-list"><p class="map-empty">Waiting for nodes...</p></div></aside>
+<aside class="card conversation-rail"><div class="panel-heading"><div><span class="eyebrow">DIRECT MESSAGES</span><h2>Nodes</h2></div><span class="panel-index">02</span></div><div class="conversation-filters"><label for="node-search" class="node-search-label">Search<input type="search" id="node-search" placeholder="Filter by name or ID" oninput="renderConversationTargets('node')"></label><label for="node-sort">Sort<select id="node-sort" onchange="renderConversationTargets('node')"><option value="az">A-Z</option><option value="heard">Heard recently</option><option value="messages">Latest messages</option></select></label><label for="node-type-filter">Type<select id="node-type-filter" onchange="renderConversationTargets('node')"><option value="all">All</option><option value="favorites">Favorites</option><option value="users">Users</option><option value="repeaters">Repeaters</option><option value="room-servers">Room servers</option><option value="sensors">Sensors</option></select></label></div><div class="conversation-target-list" id="node-target-list"><p class="map-empty">Waiting for nodes...</p></div></aside>
 <section class="card chat-panel"><div class="chat-header"><strong id="node-chat-title">Select a node</strong><span id="node-chat-detail">Choose a node to view its conversation.</span></div><section id="node-peer-details" class="peer-telemetry" hidden aria-live="polite"></section><div id="node-chat-history"></div><form onsubmit="sendMessage(event,'node','node-message','node-chat-history')"><input id="node-message" maxlength="100" placeholder="Message selected node" required><button id="node-send" disabled>Send to Node</button></form></section>
 </div>
 </main>
@@ -1511,13 +1550,21 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <main id="settings-view" class="view-panel page-view" hidden>
 <div class="settings-layout">
 <section class="card"><div class="panel-heading"><div><span class="eyebrow">APPLICATION</span><h2>Settings</h2></div><span class="panel-index">04</span></div>
-<div class="settings-tabs" role="tablist" aria-label="Settings sections"><button type="button" class="settings-tab" role="tab" data-settings-tab="preferences" aria-pressed="true" onclick="showSettingsTab('preferences')">Preferences</button><button type="button" class="settings-tab" role="tab" data-settings-tab="weather" aria-pressed="false" onclick="showSettingsTab('weather')">Weather</button><button type="button" class="settings-tab" role="tab" data-settings-tab="config" aria-pressed="false" onclick="showSettingsTab('config')">config.json</button></div>
+<div class="settings-tabs" role="tablist" aria-label="Settings sections"><button type="button" class="settings-tab" role="tab" data-settings-tab="preferences" aria-pressed="true" onclick="showSettingsTab('preferences')">Preferences</button><button type="button" class="settings-tab" role="tab" data-settings-tab="bot" aria-pressed="false" onclick="showSettingsTab('bot')">Bot</button><button type="button" class="settings-tab" role="tab" data-settings-tab="weather" aria-pressed="false" onclick="showSettingsTab('weather')">Weather</button><button type="button" class="settings-tab" role="tab" data-settings-tab="config" aria-pressed="false" onclick="showSettingsTab('config')">config.json</button></div>
 <section id="settings-preferences-panel" class="settings-tab-panel">
 <div class="settings-grid">
 <div class="settings-item"><label for="theme-select">Color theme</label><select id="theme-select" onchange="applyTheme(this.value)"><option value="midnight">Midnight</option><option value="light">Light</option><option value="ocean">Ocean</option><option value="amber">Amber</option><option value="linux">Linux Console</option><option value="macos">macOS</option><option value="cyberpunk">Hacker Cyberpunk</option></select><p class="settings-description">Saved in config.json and applied to this dashboard.</p></div>
 <div class="settings-item"><label for="model">Ollama model</label><select id="model" onchange="savePreference('model',this.value)">{{MODEL_OPTIONS}}</select><p class="settings-description">Saved in config.json and used for bot replies.</p></div>
 </div>
 <p id="preferences-status" class="preferences-status" aria-live="polite"></p>
+</section>
+<section id="settings-bot-panel" class="settings-tab-panel" hidden>
+<form class="settings-grid" onsubmit="saveBotSettings(event)">
+<div class="settings-item"><label for="bot-name">Bot name</label><input id="bot-name" name="name" maxlength="40" required><p class="settings-description">Shown as the reply prefix in channel messages.</p></div>
+<div class="settings-item"><label for="bot-personality">Personality</label><input id="bot-personality" name="personality" maxlength="120" required><p class="settings-description">Tone and phrasing style used for replies, e.g. "helpful, friendly, and concise".</p></div>
+<div class="settings-item"><label for="bot-response-length">Response length</label><select id="bot-response-length" name="response_length"><option value="short">Short (up to 3 packets)</option><option value="medium">Medium (up to 6 packets)</option><option value="long">Long (up to 12 packets)</option></select><p class="settings-description">Caps how many mesh-radio packets a direct message or channel reply can use, so long answers don't flood the network.</p></div>
+<div class="settings-actions"><button type="submit">Save bot settings</button><p id="bot-settings-status" class="preferences-status" aria-live="polite"></p></div>
+</form>
 </section>
 <section id="settings-config-panel" class="settings-tab-panel" hidden>
 <label for="config-json-editor">config.json contents</label><textarea id="config-json-editor" class="config-json-editor" rows="18" spellcheck="false" aria-label="Edit config.json"></textarea>
@@ -1556,7 +1603,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <main id="map-view" class="map-workspace view-panel page-view" hidden>
 <section class="card map-toolbar"><div><span class="eyebrow">LIVE MESH POSITIONS</span><h2>Network Map</h2></div><span class="live-tag" id="map-node-summary">0 of 0 locations</span></section>
 <div class="map-layout">
-<aside class="card map-rail"><div class="panel-heading"><div><span class="eyebrow">KNOWN PEERS</span><h2>Nodes</h2></div><span class="panel-index" id="map-peer-total">0</span></div><p class="map-rail-summary">Select a peer to view its details and telemetry.</p><div class="map-peer-filters"><label for="map-node-sort">Sort<select id="map-node-sort" onchange="updateMapPeerFilters()"><option value="az">A-Z</option><option value="heard">Heard recently</option><option value="messages">Latest messages</option></select></label><label for="map-node-type-filter">Type<select id="map-node-type-filter" onchange="updateMapPeerFilters()"><option value="all">All</option><option value="favorites">Favorites</option><option value="users">Users</option><option value="repeaters">Repeaters</option><option value="room-servers">Room servers</option><option value="sensors">Sensors</option></select></label></div><section id="map-peer-details" class="peer-telemetry" hidden aria-live="polite"></section><div id="map-node-list"><div class="map-empty">Waiting for nodes...</div></div></aside>
+<aside class="card map-rail"><div class="panel-heading"><div><span class="eyebrow">KNOWN PEERS</span><h2>Nodes</h2></div><span class="panel-index" id="map-peer-total">0</span></div><p class="map-rail-summary">Select a peer to view its details and telemetry.</p><div class="map-peer-filters"><label for="map-node-search" class="node-search-label">Search<input type="search" id="map-node-search" placeholder="Filter by name or ID" oninput="updateMapPeerFilters()"></label><label for="map-node-sort">Sort<select id="map-node-sort" onchange="updateMapPeerFilters()"><option value="az">A-Z</option><option value="heard">Heard recently</option><option value="messages">Latest messages</option></select></label><label for="map-node-type-filter">Type<select id="map-node-type-filter" onchange="updateMapPeerFilters()"><option value="all">All</option><option value="favorites">Favorites</option><option value="users">Users</option><option value="repeaters">Repeaters</option><option value="room-servers">Room servers</option><option value="sensors">Sensors</option></select></label></div><section id="map-peer-details" class="peer-telemetry" hidden aria-live="polite"></section><div id="map-node-list"><div class="map-empty">Waiting for nodes...</div></div></aside>
 <section class="card map-surface" aria-label="Mesh node map"><div id="map-canvas"></div><div class="map-message" id="map-message">Waiting for map data...</div></section>
 </div>
 </main>
