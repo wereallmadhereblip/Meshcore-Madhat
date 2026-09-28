@@ -1020,19 +1020,25 @@ async def disconnect_hardware():
 
 async def bluetooth_scan_handler(request):
     try:
-        devices = await BleakScanner.discover(timeout=5.0)
+        devices = await BleakScanner.discover(timeout=5.0, return_adv=True)
     except Exception as error:
         log_to_dash(f"Bluetooth scan failed: {error}")
         return web.json_response({"error": str(error)}, status=503)
 
+    meshcore_devices = [
+        device
+        for device, adv in devices.values()
+        if (adv.local_name or device.name or "").startswith("MeshCore")
+    ]
+
     return web.json_response({
         "devices": [
             {
-                "name": device.name or "Unnamed Bluetooth device",
+                "name": device.name or "Unnamed MeshCore device",
                 "address": device.address,
             }
             for device in sorted(
-                devices,
+                meshcore_devices,
                 key=lambda device: (device.name or device.address).casefold(),
             )
         ]
