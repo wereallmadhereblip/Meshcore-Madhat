@@ -676,6 +676,24 @@ def weather_location_from_prompt(prompt):
     return None
 
 
+async def geocode_location(session, location):
+    # Open-Meteo's geocoding search wants just a place name, so a combined
+    # "city state"/"city country" string (e.g. "hartford connecticut") often
+    # returns no matches. Retry with trailing words dropped until it hits.
+    words = location.split()
+    for word_count in range(len(words), 0, -1):
+        candidate = " ".join(words[:word_count])
+        async with session.get(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params={"name": candidate, "count": 1, "language": "en", "format": "json"},
+        ) as response:
+            response.raise_for_status()
+            places = (await response.json()).get("results", [])
+        if places:
+            return places[0]
+    return None
+
+
 async def fetch_weather_response(prompt, sender_id=None):
     weather_requested = bool(re.search(
         r"\b(?:weather|forecast|temperature|raining|rain|snow|humidity|windy|"
@@ -703,15 +721,9 @@ async def fetch_weather_response(prompt, sender_id=None):
     try:
         async with ClientSession(timeout=ClientTimeout(total=10)) as session:
             if location:
-                async with session.get(
-                    "https://geocoding-api.open-meteo.com/v1/search",
-                    params={"name": location, "count": 1, "language": "en", "format": "json"},
-                ) as response:
-                    response.raise_for_status()
-                    places = (await response.json()).get("results", [])
-                if not places:
+                place = await geocode_location(session, location)
+                if not place:
                     return f"I couldn't find {location}. Please try a nearby city or town."
-                place = places[0]
                 latitude = place["latitude"]
                 longitude = place["longitude"]
                 location_label = ", ".join(
