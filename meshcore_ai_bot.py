@@ -613,7 +613,9 @@ async def refresh_contacts():
         return
     try:
         async with paced_hardware_lock():
-            result = await meshcore_instance.commands.get_contacts()
+            # Streaming a full contact list over BLE can take much longer
+            # than the library's 5s default, especially with many peers.
+            result = await meshcore_instance.commands.get_contacts(timeout=20)
         if result.type != EventType.ERROR:
             app_state["contacts"] = normalize_entries(result.payload)
         else:
@@ -2100,7 +2102,10 @@ async def update_app_handler(request):
 
 
 async def peers_handler(request):
-    await refresh_contacts()
+    # The dashboard polls this endpoint every 10s; forcing a fresh device
+    # fetch each time competes with telemetry_loop's own refresh and floods
+    # the radio with get_contacts calls, which was tripping ERR_CODE_BAD_STATE.
+    # Serve the cached snapshot instead and let telemetry_loop keep it warm.
     nodes = []
     for node_id, entry in app_state["contacts"].items():
         coordinates = coordinates_from_entry(entry)
