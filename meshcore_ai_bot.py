@@ -1373,6 +1373,18 @@ async def connect_hardware():
                     "or wait for the device to finish booting and try connecting again."
                 )
 
+            # The library's auto-fetch loop calls commands.get_msg() on its own
+            # background task, bypassing hardware_lock entirely; wrap it so
+            # those calls queue behind (and pace with) our other commands
+            # instead of racing them and confusing the firmware.
+            unlocked_get_msg = meshcore_instance.commands.get_msg
+
+            async def locked_get_msg(*args, _unlocked=unlocked_get_msg, **kwargs):
+                async with paced_hardware_lock():
+                    return await _unlocked(*args, **kwargs)
+
+            meshcore_instance.commands.get_msg = locked_get_msg
+
             await meshcore_instance.start_auto_message_fetching()
             meshcore_instance.subscribe(EventType.CONTACT_MSG_RECV, handle_incoming_message)
             meshcore_instance.subscribe(
