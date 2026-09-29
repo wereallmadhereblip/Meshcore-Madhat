@@ -12,7 +12,9 @@ sudo apt install -y git python3 python3-venv python3-pip curl bluez fastfetch
 
 LOGO_SCRIPT="$SCRIPT_DIR/assets/fastfetch-logo.sh"
 if [[ -f "$LOGO_SCRIPT" ]]; then
-  fastfetch --logo-type data-raw --logo "$(bash "$LOGO_SCRIPT")"
+  # Explicit width/height keep fastfetch from mis-measuring the ANSI-colored
+  # logo (which otherwise makes the info text interleave with the art).
+  fastfetch --logo-type data-raw --logo "$(bash "$LOGO_SCRIPT")" --logo-width 70 --logo-height 50
 else
   fastfetch
 fi

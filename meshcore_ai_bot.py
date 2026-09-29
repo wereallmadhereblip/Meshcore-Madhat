@@ -287,6 +287,10 @@ app_state = {
 
 executor = ThreadPoolExecutor(max_workers=1)
 hardware_lock = asyncio.Lock()
+# BlueZ rejects overlapping D-Bus operations (scan/connect/disconnect) with
+# "Operation already in progress", so serialize them with their own lock
+# instead of hardware_lock (which only guards post-connect commands).
+connection_lock = asyncio.Lock()
 # Sending back-to-back before the radio finishes the previous transmit
 # trips firmware's ERR_CODE_BAD_STATE, so pace multi-part replies.
 HARDWARE_SEND_INTERVAL = 1.5
@@ -1227,6 +1231,11 @@ async def handle_new_contact(event):
 
 
 async def disconnect_hardware():
+    async with connection_lock:
+        await _disconnect_hardware_locked()
+
+
+async def _disconnect_hardware_locked():
     global meshcore_instance
     if meshcore_instance is None:
         app_state["is_connected"] = False
@@ -1249,7 +1258,10 @@ async def disconnect_hardware():
 
 async def bluetooth_scan_handler(request):
     try:
-        devices = await BleakScanner.discover(timeout=5.0, return_adv=True)
+        # Share connection_lock so a scan can't collide with an in-flight
+        # connect/disconnect and trip BlueZ's "Operation already in progress".
+        async with connection_lock:
+            devices = await BleakScanner.discover(timeout=5.0, return_adv=True)
     except Exception as error:
         log_to_dash(f"Bluetooth scan failed: {error}")
         return web.json_response({"error": str(error)}, status=503)
@@ -1298,50 +1310,51 @@ HARDWARE_CONNECT_RETRY_DELAY_SECONDS = 3
 
 async def connect_hardware():
     global meshcore_instance
-    await disconnect_hardware()
-    try:
-        # A device that just rebooted may accept the transport connection but
-        # not yet answer the firmware app-start handshake in time, so retry a
-        # few times before giving up.
-        for attempt in range(1, HARDWARE_CONNECT_ATTEMPTS + 1):
-            if app_state["connection_type"] == "bluetooth":
-                log_to_dash(f"Connecting via Bluetooth to {app_state['ble_mac']}...")
-                meshcore_instance = await MeshCore.create_ble(app_state["ble_mac"])
-            else:
-                log_to_dash(f"Connecting via serial to {app_state['serial_port']}...")
-                meshcore_instance = await MeshCore.create_serial(app_state["serial_port"])
+    async with connection_lock:
+        await _disconnect_hardware_locked()
+        try:
+            # A device that just rebooted may accept the transport connection but
+            # not yet answer the firmware app-start handshake in time, so retry a
+            # few times before giving up.
+            for attempt in range(1, HARDWARE_CONNECT_ATTEMPTS + 1):
+                if app_state["connection_type"] == "bluetooth":
+                    log_to_dash(f"Connecting via Bluetooth to {app_state['ble_mac']}...")
+                    meshcore_instance = await MeshCore.create_ble(app_state["ble_mac"])
+                else:
+                    log_to_dash(f"Connecting via serial to {app_state['serial_port']}...")
+                    meshcore_instance = await MeshCore.create_serial(app_state["serial_port"])
 
-            if meshcore_instance is not None:
-                break
+                if meshcore_instance is not None:
+                    break
 
-            if attempt < HARDWARE_CONNECT_ATTEMPTS:
-                log_to_dash(
-                    f"No response from device (attempt {attempt}/{HARDWARE_CONNECT_ATTEMPTS}); "
-                    f"retrying in {HARDWARE_CONNECT_RETRY_DELAY_SECONDS}s..."
+                if attempt < HARDWARE_CONNECT_ATTEMPTS:
+                    log_to_dash(
+                        f"No response from device (attempt {attempt}/{HARDWARE_CONNECT_ATTEMPTS}); "
+                        f"retrying in {HARDWARE_CONNECT_RETRY_DELAY_SECONDS}s..."
+                    )
+                    await asyncio.sleep(HARDWARE_CONNECT_RETRY_DELAY_SECONDS)
+
+            if meshcore_instance is None:
+                raise RuntimeError(
+                    "MeshCore did not return a connection instance; check device address/port, "
+                    "or wait for the device to finish booting and try connecting again."
                 )
-                await asyncio.sleep(HARDWARE_CONNECT_RETRY_DELAY_SECONDS)
 
-        if meshcore_instance is None:
-            raise RuntimeError(
-                "MeshCore did not return a connection instance; check device address/port, "
-                "or wait for the device to finish booting and try connecting again."
+            await meshcore_instance.start_auto_message_fetching()
+            meshcore_instance.subscribe(EventType.CONTACT_MSG_RECV, handle_incoming_message)
+            meshcore_instance.subscribe(
+                EventType.CHANNEL_MSG_RECV,
+                handle_incoming_channel_message,
             )
-
-        await meshcore_instance.start_auto_message_fetching()
-        meshcore_instance.subscribe(EventType.CONTACT_MSG_RECV, handle_incoming_message)
-        meshcore_instance.subscribe(
-            EventType.CHANNEL_MSG_RECV,
-            handle_incoming_channel_message,
-        )
-        app_state["is_connected"] = True
-        await refresh_contacts()
-        await refresh_channels()
-        meshcore_instance.subscribe(EventType.NEW_CONTACT, handle_new_contact)
-        log_to_dash("Hardware interface successfully linked and active.")
-    except Exception as error:
-        meshcore_instance = None
-        app_state["is_connected"] = False
-        log_to_dash(f"Hardware connection error: {error}")
+            app_state["is_connected"] = True
+            await refresh_contacts()
+            await refresh_channels()
+            meshcore_instance.subscribe(EventType.NEW_CONTACT, handle_new_contact)
+            log_to_dash("Hardware interface successfully linked and active.")
+        except Exception as error:
+            meshcore_instance = None
+            app_state["is_connected"] = False
+            log_to_dash(f"Hardware connection error: {error}")
 
 
 async def telemetry_loop():
@@ -1667,7 +1680,8 @@ function setCustomPowerMode(){let custom=document.getElementById('custom-power-f
 function populatePowerOptions(maximum,current){let select=document.getElementById('tx-power-mode'),common=[10,14,17,20];select.replaceChildren();for(let value of common){if(value<=maximum)select.add(new Option(value+' dBm',String(value)))}if(!common.includes(Number(current))&&Number(current)<=maximum)select.add(new Option(current+' dBm (current)',String(current)));let currentIsCommon=[...select.options].some(option=>Number(option.value)===Number(current));select.add(new Option('Custom...','custom'));select.value=currentIsCommon?String(current):'custom';document.getElementById('custom-tx-power').value=current??'';document.getElementById('custom-tx-power').max=maximum;setCustomPowerMode()}
 async function loadDeviceSettings(){deviceSettingsLoaded=false;loadedDeviceSettings=null;let statusMessage=document.getElementById('device-settings-status');statusMessage.dataset.state='';statusMessage.textContent='Loading settings from device...';try{let response=await fetch('/api/device-settings'),data=await response.json();if(!response.ok)throw new Error(data.error||'Device settings could not be loaded');loadedDeviceSettings=data;document.getElementById('device-name').value=data.name||'';document.getElementById('advert-lat').value=data.adv_lat??'';document.getElementById('advert-lon').value=data.adv_lon??'';document.getElementById('rx-delay').value=data.rx_delay??'';document.getElementById('airtime-factor').value=data.airtime_factor??'';document.getElementById('telemetry-mode-base').value=data.telemetry_mode_base??0;document.getElementById('telemetry-mode-loc').value=data.telemetry_mode_loc??0;document.getElementById('telemetry-mode-env').value=data.telemetry_mode_env??0;document.getElementById('advert-location-policy').value=data.adv_loc_policy??0;document.getElementById('manual-add-contacts').checked=Boolean(data.manual_add_contacts);document.getElementById('multi-acks').checked=Boolean(data.multi_acks);document.getElementById('custom-radio-frequency').value=data.radio_freq??'';document.getElementById('custom-radio-bandwidth').value=data.radio_bw??'';document.getElementById('custom-radio-spreading-factor').value=data.radio_sf??'';document.getElementById('custom-radio-coding-rate').value=data.radio_cr??'';let matchingProfile=Object.entries(commonRadioProfiles).find(([,profile])=>Number(profile.radio_bw)===Number(data.radio_bw)&&Number(profile.radio_sf)===Number(data.radio_sf)&&Number(profile.radio_cr)===Number(data.radio_cr));document.getElementById('radio-profile').value=matchingProfile?.[0]||'custom';setCustomRadioMode();let maximum=Number(data.max_tx_power??30);populatePowerOptions(maximum,data.tx_power);document.getElementById('tx-power-limit').textContent='Device maximum: '+maximum+' dBm';deviceSettingsLoaded=true;statusMessage.textContent='Settings loaded from device.';statusMessage.dataset.state='success'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
 async function saveDeviceSettings(event){event.preventDefault();let statusMessage=document.getElementById('device-settings-status'),form=new FormData(event.currentTarget);if(!loadedDeviceSettings){statusMessage.textContent='Load settings from the connected device first.';statusMessage.dataset.state='error';return}let profile=form.get('radio_profile'),values={name:String(form.get('name')||'').trim(),adv_lat:Number(form.get('adv_lat')),adv_lon:Number(form.get('adv_lon')),rx_delay:Number(form.get('rx_delay')),airtime_factor:Number(form.get('airtime_factor')),telemetry_mode_base:Number(form.get('telemetry_mode_base')),telemetry_mode_loc:Number(form.get('telemetry_mode_loc')),telemetry_mode_env:Number(form.get('telemetry_mode_env')),adv_loc_policy:Number(form.get('adv_loc_policy')),manual_add_contacts:form.get('manual_add_contacts')==='on',multi_acks:form.get('multi_acks')==='on'},radio=profile==='custom'?{radio_freq:Number(form.get('radio_freq')),radio_bw:Number(form.get('radio_bw')),radio_sf:Number(form.get('radio_sf')),radio_cr:Number(form.get('radio_cr'))}:{radio_freq:Number(loadedDeviceSettings.radio_freq),...commonRadioProfiles[profile]};Object.assign(values,radio);let powerMode=form.get('tx_power_mode');values.tx_power=Number(powerMode==='custom'?form.get('custom_tx_power'):powerMode);statusMessage.dataset.state='';statusMessage.textContent='Saving settings to device...';try{let response=await fetch('/api/device-settings',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({values})}),data=await response.json();if(!response.ok)throw new Error(data.error||'Settings could not be saved');deviceSettingsLoaded=false;await loadDeviceSettings();statusMessage.textContent='Device settings saved.';statusMessage.dataset.state='success'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
-async function connect(){let r=await fetch('/api/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({connection_type:connection_type.value,ble_mac:ble_mac.value,serial_port:serial_port.value,model:model.value})});let d=await r.json();if(!r.ok)alert(d.error);await status();await peers()}
+let connectInFlight=false;
+async function connect(){if(connectInFlight)return;connectInFlight=true;let button=document.getElementById('connect-btn');if(button)button.disabled=true;try{let r=await fetch('/api/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({connection_type:connection_type.value,ble_mac:ble_mac.value,serial_port:serial_port.value,model:model.value})});let d=await r.json();if(!r.ok)alert(d.error);await status();await peers()}finally{connectInFlight=false;if(button)button.disabled=false}}
 async function disconnect(){await fetch('/api/disconnect',{method:'POST'});await status();await peers()}
 async function sendMessage(event,type,messageId,historyId){event.preventDefault();let selected=type==='node'?selectedNodeId:selectedChannelId,input=document.getElementById(messageId);if(!selected)return;let message=input.value.trim();if(!message)return;let response=await fetch('/api/transmit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:selected,target_type:type,text:message})}),data=await response.json();if(!response.ok){alert(data.error||'Message could not be sent');return}input.value='';await history(type,selected,historyId)}
 window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();status();peers();loadAppConfig();updateClock();setInterval(updateClock,1000);setInterval(refreshActiveHistory,3000);setInterval(loadLocalWeather,30*60*1000)});setInterval(status,2000);setInterval(peers,10000);
@@ -1689,7 +1703,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <label for="connection_type">Connection type</label><select id="connection_type" onchange="fields()"><option value="bluetooth">Bluetooth</option><option value="serial">Serial</option></select>
 <div id="ble-field"><label for="ble_mac">Bluetooth device</label><div class="scan-control"><select id="ble_mac"><option value="">Scan for Bluetooth devices</option></select><button id="ble-scan" type="button" onclick="scanBluetooth()">Scan</button></div><p id="ble-scan-status" class="scan-status" aria-live="polite"></p></div>
 <div id="serial-field" style="display:none"><label for="serial_port">Serial port</label><div class="scan-control"><select id="serial_port"><option value="">Scan for serial ports</option></select><button id="serial-scan" type="button" onclick="scanSerial()">Scan</button></div><p id="serial-scan-status" class="scan-status" aria-live="polite"></p></div>
-<div class="connection-actions"><button onclick="connect()">Connect</button><button onclick="disconnect()">Disconnect</button></div>
+<div class="connection-actions"><button id="connect-btn" onclick="connect()">Connect</button><button onclick="disconnect()">Disconnect</button></div>
 </section>
 </div>
 </main>
