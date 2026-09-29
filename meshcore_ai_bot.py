@@ -1937,7 +1937,12 @@ async def update_app_handler(request):
             {"error": status.stderr.strip() or "Could not inspect repository"},
             status=500,
         )
-    if status.stdout.strip():
+    # config.json is rewritten at runtime whenever settings are saved, so a
+    # dirty config.json alone shouldn't block updates; stash it around the
+    # pull instead of discarding the operator's saved settings.
+    changed_paths = [line[3:].strip() for line in status.stdout.splitlines()]
+    config_name = CONFIG_FILE_PATH.name
+    if any(path != config_name for path in changed_paths):
         return web.json_response(
             {
                 "error": (
@@ -1947,6 +1952,21 @@ async def update_app_handler(request):
             },
             status=409,
         )
+
+    config_dirty = config_name in changed_paths
+    if config_dirty:
+        stash = subprocess.run(
+            ["git", "stash", "push", "--quiet", "--", config_name],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if stash.returncode != 0:
+            return web.json_response(
+                {"error": stash.stderr.strip() or "Could not preserve local config.json changes"},
+                status=500,
+            )
 
     branch_result = subprocess.run(
         ["git", "branch", "--show-current"],
@@ -1971,10 +1991,31 @@ async def update_app_handler(request):
         check=False,
     )
     if pull.returncode != 0:
+        if config_dirty:
+            subprocess.run(
+                ["git", "stash", "pop", "--quiet"],
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
         return web.json_response(
             {"error": pull.stderr.strip() or pull.stdout.strip() or "Update failed"},
             status=502,
         )
+
+    if config_dirty:
+        pop = subprocess.run(
+            ["git", "stash", "pop", "--quiet"],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if pop.returncode != 0:
+            log_to_dash(
+                f"Could not restore local config.json after update: {pop.stderr.strip()}"
+            )
 
     after = subprocess.run(
         ["git", "rev-parse", "HEAD"],
@@ -1987,6 +2028,7 @@ async def update_app_handler(request):
         return web.json_response(
             {"updated": False, "message": "The app is already up to date."}
         )
+
 
     async def restart_after_update():
         await asyncio.sleep(0.3)
