@@ -593,6 +593,10 @@ async def refresh_contacts():
             result = await meshcore_instance.commands.get_contacts()
         if result.type != EventType.ERROR:
             app_state["contacts"] = normalize_entries(result.payload)
+        else:
+            # Silent failures here previously left the dashboard showing an
+            # empty node list with no indication the fetch ever ran.
+            log_to_dash(f"Failed to fetch nodes: {result.payload}")
     except Exception as error:
         log_to_dash(f"Failed to fetch nodes: {error}")
 
@@ -614,11 +618,12 @@ async def refresh_channels():
             try:
                 # Lock per-channel (not the whole scan) so a long scan of
                 # many empty channels doesn't block message sends for tens
-                # of seconds.
+                # of seconds. BLE round-trips can exceed a second right after
+                # connecting, so allow more slack than the 1s used previously.
                 async with hardware_lock:
                     result = await asyncio.wait_for(
                         getter(channel_index),
-                        timeout=1.0,
+                        timeout=3.0,
                     )
             except asyncio.TimeoutError:
                 # Empty or unavailable channels commonly timeout; silence this
@@ -639,7 +644,12 @@ async def refresh_channels():
                     "channel_idx": channel_index,
                 }
 
-        app_state["channels"] = channels
+        if not channels and app_state["channels"]:
+            # Every channel timed out/errored this pass; keep the last known
+            # good list instead of blanking the dashboard on a flaky scan.
+            log_to_dash("Channel scan returned nothing; keeping previous channel list.")
+        else:
+            app_state["channels"] = channels
     except Exception as error:
         log_to_dash(f"Failed to fetch channels: {error}")
 
