@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$HOME/Meshcore-Ollama-bot"
 DESKTOP_DIR="$HOME/Desktop"
 
 mkdir -p "$DESKTOP_DIR"
 
 sudo apt update
-sudo apt install -y git python3 python3-venv python3-pip curl bluez
+sudo apt install -y git python3 python3-venv python3-pip curl bluez fastfetch
+
+LOGO_SCRIPT="$SCRIPT_DIR/assets/fastfetch-logo.sh"
+if [[ -f "$LOGO_SCRIPT" ]]; then
+  fastfetch --logo-type data-raw --logo "$(bash "$LOGO_SCRIPT")"
+else
+  fastfetch
+fi
 
 if ! id -nG "$USER" | grep -qw "dialout"; then
   sudo usermod -aG dialout "$USER"
