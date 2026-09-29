@@ -39,6 +39,7 @@ CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
 BOT_SETTINGS_PATH = CONFIG_DIR / "meshcore-ollama-bot" / "bot_settings.json"
 CONFIG_FILE_PATH = Path(__file__).resolve().with_name("config.json")
 AVAILABLE_THEMES = {"midnight", "light", "ocean", "amber", "linux", "macos", "cyberpunk"}
+TIME_OF_DAY_PATTERN = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
 
 def clean_bot_setting(value, limit):
@@ -77,6 +78,7 @@ def load_app_config():
         "connection": {"type": "bluetooth", "ble_mac": "", "serial_port": ""},
         "weather": {"city": "", "state": ""},
         "bot": load_bot_settings(),
+        "ollama": {"schedule_enabled": False, "start_time": "07:00", "end_time": "17:00"},
     }
     try:
         saved_config = json.loads(CONFIG_FILE_PATH.read_text(encoding="utf-8"))
@@ -117,7 +119,15 @@ def load_app_config():
         response_length = saved_bot.get("response_length")
         if response_length in RESPONSE_LENGTH_PACKET_LIMITS:
             config["bot"]["response_length"] = response_length
-    if not {"model", "theme", "connection", "weather", "bot"}.issubset(saved_config):
+    saved_ollama = saved_config.get("ollama")
+    if isinstance(saved_ollama, dict):
+        if isinstance(saved_ollama.get("schedule_enabled"), bool):
+            config["ollama"]["schedule_enabled"] = saved_ollama["schedule_enabled"]
+        for key in ("start_time", "end_time"):
+            value = saved_ollama.get(key)
+            if isinstance(value, str) and TIME_OF_DAY_PATTERN.match(value):
+                config["ollama"][key] = value
+    if not {"model", "theme", "connection", "weather", "bot", "ollama"}.issubset(saved_config):
         try:
             write_app_config(config)
         except OSError:
@@ -128,7 +138,7 @@ def load_app_config():
 def validate_app_config(value):
     if not isinstance(value, dict):
         raise ValueError("Configuration must be a JSON object")
-    unsupported = set(value) - {"model", "theme", "connection", "weather", "bot"}
+    unsupported = set(value) - {"model", "theme", "connection", "weather", "bot", "ollama"}
     if unsupported:
         raise ValueError(f"Unsupported configuration keys: {', '.join(sorted(unsupported))}")
 
@@ -180,12 +190,29 @@ def validate_app_config(value):
     if response_length not in RESPONSE_LENGTH_PACKET_LIMITS:
         raise ValueError("Bot response_length must be short, medium, or long")
     validated_bot["response_length"] = response_length
+
+    ollama_schedule = value.get("ollama", app_config["ollama"])
+    if not isinstance(ollama_schedule, dict) or set(ollama_schedule) - {
+        "schedule_enabled", "start_time", "end_time",
+    }:
+        raise ValueError("Ollama schedule must contain only schedule_enabled, start_time, and end_time")
+    schedule_enabled = ollama_schedule.get("schedule_enabled", app_config["ollama"]["schedule_enabled"])
+    if not isinstance(schedule_enabled, bool):
+        raise ValueError("Ollama schedule_enabled must be true or false")
+    ollama_values = {"schedule_enabled": schedule_enabled}
+    for key in ("start_time", "end_time"):
+        setting = ollama_schedule.get(key, app_config["ollama"][key])
+        if not isinstance(setting, str) or not TIME_OF_DAY_PATTERN.match(setting):
+            raise ValueError(f"Ollama {key} must be in HH:MM 24-hour format")
+        ollama_values[key] = setting
+
     return {
         "model": model.strip(),
         "theme": theme,
         "connection": connection_values,
         "weather": weather_values,
         "bot": validated_bot,
+        "ollama": ollama_values,
     }
 
 
@@ -645,6 +672,38 @@ async def stop_ollama_server():
     )
     app_state["ollama_running"] = False
     log_to_dash("Ollama server stopped to save power.")
+
+
+def _time_in_window(now, start_time, end_time):
+    if start_time == end_time:
+        return True
+    if start_time < end_time:
+        return start_time <= now < end_time
+    # Window wraps past midnight (e.g. 22:00 to 06:00).
+    return now >= start_time or now < end_time
+
+
+async def ollama_schedule_loop():
+    """Turn Ollama on/off automatically to match the configured time window."""
+    while True:
+        try:
+            schedule = app_config["ollama"]
+            if schedule["schedule_enabled"]:
+                start_time = datetime.strptime(schedule["start_time"], "%H:%M").time()
+                end_time = datetime.strptime(schedule["end_time"], "%H:%M").time()
+                should_run = _time_in_window(datetime.now().time(), start_time, end_time)
+                if should_run and not app_state["ollama_running"]:
+                    log_to_dash("Scheduled window started; turning Ollama on.")
+                    await update_available_models()
+                elif not should_run and app_state["ollama_running"]:
+                    log_to_dash("Scheduled window ended; turning Ollama off.")
+                    await stop_ollama_server()
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            log_to_dash(f"Ollama schedule check failed: {error}")
+        await asyncio.sleep(60)
+
 
 
 async def refresh_contacts():
@@ -1687,12 +1746,12 @@ let activeView='connection';
 let deviceSettingsLoaded=false;
 let loadedDeviceSettings=null;
 let favoriteNodeIds=new Set();
-let appConfig={model:'llama3.2:1b',theme:'midnight',connection:{type:'bluetooth',ble_mac:'',serial_port:''},bot:{name:'MeshCore Assistant',personality:'helpful, friendly, and concise',response_length:'medium'}};
+let appConfig={model:'llama3.2:1b',theme:'midnight',connection:{type:'bluetooth',ble_mac:'',serial_port:''},bot:{name:'MeshCore Assistant',personality:'helpful, friendly, and concise',response_length:'medium'},ollama:{schedule_enabled:false,start_time:'07:00',end_time:'17:00'}};
 let configEditorLoaded=false;
 const commonRadioProfiles={balanced:{radio_bw:125,radio_sf:7,radio_cr:5},long_range:{radio_bw:125,radio_sf:10,radio_cr:5},high_throughput:{radio_bw:250,radio_sf:7,radio_cr:5}};
 function applyTheme(theme,persist=true){document.body.dataset.theme=theme;document.getElementById('theme-select').value=theme;if(persist)saveAppConfig({...appConfig,theme})}
 function showSettingsTab(tab){document.querySelectorAll('.settings-tab').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.settingsTab===tab)));for(let panel of document.querySelectorAll('.settings-tab-panel'))panel.hidden=panel.id!=='settings-'+tab+'-panel';if(tab==='config'&&!configEditorLoaded)loadConfigEditor()}
-function syncConfigControls(){document.getElementById('theme-select').value=appConfig.theme;let modelSelect=document.getElementById('model');if(![...modelSelect.options].some(option=>option.value===appConfig.model))modelSelect.add(new Option(appConfig.model,appConfig.model));modelSelect.value=appConfig.model;document.getElementById('weather-city').value=appConfig.weather.city;document.getElementById('weather-state').value=appConfig.weather.state;document.getElementById('bot-name').value=appConfig.bot.name;document.getElementById('bot-personality').value=appConfig.bot.personality;document.getElementById('bot-response-length').value=appConfig.bot.response_length;applyTheme(appConfig.theme,false)}
+function syncConfigControls(){document.getElementById('theme-select').value=appConfig.theme;let modelSelect=document.getElementById('model');if(![...modelSelect.options].some(option=>option.value===appConfig.model))modelSelect.add(new Option(appConfig.model,appConfig.model));modelSelect.value=appConfig.model;document.getElementById('weather-city').value=appConfig.weather.city;document.getElementById('weather-state').value=appConfig.weather.state;document.getElementById('bot-name').value=appConfig.bot.name;document.getElementById('bot-personality').value=appConfig.bot.personality;document.getElementById('bot-response-length').value=appConfig.bot.response_length;document.getElementById('ollama-schedule-enabled').checked=appConfig.ollama.schedule_enabled;document.getElementById('ollama-schedule-start').value=appConfig.ollama.start_time;document.getElementById('ollama-schedule-end').value=appConfig.ollama.end_time;applyTheme(appConfig.theme,false)}
 const weatherIcons={sun:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>',partly:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="16" cy="7" r="3"/><path d="M16 2v1m0 8v1m5-5h-1m-8 0h-1M5 19h12a3 3 0 0 0 .3-6A5 5 0 0 0 8 11.5 3.8 3.8 0 0 0 5 19Z"/></svg>',cloud:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19h13a4 4 0 0 0 .4-8A6 6 0 0 0 7 9.5 4.8 4.8 0 0 0 5 19Z"/></svg>',fog:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm-2 4h14m-10 3h14"/></svg>',rain:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 15h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 7 4 4 0 0 0 5 15Zm2 3-1 2m7-2-1 2m7-2-1 2"/></svg>',snow:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm2 4h.01M12 19h.01M18 18h.01"/></svg>',storm:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm8 1-3 4h3l-1 3 4-5h-3l1-2"/></svg>'};
 function weatherIconName(code){if(code===null||code===undefined||!Number.isFinite(Number(code)))return 'cloud';code=Number(code);if(code===0)return 'sun';if(code===1||code===2)return 'partly';if(code===45||code===48)return 'fog';if(code===51||code===53||code===55||code===56||code===57||code===61||code===63||code===65||code===66||code===67||code===80||code===81||code===82)return 'rain';if(code===71||code===73||code===75||code===77||code===85||code===86)return 'snow';if(code===95||code===96||code===99)return 'storm';return 'cloud'}
 function renderWeatherIcon(code,condition='Weather condition unavailable'){let icon=document.getElementById('weather-icon');icon.innerHTML=weatherIcons[weatherIconName(code)]||weatherIcons.cloud;icon.setAttribute('aria-label',condition);icon.title=condition}
@@ -1702,6 +1761,7 @@ async function saveAppConfig(config,statusId='preferences-status'){let statusMes
 async function savePreference(key,value){await saveAppConfig({...appConfig,[key]:value})}
 async function saveBotSettings(event){event.preventDefault();let name=document.getElementById('bot-name').value.trim(),personality=document.getElementById('bot-personality').value.trim(),responseLength=document.getElementById('bot-response-length').value,statusMessage=document.getElementById('bot-settings-status');if(!name||!personality){statusMessage.textContent='Enter a bot name and personality.';statusMessage.dataset.state='error';return}await saveAppConfig({...appConfig,bot:{name,personality,response_length:responseLength}},'bot-settings-status')}
 async function saveWeatherLocation(event){event.preventDefault();let city=document.getElementById('weather-city').value.trim(),state=document.getElementById('weather-state').value.trim();if(!city){let statusMessage=document.getElementById('weather-settings-status');statusMessage.textContent='Enter a city.';statusMessage.dataset.state='error';return}await saveAppConfig({...appConfig,weather:{city,state}},'weather-settings-status');if(document.getElementById('weather-settings-status').dataset.state==='success')loadLocalWeather()}
+async function saveOllamaSettings(event){event.preventDefault();let scheduleEnabled=document.getElementById('ollama-schedule-enabled').checked,startTime=document.getElementById('ollama-schedule-start').value,endTime=document.getElementById('ollama-schedule-end').value,statusMessage=document.getElementById('ollama-settings-status');if(scheduleEnabled&&(!startTime||!endTime)){statusMessage.textContent='Set both a start and end time.';statusMessage.dataset.state='error';return}await saveAppConfig({...appConfig,ollama:{schedule_enabled:scheduleEnabled,start_time:startTime||'07:00',end_time:endTime||'17:00'}},'ollama-settings-status')}
 async function loadConfigEditor(){let statusMessage=document.getElementById('config-status');statusMessage.dataset.state='';statusMessage.textContent='Loading config.json...';try{let response=await fetch('/api/config'),data=await response.json();if(!response.ok)throw new Error(data.error||'config.json could not be loaded');appConfig=data;syncConfigControls();document.getElementById('config-json-editor').value=JSON.stringify(appConfig,null,2);configEditorLoaded=true;statusMessage.textContent='Loaded config.json.'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
 async function saveConfigFile(){let statusMessage=document.getElementById('config-status'),config;try{config=JSON.parse(document.getElementById('config-json-editor').value)}catch(error){statusMessage.textContent='Invalid JSON: '+error.message;statusMessage.dataset.state='error';return}await saveAppConfig(config,'config-status')}
 async function restartDashboard(){let button=document.getElementById('restart-dashboard-button'),statusMessage=document.getElementById('config-status');button.disabled=true;statusMessage.dataset.state='';statusMessage.textContent='Restarting dashboard...';try{await fetch('/api/restart',{method:'POST'})}catch(error){}let attempts=0;async function waitForDashboard(){try{let response=await fetch('/api/status',{cache:'no-store'});if(response.ok){window.location.reload();return}}catch(error){}attempts++;if(attempts>=40){statusMessage.textContent='Dashboard did not restart. Start it again from the terminal.';statusMessage.dataset.state='error';button.disabled=false;return}setTimeout(waitForDashboard,500)}setTimeout(waitForDashboard,500)}
@@ -1817,14 +1877,22 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <main id="settings-view" class="view-panel page-view" hidden>
 <div class="settings-layout">
 <section class="card"><div class="panel-heading"><div><span class="eyebrow">APPLICATION</span><h2>Settings</h2></div><span class="panel-index">04</span></div>
-<div class="settings-tabs" role="tablist" aria-label="Settings sections"><button type="button" class="settings-tab" role="tab" data-settings-tab="preferences" aria-pressed="true" onclick="showSettingsTab('preferences')">Preferences</button><button type="button" class="settings-tab" role="tab" data-settings-tab="bot" aria-pressed="false" onclick="showSettingsTab('bot')">Bot</button><button type="button" class="settings-tab" role="tab" data-settings-tab="weather" aria-pressed="false" onclick="showSettingsTab('weather')">Weather</button><button type="button" class="settings-tab" role="tab" data-settings-tab="config" aria-pressed="false" onclick="showSettingsTab('config')">config.json</button></div>
+<div class="settings-tabs" role="tablist" aria-label="Settings sections"><button type="button" class="settings-tab" role="tab" data-settings-tab="preferences" aria-pressed="true" onclick="showSettingsTab('preferences')">Preferences</button><button type="button" class="settings-tab" role="tab" data-settings-tab="ollama" aria-pressed="false" onclick="showSettingsTab('ollama')">Ollama</button><button type="button" class="settings-tab" role="tab" data-settings-tab="bot" aria-pressed="false" onclick="showSettingsTab('bot')">Bot</button><button type="button" class="settings-tab" role="tab" data-settings-tab="weather" aria-pressed="false" onclick="showSettingsTab('weather')">Weather</button><button type="button" class="settings-tab" role="tab" data-settings-tab="config" aria-pressed="false" onclick="showSettingsTab('config')">config.json</button></div>
 <section id="settings-preferences-panel" class="settings-tab-panel">
 <div class="settings-grid">
 <div class="settings-item"><label for="theme-select">Color theme</label><select id="theme-select" onchange="applyTheme(this.value)"><option value="midnight">Midnight</option><option value="light">Light</option><option value="ocean">Ocean</option><option value="amber">Amber</option><option value="linux">Linux Console</option><option value="macos">macOS</option><option value="cyberpunk">Hacker Cyberpunk</option></select><p class="settings-description">Saved in config.json and applied to this dashboard.</p></div>
-<div class="settings-item"><label for="model">Ollama model</label><select id="model" onchange="savePreference('model',this.value)">{{MODEL_OPTIONS}}</select><p class="settings-description">Saved in config.json and used for bot replies.</p></div>
-<div class="settings-item"><label for="ollama-power-toggle">Ollama server</label><button type="button" id="ollama-power-toggle" onclick="toggleOllama()">Turn off</button><p class="settings-description" id="ollama-power-status">Checking status...</p></div>
 </div>
 <p id="preferences-status" class="preferences-status" aria-live="polite"></p>
+</section>
+<section id="settings-ollama-panel" class="settings-tab-panel" hidden>
+<form class="settings-grid" onsubmit="saveOllamaSettings(event)">
+<div class="settings-item"><label for="model">Ollama model</label><select id="model" onchange="savePreference('model',this.value)">{{MODEL_OPTIONS}}</select><p class="settings-description">Saved in config.json and used for bot replies.</p></div>
+<div class="settings-item"><label for="ollama-power-toggle">Ollama server</label><button type="button" id="ollama-power-toggle" onclick="toggleOllama()">Turn off</button><p class="settings-description" id="ollama-power-status">Checking status...</p></div>
+<div class="settings-item"><label><input type="checkbox" id="ollama-schedule-enabled"> Schedule on/off automatically</label><p class="settings-description">Turns Ollama on at the start time and off at the end time every day, to lower power use.</p></div>
+<div class="settings-item"><label for="ollama-schedule-start">Turn on at</label><input type="time" id="ollama-schedule-start" value="07:00"></div>
+<div class="settings-item"><label for="ollama-schedule-end">Turn off at</label><input type="time" id="ollama-schedule-end" value="17:00"></div>
+<div class="settings-actions"><button type="submit">Save schedule</button><p id="ollama-settings-status" class="preferences-status" aria-live="polite"></p></div>
+</form>
 </section>
 <section id="settings-bot-panel" class="settings-tab-panel" hidden>
 <form class="settings-grid" onsubmit="saveBotSettings(event)">
@@ -2705,10 +2773,11 @@ async def transmit_handler(request):
 async def on_startup(app):
     app["telemetry_task"] = asyncio.create_task(telemetry_loop())
     app["ollama_task"] = asyncio.create_task(update_available_models())
+    app["ollama_schedule_task"] = asyncio.create_task(ollama_schedule_loop())
 
 
 async def on_cleanup(app):
-    for task in (app["telemetry_task"], app["ollama_task"]):
+    for task in (app["telemetry_task"], app["ollama_task"], app["ollama_schedule_task"]):
         task.cancel()
         try:
             await task
