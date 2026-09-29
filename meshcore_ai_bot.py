@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import webbrowser
+import xml.etree.ElementTree as ET
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -1553,6 +1554,10 @@ body[data-theme="midnight"],body[data-theme="ocean"]{--page-bg:#091117;--panel-b
 body{padding:0;background-image:linear-gradient(rgba(66,217,195,.018) 1px,transparent 1px),linear-gradient(90deg,rgba(66,217,195,.018) 1px,transparent 1px);background-size:24px 24px;font-family:ui-monospace,"SFMono-Regular",monospace}
 .dashboard-header{width:100%;max-width:none;margin:0 0 10px;padding:10px 16px;border-width:0 0 1px;border-radius:0;background:#0b151b;box-shadow:0 4px 20px rgba(0,0,0,.22)}
 .brand-mark{border-radius:2px}.brand-copy h1{font-family:ui-monospace,"SFMono-Regular",monospace;font-size:14px;letter-spacing:.08em}.top-nav{gap:0}.nav-tab{min-height:36px;border-width:0 0 2px;border-radius:0;text-transform:uppercase;font:10px ui-monospace,"SFMono-Regular",monospace;letter-spacing:.05em}.nav-tab:hover,.nav-tab[aria-pressed="true"]{border-color:var(--accent);background:rgba(66,217,195,.08);color:var(--accent);transform:none}.nav-count{border-radius:2px}.page-view{width:min(100% - 24px,1800px)}.card,.map-workspace,.live-trace-workspace,.analyzer-main,.analyzer-side{border-radius:2px}.panel-heading{border-bottom:1px solid var(--border)}.chat-panel,.conversation-rail,.map-rail,.map-surface,.map-toolbar{box-shadow:0 10px 30px rgba(0,0,0,.13)}
+.dashboard-logo{width:120px;height:120px;flex:none;object-fit:contain}.brand-copy h1{font-size:20px;letter-spacing:.14em}.device-settings-layout form{gap:0}.device-settings-layout form>label,.device-settings-layout form>.custom-radio-fields{padding:12px 14px;border-bottom:1px solid var(--border)}.device-settings-layout form>.settings-section-label{padding:14px;color:var(--accent);background:var(--panel-raised);font:10px ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase}.device-settings-layout form>.settings-description{margin:0;padding:12px 14px;border-bottom:1px solid var(--border)}
+.reference-device-settings{width:min(100%,820px);display:grid;gap:12px;margin-bottom:16px}.device-settings-card{padding:0;overflow:hidden}.device-settings-card>.panel-heading{margin:0;padding:13px 16px}.device-settings-card>.panel-heading h2{font-size:14px}.device-setting-row{width:100%;min-height:56px;padding:11px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;border:0;border-bottom:1px solid var(--border);border-radius:0;background:transparent;color:var(--text);text-align:left}.device-setting-row:hover{background:var(--panel-raised);transform:none}.device-setting-row strong,.device-toggle-row strong{display:block;font-size:12px}.device-setting-row small,.device-toggle-row small{display:block;margin-top:3px;color:var(--muted);font-size:10px}.device-info-grid{margin:0;padding:8px 16px 14px;display:grid;grid-template-columns:minmax(100px,.35fr) minmax(0,1fr);gap:6px 12px;border-top:1px solid var(--border);font-size:10px}.device-info-grid[hidden]{display:none}.device-info-grid dt{color:var(--muted)}.device-info-grid dd{margin:0;overflow-wrap:anywhere;color:var(--text);font-family:ui-monospace,monospace}.device-settings-grid{padding:12px 16px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 14px}.device-settings-grid>label{margin:0;min-width:0}.device-settings-grid>label>span{display:block;margin-bottom:5px;color:var(--muted);font-size:10px}.device-settings-grid .device-toggle-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0}.device-toggle-row input{width:18px;min-width:18px;height:18px;margin:0;accent-color:var(--accent)}.device-action-grid{padding:12px 16px;display:flex;flex-wrap:wrap;gap:8px}.device-action-grid button{flex:1 1 145px}.danger-action{color:var(--danger)!important;border-color:color-mix(in srgb,var(--danger) 45%,var(--border))!important}.device-debug-output{max-height:300px;margin:0 16px 12px;padding:10px;overflow:auto;border:1px solid var(--border);background:var(--log-bg);color:var(--muted);font:10px/1.5 ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
+.local-region-list{padding:0 16px 12px}.local-region-item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--border);font:11px ui-monospace,monospace}.local-region-item button{padding:4px 8px;color:var(--danger)}
+@media(max-width:640px){.device-settings-grid{grid-template-columns:minmax(0,1fr)}.reference-device-settings{width:calc(100% - 12px)}}
 </style>
 <script>
 let gatewayTelemetry={};
@@ -1581,6 +1586,7 @@ async function saveWeatherLocation(event){event.preventDefault();let city=docume
 async function loadConfigEditor(){let statusMessage=document.getElementById('config-status');statusMessage.dataset.state='';statusMessage.textContent='Loading config.json...';try{let response=await fetch('/api/config'),data=await response.json();if(!response.ok)throw new Error(data.error||'config.json could not be loaded');appConfig=data;syncConfigControls();document.getElementById('config-json-editor').value=JSON.stringify(appConfig,null,2);configEditorLoaded=true;statusMessage.textContent='Loaded config.json.'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
 async function saveConfigFile(){let statusMessage=document.getElementById('config-status'),config;try{config=JSON.parse(document.getElementById('config-json-editor').value)}catch(error){statusMessage.textContent='Invalid JSON: '+error.message;statusMessage.dataset.state='error';return}await saveAppConfig(config,'config-status')}
 async function restartDashboard(){let button=document.getElementById('restart-dashboard-button'),statusMessage=document.getElementById('config-status');button.disabled=true;statusMessage.dataset.state='';statusMessage.textContent='Restarting dashboard...';try{await fetch('/api/restart',{method:'POST'})}catch(error){}let attempts=0;async function waitForDashboard(){try{let response=await fetch('/api/status',{cache:'no-store'});if(response.ok){window.location.reload();return}}catch(error){}attempts++;if(attempts>=40){statusMessage.textContent='Dashboard did not restart. Start it again from the terminal.';statusMessage.dataset.state='error';button.disabled=false;return}setTimeout(waitForDashboard,500)}setTimeout(waitForDashboard,500)}
+async function updateApp(){let button=document.getElementById('update-app-button'),statusMessage=document.getElementById('config-status');button.disabled=true;statusMessage.dataset.state='';statusMessage.textContent='Checking repository for updates...';try{let response=await fetch('/api/update',{method:'POST'}),data=await response.json();if(!response.ok)throw new Error(data.error||'App update failed');statusMessage.textContent=data.message||'Update complete.';if(!data.updated){button.disabled=false;return}let attempts=0;async function waitForUpdatedDashboard(){try{let health=await fetch('/api/status',{cache:'no-store'});if(health.ok){window.location.reload();return}}catch(error){}attempts++;if(attempts>=40){statusMessage.textContent='Update installed, but the dashboard did not restart. Start it again from the terminal.';statusMessage.dataset.state='error';button.disabled=false;return}setTimeout(waitForUpdatedDashboard,500)}setTimeout(waitForUpdatedDashboard,700)}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error';button.disabled=false}}
 function loadFavoriteNodes(){try{let saved=JSON.parse(localStorage.getItem('meshcore-favorite-nodes')||'[]');if(Array.isArray(saved))favoriteNodeIds=new Set(saved.map(String))}catch(error){favoriteNodeIds=new Set()}}
 function toggleNodeFavorite(id){let normalized=String(id);if(favoriteNodeIds.has(normalized))favoriteNodeIds.delete(normalized);else favoriteNodeIds.add(normalized);localStorage.setItem('meshcore-favorite-nodes',JSON.stringify([...favoriteNodeIds]));renderConversationTargets('node');renderKnownPeers();renderMapMarkers()}
 function createNodeFavoriteButton(id){let favorite=document.createElement('button'),isFavorite=favoriteNodeIds.has(String(id));favorite.type='button';favorite.className='favorite-toggle';favorite.textContent=isFavorite?'★':'☆';favorite.title=isFavorite?'Remove from favorites':'Add to favorites';favorite.setAttribute('aria-label',favorite.title);favorite.setAttribute('aria-pressed',String(isFavorite));favorite.onclick=()=>toggleNodeFavorite(id);return favorite}
@@ -1638,16 +1644,16 @@ function refreshActiveHistory(){if(activeView==='nodes'&&selectedNodeId)history(
 function setCustomRadioMode(){let custom=document.getElementById('custom-radio-fields'),enabled=document.getElementById('radio-profile').value==='custom';custom.hidden=!enabled;custom.querySelectorAll('input,select').forEach(input=>input.disabled=!enabled)}
 function setCustomPowerMode(){let custom=document.getElementById('custom-power-field'),enabled=document.getElementById('tx-power-mode').value==='custom';custom.hidden=!enabled;custom.querySelector('input').disabled=!enabled}
 function populatePowerOptions(maximum,current){let select=document.getElementById('tx-power-mode'),common=[10,14,17,20];select.replaceChildren();for(let value of common){if(value<=maximum)select.add(new Option(value+' dBm',String(value)))}if(!common.includes(Number(current))&&Number(current)<=maximum)select.add(new Option(current+' dBm (current)',String(current)));let currentIsCommon=[...select.options].some(option=>Number(option.value)===Number(current));select.add(new Option('Custom...','custom'));select.value=currentIsCommon?String(current):'custom';document.getElementById('custom-tx-power').value=current??'';document.getElementById('custom-tx-power').max=maximum;setCustomPowerMode()}
-async function loadDeviceSettings(){deviceSettingsLoaded=false;loadedDeviceSettings=null;let statusMessage=document.getElementById('device-settings-status');statusMessage.dataset.state='';statusMessage.textContent='Loading settings from device...';try{let response=await fetch('/api/device-settings'),data=await response.json();if(!response.ok)throw new Error(data.error||'Device settings could not be loaded');loadedDeviceSettings=data;document.getElementById('device-name').value=data.name||'';document.getElementById('custom-radio-frequency').value=data.radio_freq??'';document.getElementById('custom-radio-bandwidth').value=data.radio_bw??'';document.getElementById('custom-radio-spreading-factor').value=data.radio_sf??'';document.getElementById('custom-radio-coding-rate').value=data.radio_cr??'';let matchingProfile=Object.entries(commonRadioProfiles).find(([,profile])=>Number(profile.radio_bw)===Number(data.radio_bw)&&Number(profile.radio_sf)===Number(data.radio_sf)&&Number(profile.radio_cr)===Number(data.radio_cr));document.getElementById('radio-profile').value=matchingProfile?.[0]||'custom';setCustomRadioMode();let maximum=Number(data.max_tx_power??30);populatePowerOptions(maximum,data.tx_power);document.getElementById('tx-power-limit').textContent='Device maximum: '+maximum+' dBm';deviceSettingsLoaded=true;statusMessage.textContent='Settings loaded from device.';statusMessage.dataset.state='success'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
-async function saveDeviceSettings(event){event.preventDefault();let statusMessage=document.getElementById('device-settings-status'),form=new FormData(event.currentTarget);if(!loadedDeviceSettings){statusMessage.textContent='Load settings from the connected device first.';statusMessage.dataset.state='error';return}let profile=form.get('radio_profile'),values={name:String(form.get('name')||'').trim()},radio=profile==='custom'?{radio_freq:Number(form.get('radio_freq')),radio_bw:Number(form.get('radio_bw')),radio_sf:Number(form.get('radio_sf')),radio_cr:Number(form.get('radio_cr'))}:{radio_freq:Number(loadedDeviceSettings.radio_freq),...commonRadioProfiles[profile]};Object.assign(values,radio);let powerMode=form.get('tx_power_mode');values.tx_power=Number(powerMode==='custom'?form.get('custom_tx_power'):powerMode);statusMessage.dataset.state='';statusMessage.textContent='Saving settings to device...';try{let response=await fetch('/api/device-settings',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({values})}),data=await response.json();if(!response.ok)throw new Error(data.error||'Settings could not be saved');deviceSettingsLoaded=false;await loadDeviceSettings();statusMessage.textContent='Device settings saved.';statusMessage.dataset.state='success'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
+async function loadDeviceSettings(){deviceSettingsLoaded=false;loadedDeviceSettings=null;let statusMessage=document.getElementById('device-settings-status');statusMessage.dataset.state='';statusMessage.textContent='Loading settings from device...';try{let response=await fetch('/api/device-settings'),data=await response.json();if(!response.ok)throw new Error(data.error||'Device settings could not be loaded');loadedDeviceSettings=data;document.getElementById('device-name').value=data.name||'';document.getElementById('advert-lat').value=data.adv_lat??'';document.getElementById('advert-lon').value=data.adv_lon??'';document.getElementById('rx-delay').value=data.rx_delay??'';document.getElementById('airtime-factor').value=data.airtime_factor??'';document.getElementById('telemetry-mode-base').value=data.telemetry_mode_base??0;document.getElementById('telemetry-mode-loc').value=data.telemetry_mode_loc??0;document.getElementById('telemetry-mode-env').value=data.telemetry_mode_env??0;document.getElementById('advert-location-policy').value=data.adv_loc_policy??0;document.getElementById('manual-add-contacts').checked=Boolean(data.manual_add_contacts);document.getElementById('multi-acks').checked=Boolean(data.multi_acks);document.getElementById('custom-radio-frequency').value=data.radio_freq??'';document.getElementById('custom-radio-bandwidth').value=data.radio_bw??'';document.getElementById('custom-radio-spreading-factor').value=data.radio_sf??'';document.getElementById('custom-radio-coding-rate').value=data.radio_cr??'';let matchingProfile=Object.entries(commonRadioProfiles).find(([,profile])=>Number(profile.radio_bw)===Number(data.radio_bw)&&Number(profile.radio_sf)===Number(data.radio_sf)&&Number(profile.radio_cr)===Number(data.radio_cr));document.getElementById('radio-profile').value=matchingProfile?.[0]||'custom';setCustomRadioMode();let maximum=Number(data.max_tx_power??30);populatePowerOptions(maximum,data.tx_power);document.getElementById('tx-power-limit').textContent='Device maximum: '+maximum+' dBm';deviceSettingsLoaded=true;statusMessage.textContent='Settings loaded from device.';statusMessage.dataset.state='success'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
+async function saveDeviceSettings(event){event.preventDefault();let statusMessage=document.getElementById('device-settings-status'),form=new FormData(event.currentTarget);if(!loadedDeviceSettings){statusMessage.textContent='Load settings from the connected device first.';statusMessage.dataset.state='error';return}let profile=form.get('radio_profile'),values={name:String(form.get('name')||'').trim(),adv_lat:Number(form.get('adv_lat')),adv_lon:Number(form.get('adv_lon')),rx_delay:Number(form.get('rx_delay')),airtime_factor:Number(form.get('airtime_factor')),telemetry_mode_base:Number(form.get('telemetry_mode_base')),telemetry_mode_loc:Number(form.get('telemetry_mode_loc')),telemetry_mode_env:Number(form.get('telemetry_mode_env')),adv_loc_policy:Number(form.get('adv_loc_policy')),manual_add_contacts:form.get('manual_add_contacts')==='on',multi_acks:form.get('multi_acks')==='on'},radio=profile==='custom'?{radio_freq:Number(form.get('radio_freq')),radio_bw:Number(form.get('radio_bw')),radio_sf:Number(form.get('radio_sf')),radio_cr:Number(form.get('radio_cr'))}:{radio_freq:Number(loadedDeviceSettings.radio_freq),...commonRadioProfiles[profile]};Object.assign(values,radio);let powerMode=form.get('tx_power_mode');values.tx_power=Number(powerMode==='custom'?form.get('custom_tx_power'):powerMode);statusMessage.dataset.state='';statusMessage.textContent='Saving settings to device...';try{let response=await fetch('/api/device-settings',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({values})}),data=await response.json();if(!response.ok)throw new Error(data.error||'Settings could not be saved');deviceSettingsLoaded=false;await loadDeviceSettings();statusMessage.textContent='Device settings saved.';statusMessage.dataset.state='success'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
 async function connect(){let r=await fetch('/api/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({connection_type:connection_type.value,ble_mac:ble_mac.value,serial_port:serial_port.value,model:model.value})});let d=await r.json();if(!r.ok)alert(d.error);await status();await peers()}
 async function disconnect(){await fetch('/api/disconnect',{method:'POST'});await status();await peers()}
 async function sendMessage(event,type,messageId,historyId){event.preventDefault();let selected=type==='node'?selectedNodeId:selectedChannelId,input=document.getElementById(messageId);if(!selected)return;let message=input.value.trim();if(!message)return;let response=await fetch('/api/transmit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:selected,target_type:type,text:message})}),data=await response.json();if(!response.ok){alert(data.error||'Message could not be sent');return}input.value='';await history(type,selected,historyId)}
 window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();status();peers();loadAppConfig();updateClock();setInterval(updateClock,1000);setInterval(refreshActiveHistory,3000);setInterval(loadLocalWeather,30*60*1000)});setInterval(status,2000);setInterval(peers,10000);
 </script></head><body>
 <header class="dashboard-header">
-<div class="brand-lockup"><div class="brand-mark">MC</div><div class="brand-copy"><span class="header-label">LOCAL MESH / RADIO CONTROL</span><h1>MESHCORE <span>AI GATEWAY</span></h1></div></div>
-<nav class="top-nav" aria-label="Dashboard pages"><button type="button" class="nav-tab" data-view="connection" aria-pressed="true" onclick="showView('connection')">Connection</button><button type="button" class="nav-tab" data-view="nodes" aria-pressed="false" onclick="showView('nodes')">Nodes</button><button type="button" class="nav-tab" data-view="channels" aria-pressed="false" onclick="showView('channels')">Channels</button><button type="button" class="nav-tab" data-view="map" aria-pressed="false" onclick="showView('map')">Map <span class="nav-count" id="map-node-count">0</span></button><button type="button" class="nav-tab" data-view="live-trace" aria-pressed="false" onclick="showView('live-trace')">📡 Live Trace Map <span class="nav-count" id="live-trace-count">0</span></button><button type="button" class="nav-tab" data-view="analyzer" aria-pressed="false" onclick="showView('analyzer')">Analyzer <span class="nav-count" id="analyzer-count">0</span></button><button type="button" class="nav-tab" data-view="settings" aria-pressed="false" onclick="showView('settings')">App Settings</button><button type="button" class="nav-tab" data-view="device-settings" aria-pressed="false" onclick="showView('device-settings')">Device Settings</button></nav>
+<div class="brand-lockup"><img class="dashboard-logo" src="/dashboard-logo.png" alt="Dashboard logo"><div class="brand-copy"><span class="header-label">MESHCORE + OLLAMA</span><h1>DASHBOARD</h1></div></div>
+<nav class="top-nav" aria-label="Dashboard pages"><button type="button" class="nav-tab" data-view="connection" aria-pressed="true" onclick="showView('connection')">Connection</button><button type="button" class="nav-tab" data-view="nodes" aria-pressed="false" onclick="showView('nodes')">Nodes</button><button type="button" class="nav-tab" data-view="channels" aria-pressed="false" onclick="showView('channels')">Channels</button><button type="button" class="nav-tab" data-view="map" aria-pressed="false" onclick="showView('map')">Map <span class="nav-count" id="map-node-count">0</span></button><button type="button" class="nav-tab" data-view="analyzer" aria-pressed="false" onclick="showView('analyzer')">Analyzer <span class="nav-count" id="analyzer-count">0</span></button><button type="button" class="nav-tab" data-view="settings" aria-pressed="false" onclick="showView('settings')">App Settings</button><button type="button" class="nav-tab" data-view="device-settings" aria-pressed="false" onclick="showView('device-settings')">Device Settings</button></nav>
 <div class="header-meta">
 <div><span class="header-label">LINK</span><span id="status" class="header-status disconnected">DISCONNECTED</span></div>
 <div><span class="header-label">GATEWAY BATTERY</span><span id="gateway_battery" class="header-metric">Unavailable</span></div>
@@ -1705,7 +1711,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 </section>
 <section id="settings-config-panel" class="settings-tab-panel" hidden>
 <label for="config-json-editor">config.json contents</label><textarea id="config-json-editor" class="config-json-editor" rows="18" spellcheck="false" aria-label="Edit config.json"></textarea>
-<div class="config-actions"><button type="button" onclick="saveConfigFile()">Save config.json</button><button id="restart-dashboard-button" type="button" onclick="restartDashboard()">Restart Dashboard</button><p id="config-status" class="config-status" aria-live="polite"></p></div>
+<div class="config-actions"><button type="button" onclick="saveConfigFile()">Save config.json</button><button id="restart-dashboard-button" type="button" onclick="restartDashboard()">Restart Dashboard</button><button id="update-app-button" class="secondary" type="button" onclick="updateApp()">Update from repository</button><p id="config-status" class="config-status" aria-live="polite"></p></div>
 </section>
 <section id="settings-weather-panel" class="settings-tab-panel" hidden>
 <form class="weather-settings-layout" onsubmit="saveWeatherLocation(event)">
@@ -1718,23 +1724,21 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 </div>
 </main>
 <main id="device-settings-view" class="view-panel page-view" hidden>
-<div class="device-settings-layout">
-<section class="card"><div class="panel-heading"><div><span class="eyebrow">CONNECTED RADIO</span><h2>MeshCore Device Settings</h2></div><span class="panel-index">05</span></div>
-<form onsubmit="saveDeviceSettings(event)">
-<label><span>Device name</span><input id="device-name" name="name" maxlength="32" required></label>
-<label><span>Common radio profile</span><select id="radio-profile" name="radio_profile" onchange="setCustomRadioMode()"><option value="balanced">Balanced · 125 kHz / SF7 / CR 4/5</option><option value="long_range">Long range · 125 kHz / SF10 / CR 4/5</option><option value="high_throughput">Higher throughput · 250 kHz / SF7 / CR 4/5</option><option value="custom">Custom settings...</option></select></label>
-<div id="custom-radio-fields" class="custom-radio-fields" hidden>
-<label><span>Radio frequency (MHz)</span><input id="custom-radio-frequency" name="radio_freq" type="number" min="100" max="3000" step="0.001" required disabled></label>
-<label><span>Bandwidth (kHz)</span><input id="custom-radio-bandwidth" name="radio_bw" type="number" min="7.8" max="1000" step="0.1" required disabled></label>
-<label><span>Spreading factor</span><input id="custom-radio-spreading-factor" name="radio_sf" type="number" min="5" max="12" step="1" required disabled></label>
-<label><span>Coding rate</span><select id="custom-radio-coding-rate" name="radio_cr" disabled><option value="5">4/5</option><option value="6">4/6</option><option value="7">4/7</option><option value="8">4/8</option></select></label>
-</div>
-<label><span>Transmit power (dBm)</span><select id="tx-power-mode" name="tx_power_mode" onchange="setCustomPowerMode()"></select><small id="tx-power-limit" class="settings-description"></small></label>
-<label id="custom-power-field" hidden><span>Custom transmit power (dBm)</span><input id="custom-tx-power" name="custom_tx_power" type="number" min="0" step="1" required disabled></label>
-<p class="settings-description">Common profiles keep the current frequency. Custom settings let you edit each radio value. Confirm your local frequency plan and device limits before saving.</p>
+<div class="device-settings-layout reference-device-settings">
+<section class="card device-settings-card"><div class="panel-heading"><div><span class="eyebrow">IDENTITY</span><h2 id="device-identity-name">Connected device</h2></div><span id="device-identity-status" class="header-status disconnected">DISCONNECTED</span></div><button id="identity-toggle" class="device-setting-row" type="button" onclick="toggleDeviceIdentity()" aria-expanded="false"><span><strong>Device information</strong><small>Identifier, battery, firmware, key, contacts and channels</small></span><span id="identity-expand-icon">+</span></button><dl id="device-identity-details" class="device-info-grid" hidden></dl></section>
+<form id="device-settings-form" onsubmit="saveDeviceSettings(event)">
+<section class="card device-settings-card"><div class="panel-heading"><div><span class="eyebrow">NODE</span><h2>Node settings</h2></div></div><div class="device-settings-grid"><label><span>Node name</span><input id="device-name" name="name" maxlength="32" required></label><label><span>Radio preset</span><select id="radio-preset" onchange="applyRadioPreset()"><option value="custom">Custom settings</option></select></label><label><span>Frequency (MHz)</span><input id="custom-radio-frequency" name="radio_freq" type="number" min="150" max="2500" step="0.001" required></label><label><span>Bandwidth</span><select id="custom-radio-bandwidth" name="radio_bw"><option value="7.8">7.8 kHz</option><option value="10.4">10.4 kHz</option><option value="15.6">15.6 kHz</option><option value="20.8">20.8 kHz</option><option value="31.25">31.25 kHz</option><option value="41.7">41.7 kHz</option><option value="62.5">62.5 kHz</option><option value="125">125 kHz</option><option value="250">250 kHz</option><option value="500">500 kHz</option></select></label><label><span>Spreading factor</span><select id="custom-radio-spreading-factor" name="radio_sf"><option>5</option><option>6</option><option>7</option><option>8</option><option>9</option><option>10</option><option>11</option><option>12</option></select></label><label><span>Coding rate</span><select id="custom-radio-coding-rate" name="radio_cr"><option value="5">4/5</option><option value="6">4/6</option><option value="7">4/7</option><option value="8">4/8</option></select></label><label><span>TX power (dBm)</span><input id="custom-tx-power" name="tx_power" type="number" min="-9" max="30" step="1" required></label><label class="device-toggle-row" id="client-repeat-row"><span><strong>Client repeat</strong><small>Allow this client to repeat packets</small></span><input id="client-repeat" name="repeat" type="checkbox"></label><label><span>Path hash mode</span><select id="path-hash-mode" name="path_hash_mode"><option value="0">1 byte per hop</option><option value="1">2 bytes per hop</option><option value="2">3 bytes per hop</option></select></label><label><span>RX delay</span><input id="rx-delay" name="rx_delay" type="number" min="0" max="4294967295" step="1"></label><label><span>Airtime factor</span><input id="airtime-factor" name="airtime_factor" type="number" min="0" max="4294967295" step="1"></label></div><p id="tx-power-limit" class="settings-description">Power range depends on connected hardware.</p></section>
+<section class="card device-settings-card"><div class="panel-heading"><div><span class="eyebrow">NODE TOOLS</span><h2>Radio and telemetry</h2></div></div><div class="device-action-grid"><button type="button" class="secondary" onclick="runDeviceAction('stats',{stats_type:'radio'})">Radio statistics</button><button type="button" class="secondary" onclick="runDeviceAction('telemetry')">Self telemetry</button><button type="button" class="secondary" disabled title="Region fetch requires the reference app's anonymous region-query connector">Region management</button></div><p class="settings-description">The MeshCore Python companion library supports radio presets, path hash, statistics and self telemetry. Fetching named regions from repeaters is not exposed by this connector.</p></section>
+<section class="card device-settings-card"><div class="panel-heading"><div><span class="eyebrow">REGIONS</span><h2>Region management</h2></div></div><div class="device-settings-grid"><label><span>Default region</span><select id="default-region" onchange="saveDefaultRegion()"><option value="">None</option></select></label><label><span>Add region</span><input id="new-region-name" maxlength="30" pattern="[a-z0-9-]{1,30}" placeholder="region-name"></label></div><div class="device-action-grid"><button type="button" class="secondary" onclick="addLocalRegion()">Add region</button><button type="button" class="secondary" disabled title="This companion library does not expose anonymous repeater region queries">Fetch from repeaters</button></div><div id="local-region-list" class="local-region-list"></div><p id="region-status" class="settings-status" aria-live="polite"></p><p class="settings-description">Regions are stored locally in this browser. Fetching region lists from repeaters requires a companion query API that is not exposed by the current Python client.</p></section>
+<section class="card device-settings-card"><div class="panel-heading"><div><span class="eyebrow">LOCATION</span><h2>Location settings</h2></div></div><div class="device-settings-grid"><label><span>Latitude</span><input id="advert-lat" name="adv_lat" type="number" min="-90" max="90" step="0.000001"></label><label><span>Longitude</span><input id="advert-lon" name="adv_lon" type="number" min="-180" max="180" step="0.000001"></label><label><span>GPS update interval (seconds)</span><input id="gps-interval" name="gps_interval" type="number" min="60" max="86399" step="1"></label><label class="device-toggle-row"><span><strong>GPS enabled</strong><small>Enable device GPS updates when supported</small></span><input id="gps-enabled" name="gps_enabled" type="checkbox"></label></div></section>
+<section class="card device-settings-card"><div class="panel-heading"><div><span class="eyebrow">CONTACTS</span><h2>Contact settings</h2></div></div><div class="device-settings-grid"><label class="device-toggle-row"><span><strong>Auto-add users</strong><small>Accept new chat contacts automatically</small></span><input id="auto-add-users" type="checkbox"></label><label class="device-toggle-row"><span><strong>Auto-add repeaters</strong><small>Accept repeater contacts automatically</small></span><input id="auto-add-repeaters" type="checkbox"></label><label class="device-toggle-row"><span><strong>Auto-add room servers</strong><small>Accept room server contacts automatically</small></span><input id="auto-add-rooms" type="checkbox"></label><label class="device-toggle-row"><span><strong>Auto-add sensors</strong><small>Accept sensor contacts automatically</small></span><input id="auto-add-sensors" type="checkbox"></label><label class="device-toggle-row"><span><strong>Overwrite oldest when full</strong><small>Replace oldest non-favorite contact when contact storage is full</small></span><input id="auto-add-overwrite" type="checkbox"></label></div></section>
+<section class="card device-settings-card"><div class="panel-heading"><div><span class="eyebrow">PRIVACY</span><h2>Telemetry and privacy</h2></div></div><div class="device-settings-grid"><label class="device-toggle-row"><span><strong>Advertise location</strong><small>Include device location in advertisements</small></span><input id="advert-location-policy" type="checkbox"></label><label class="device-toggle-row"><span><strong>Multi-ACK</strong><small>Send multiple acknowledgements for delivery reliability</small></span><input id="multi-acks" type="checkbox"></label><label><span>Base telemetry</span><select id="telemetry-mode-base"><option value="0">Deny all</option><option value="1">Allow by contact flags</option><option value="2">Allow all</option></select></label><label><span>Location telemetry</span><select id="telemetry-mode-loc"><option value="0">Deny all</option><option value="1">Allow by contact flags</option><option value="2">Allow all</option></select></label><label><span>Environment telemetry</span><select id="telemetry-mode-env"><option value="0">Deny all</option><option value="1">Allow by contact flags</option><option value="2">Allow all</option></select></label><label><span>Manual contact approval</span><input id="manual-add-contacts" type="checkbox"></label></div></section>
 <div class="settings-actions"><button type="submit">Save device settings</button><button class="secondary" type="button" onclick="loadDeviceSettings()">Refresh from device</button><p id="device-settings-status" class="settings-status" aria-live="polite"></p></div>
 </form>
-</section>
+<section class="card device-settings-card"><div class="panel-heading"><div><span class="eyebrow">ACTIONS</span><h2>Device actions</h2></div></div><div class="device-action-grid"><button type="button" class="secondary" onclick="runDeviceAction('sync_time')">Sync time</button><button type="button" class="secondary" onclick="runDeviceAction('refresh_contacts')">Refresh contacts</button><button type="button" class="secondary" onclick="runDeviceAction('reboot')">Reboot device</button><button type="button" class="secondary danger-action" onclick="runDeviceAction('delete_paths')">Delete all paths</button></div><p id="device-action-status" class="settings-status" aria-live="polite"></p></section>
+<section class="card device-settings-card"><div class="panel-heading"><div><span class="eyebrow">EXPORT</span><h2>GPX export</h2></div></div><div class="device-action-grid"><button type="button" class="secondary" onclick="exportDeviceGpx('repeaters')">Export repeaters</button><button type="button" class="secondary" onclick="exportDeviceGpx('contacts')">Export contacts</button><button type="button" class="secondary" onclick="exportDeviceGpx('all')">Export all</button></div><p id="gpx-export-status" class="settings-status" aria-live="polite"></p></section>
+<section class="card device-settings-card"><div class="panel-heading"><div><span class="eyebrow">DIAGNOSTICS</span><h2>Debug and statistics</h2></div></div><div class="device-action-grid"><button type="button" class="secondary" onclick="showDeviceLogs()">App debug log</button><button type="button" class="secondary" disabled title="BLE transport debug logs are not exposed by the Python client">Companion debug log</button><button type="button" class="secondary" onclick="runDeviceAction('stats',{stats_type:'radio'})">Radio statistics</button><button type="button" class="secondary" onclick="runDeviceAction('stats',{stats_type:'core'})">Core statistics</button><button type="button" class="secondary" onclick="runDeviceAction('stats',{stats_type:'packets'})">Packet statistics</button><button type="button" class="secondary" onclick="runDeviceAction('telemetry')">Self telemetry</button></div><pre id="device-debug-output" class="device-debug-output" hidden></pre></section>
+<section class="card device-settings-card"><div class="panel-heading"><div><span class="eyebrow">ABOUT</span><h2>MeshCore Dashboard</h2></div></div><p class="settings-description">MeshCore device control with the Ollama-powered local assistant.</p><button class="secondary" type="button" onclick="showDeviceAbout()">About this dashboard</button></section>
 </div>
 </main>
 <main id="map-view" class="map-workspace view-panel page-view" hidden>
@@ -1744,24 +1748,34 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <section class="card map-surface" aria-label="Mesh node map"><div id="map-canvas"></div><div class="map-message" id="map-message">Waiting for map data...</div></section>
 </div>
 </main>
-<main id="live-trace-view" class="page-view view-panel" hidden>
-<div class="live-trace-workspace">
-<div id="live-trace-canvas"></div>
-<section class="live-trace-overlay live-trace-feed" aria-label="Live activity feed">
-<div class="panel-heading"><div><span class="eyebrow">LIVE ACTIVITY</span><h2>📡 Trace Feed</h2></div><span class="live-tag">LIVE</span></div>
-<div id="live-trace-feed-list" class="live-trace-feed-list"><div id="live-trace-feed-empty" class="live-trace-feed-item">Waiting for activity...</div></div>
-</section>
-<section class="live-trace-overlay live-trace-legend" aria-label="Live trace legend">
-<div class="panel-heading"><div><span class="eyebrow">LEGEND</span><h2>Map Key</h2></div></div>
-<div class="live-trace-legend-list">
-<div class="live-trace-legend-item"><span class="live-trace-legend-dot" style="background:#36d1dc"></span>This gateway</div>
-<div class="live-trace-legend-item"><span class="live-trace-legend-dot" style="background:#4ade80"></span>Direct message route</div>
-<div class="live-trace-legend-item"><span class="live-trace-legend-dot" style="background:#8b949e"></span>Known peer</div>
-</div>
-</section>
-</div>
-</main>
 <footer id="console-dock" class="console-dock"><section class="card console-card"><div class="panel-heading"><div><span class="eyebrow">SYSTEM ACTIVITY</span><h2>Console</h2></div><span class="live-tag">LIVE</span></div><pre id="console"></pre></section></footer>
+<script>
+const referenceRadioPresets=[
+['Australia',915.8,250,10,5,20],['Australia (Narrow)',916.575,62.5,7,5,20],['Australia (Mid)',915.075,125,9,5,20],['Australia SA, WA, QLD',923.125,62.5,8,5,20],['Czech Republic',869.432,62.5,7,5,14],['EU 433MHz',433.65,250,11,5,20],['EU/UK (Long Range)',869.525,250,11,5,14],['EU/UK (Medium Range)',869.525,250,10,5,14],['EU/UK (Narrow)',869.618,62.5,8,5,14],['New Zealand',917.375,250,11,5,20],['New Zealand (Narrow)',917.375,62.5,7,5,20],['Portugal 433',433.375,62.5,9,5,20],['Portugal 869',869.618,62.5,7,5,14],['Russia Artyom (VVO)',864.281,62.5,8,6,20],['Russia Biysk (BSK)',869,62.5,8,5,20],['Russia Chelyabinsk (CEK)',868.731,62.5,8,6,20],['Russia Cherepovets (CEE)',868.57,62.5,7,8,20],['Russia Irkutsk (IKT)',868.731,62.5,7,7,20],['Russia Ivanovo (IWA)',868.731,62.5,8,8,20],['Russia Izhevsk (IJK)',868.732,62.5,8,8,20],['Russia Kaluga (KLF)',868.731,62.5,7,7,20],['Russia Kazan (KZN)',868.731,62.5,8,6,20],['Russia Khabarovsk (KHV)',864.281,62.5,8,6,20],['Russia Kirov (KVX)',868.731,62.5,8,8,20],['Russia Lipetsk (LPK)',868.95,62.5,9,7,20],['Russia Moscow (MOW)',868.731,62.5,7,7,20],['Russia Nizhny Novgorod (GOJ)',868.731,62.5,8,6,20],['Russia Novosibirsk (OVB)',869,62.5,9,8,20],['Russia Rostov-on-Don (ROV)',868.731,62.5,9,7,20],['Russia Ryazan (RZN)',868.88,62.5,9,5,20],['Russia Samara (KUF)',864.281,62.5,8,7,20],['Russia Saratov (GSV)',864.281,62.5,8,7,20],['Russia St. Petersburg (LED)',868.856,62.5,7,7,20],['Russia Tambov (TBW)',868.95,62.5,10,5,20],['Russia Tula (TYA)',868.731,62.5,8,7,20],['Russia Tver (KLD)',869.169,62.5,8,8,20],['Russia Ufa (UFA)',868.732,62.5,8,8,20],['Russia Volgograd (VOG)',869.525,62.5,7,7,20],['Russia Voronezh (VOZ)',868.731,62.5,8,6,20],['Russia Yekaterinburg (SVX)',869.046,62.5,7,7,20],['Switzerland',869.618,62.5,8,5,14],['USA Arizona',908.205,62.5,9,8,22],['USA Philly',902.25,500,11,5,22],['USA/Canada',910.525,62.5,7,5,22],['Vietnam',920.25,250,11,5,20],['Off-Grid 433',433,250,11,8,20],['Off-Grid 869',869.495,250,11,8,14],['Off-Grid 918',918,250,11,8,20]
+];
+function initializeRadioPresets(){let select=document.getElementById('radio-preset');if(!select)return;select.replaceChildren(new Option('Custom settings','custom'));referenceRadioPresets.forEach((preset,index)=>select.add(new Option(preset[0],String(index))))}
+function applyRadioPreset(){let select=document.getElementById('radio-preset'),preset=referenceRadioPresets[Number(select.value)];if(!preset)return;document.getElementById('custom-radio-frequency').value=preset[1];document.getElementById('custom-radio-bandwidth').value=String(preset[2]);document.getElementById('custom-radio-spreading-factor').value=String(preset[3]);document.getElementById('custom-radio-coding-rate').value=String(preset[4]);document.getElementById('custom-tx-power').value=preset[5];let repeat=document.getElementById('client-repeat');if(preset[0].startsWith('Off-Grid')&&!repeat.disabled)repeat.checked=true}
+function setIdentityRows(data){let list=document.getElementById('device-identity-details'),info=data.device_info||{},battery=data.battery_info||{};list.replaceChildren();let rows=[['Device ID',info.device_id||info.deviceId||data.public_key||'Unavailable'],['Battery',battery.level!=null?String(battery.level)+' mV':'Unavailable'],['Hardware',info.hw_model||info.board||info.manufacturer||'Unavailable'],['Firmware',info.fw_ver||info.firmware||info.fw_build||'Unavailable'],['Public key',data.public_key||'Unavailable'],['Contacts',String(mapNodes.length)],['Channels',String(meshChannels.length)]];for(let [label,value] of rows){let term=document.createElement('dt'),detail=document.createElement('dd');term.textContent=label;detail.textContent=String(value);if(label==='Public key'&&value!=='Unavailable'){detail.title='Click to copy';detail.tabIndex=0;detail.onclick=()=>navigator.clipboard?.writeText(String(value));detail.onkeydown=event=>{if(event.key==='Enter')detail.click()}}list.append(term,detail)}}
+function toggleDeviceIdentity(){let details=document.getElementById('device-identity-details'),button=document.getElementById('identity-toggle');details.hidden=!details.hidden;if(button){button.setAttribute('aria-expanded',String(!details.hidden));document.getElementById('identity-expand-icon').textContent=details.hidden?'+':'−'}}
+async function loadDeviceSettings(){deviceSettingsLoaded=false;loadedDeviceSettings=null;let message=document.getElementById('device-settings-status');message.dataset.state='';message.textContent='Loading settings from device...';try{let response=await fetch('/api/device-settings'),data=await response.json();if(!response.ok)throw new Error(data.error||'Device settings could not be loaded');loadedDeviceSettings=data;document.getElementById('device-identity-name').textContent=data.name||'Unnamed device';document.getElementById('device-identity-status').textContent='CONNECTED';document.getElementById('device-identity-status').className='header-status connected';setIdentityRows(data);document.getElementById('device-name').value=data.name||'';document.getElementById('custom-radio-frequency').value=data.radio_freq??'';document.getElementById('custom-radio-bandwidth').value=String(data.radio_bw??125);document.getElementById('custom-radio-spreading-factor').value=String(data.radio_sf??7);document.getElementById('custom-radio-coding-rate').value=String(data.radio_cr??5);document.getElementById('custom-tx-power').value=data.tx_power??20;document.getElementById('rx-delay').value=data.rx_delay??0;document.getElementById('airtime-factor').value=data.airtime_factor??0;document.getElementById('advert-lat').value=data.adv_lat??'';document.getElementById('advert-lon').value=data.adv_lon??'';document.getElementById('gps-interval').value=data.custom_vars?.gps_interval??'';document.getElementById('gps-enabled').checked=data.custom_vars?.gps==='1';document.getElementById('path-hash-mode').value=String(Math.max(0,Number(data.path_hash_mode??0)));document.getElementById('manual-add-contacts').checked=Boolean(data.manual_add_contacts);document.getElementById('multi-acks').checked=Number(data.multi_acks)===1;document.getElementById('advert-location-policy').checked=Number(data.adv_loc_policy)!==0;document.getElementById('telemetry-mode-base').value=String(data.telemetry_mode_base??0);document.getElementById('telemetry-mode-loc').value=String(data.telemetry_mode_loc??0);document.getElementById('telemetry-mode-env').value=String(data.telemetry_mode_env??0);let flags=Number(data.auto_add_config?.config??0);document.getElementById('auto-add-overwrite').checked=Boolean(flags&1);document.getElementById('auto-add-users').checked=Boolean(flags&2);document.getElementById('auto-add-repeaters').checked=Boolean(flags&4);document.getElementById('auto-add-rooms').checked=Boolean(flags&8);document.getElementById('auto-add-sensors').checked=Boolean(flags&16);let repeat=document.getElementById('client-repeat'),repeatValue=data.device_info?.repeat;repeat.disabled=repeatValue===undefined||repeatValue===null;repeat.checked=Boolean(repeatValue);document.getElementById('client-repeat-row').hidden=repeat.disabled;document.getElementById('tx-power-limit').textContent='Device maximum: '+String(data.max_tx_power??30)+' dBm. Check your local radio regulations before applying a preset.';initializeRadioPresets();let presetIndex=referenceRadioPresets.findIndex(p=>Number(p[1])===Number(data.radio_freq)&&Number(p[2])===Number(data.radio_bw)&&Number(p[3])===Number(data.radio_sf)&&Number(p[4])===Number(data.radio_cr));document.getElementById('radio-preset').value=presetIndex<0?'custom':String(presetIndex);deviceSettingsLoaded=true;message.textContent='Device settings loaded.';message.dataset.state='success'}catch(error){message.textContent=error.message;message.dataset.state='error'}}
+async function saveDeviceSettings(event){event.preventDefault();let message=document.getElementById('device-settings-status');if(!loadedDeviceSettings){message.textContent='Load settings from the connected device first.';message.dataset.state='error';return}let form=new FormData(document.getElementById('device-settings-form')),autoFlags=(document.getElementById('auto-add-overwrite').checked?1:0)|(document.getElementById('auto-add-users').checked?2:0)|(document.getElementById('auto-add-repeaters').checked?4:0)|(document.getElementById('auto-add-rooms').checked?8:0)|(document.getElementById('auto-add-sensors').checked?16:0),values={name:String(form.get('name')||'').trim(),radio_freq:Number(form.get('radio_freq')),radio_bw:Number(form.get('radio_bw')),radio_sf:Number(form.get('radio_sf')),radio_cr:Number(form.get('radio_cr')),tx_power:Number(form.get('tx_power')),rx_delay:Number(form.get('rx_delay')||0),airtime_factor:Number(form.get('airtime_factor')||0),adv_lat:Number(form.get('adv_lat')||loadedDeviceSettings.adv_lat||0),adv_lon:Number(form.get('adv_lon')||loadedDeviceSettings.adv_lon||0),telemetry_mode_base:Number(form.get('telemetry_mode_base')),telemetry_mode_loc:Number(form.get('telemetry_mode_loc')),telemetry_mode_env:Number(form.get('telemetry_mode_env')),adv_loc_policy:document.getElementById('advert-location-policy').checked?1:0,manual_add_contacts:document.getElementById('manual-add-contacts').checked,multi_acks:document.getElementById('multi-acks').checked,repeat:document.getElementById('client-repeat').checked,path_hash_mode:Number(form.get('path_hash_mode')),gps_enabled:document.getElementById('gps-enabled').checked,auto_add_flags:autoFlags};let interval=document.getElementById('gps-interval').value.trim();if(interval)values.gps_interval=Number(interval);message.dataset.state='';message.textContent='Saving settings to device...';try{let response=await fetch('/api/device-settings',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({values})}),data=await response.json();if(!response.ok)throw new Error(data.error||'Device settings could not be saved');await loadDeviceSettings();message.textContent='Device settings saved.';message.dataset.state='success'}catch(error){message.textContent=error.message;message.dataset.state='error'}}
+async function runDeviceAction(action,options={}){if(action==='reboot'&&!window.confirm('Reboot the connected MeshCore device?'))return;if(action==='delete_paths'&&!window.confirm('Reset known routing paths for all contacts?'))return;let status=document.getElementById('device-action-status'),output=document.getElementById('device-debug-output');status.dataset.state='';status.textContent='Running device action...';try{let response=await fetch('/api/device-settings/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,...options})}),data=await response.json();if(!response.ok)throw new Error(data.error||'Device action failed');status.textContent=data.message||'Action completed.';if(data.result!==undefined){output.hidden=false;output.textContent=JSON.stringify(data.result,null,2)}}catch(error){status.textContent=error.message;status.dataset.state='error'}}
+async function exportDeviceGpx(type){let status=document.getElementById('gpx-export-status');status.textContent='Preparing GPX export...';try{let response=await fetch('/api/device-settings/export?type='+encodeURIComponent(type));if(!response.ok){let error=await response.json();throw new Error(error.error||'GPX export failed')}let blob=await response.blob(),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download='meshcore_'+type+'.gpx';link.click();URL.revokeObjectURL(url);status.textContent='GPX export downloaded.'}catch(error){status.textContent=error.message;status.dataset.state='error'}}
+async function showDeviceLogs(){let output=document.getElementById('device-debug-output');try{let response=await fetch('/api/status'),data=await response.json();output.hidden=false;output.textContent=(data.logs||[]).join('\n')||'No app log entries.'}catch(error){output.textContent=error.message;output.hidden=false}}
+function showDeviceAbout(){window.alert('MeshCore Dashboard\nMeshCore radio controls and local Ollama assistant.\nDevice controls depend on connected firmware capabilities.')}
+const localRegionStorageKey='meshcore-dashboard-regions';
+function readLocalRegions(){try{let parsed=JSON.parse(localStorage.getItem(localRegionStorageKey)||'{}');return {regions:Array.isArray(parsed.regions)?parsed.regions:[],defaultRegion:parsed.defaultRegion||''}}catch(error){return {regions:[],defaultRegion:''}}}
+function writeLocalRegions(settings){try{localStorage.setItem(localRegionStorageKey,JSON.stringify(settings))}catch(error){let status=document.getElementById('region-status');if(status)status.textContent='Browser storage is unavailable; region changes will not persist.'}}
+function renderLocalRegions(){let settings=readLocalRegions(),select=document.getElementById('default-region'),list=document.getElementById('local-region-list');if(!select||!list)return;select.replaceChildren(new Option('None',''));settings.regions.forEach(region=>select.add(new Option(region,region)));select.value=settings.defaultRegion;list.replaceChildren();if(!settings.regions.length){let empty=document.createElement('p');empty.className='settings-description';empty.textContent='No local regions added.';list.appendChild(empty);return}for(let region of settings.regions){let row=document.createElement('div');row.className='local-region-item';let name=document.createElement('span');name.textContent=region;let remove=document.createElement('button');remove.type='button';remove.className='secondary';remove.textContent='Remove';remove.onclick=()=>removeLocalRegion(region);row.append(name,remove);list.appendChild(row)}}
+function saveDefaultRegion(){let settings=readLocalRegions();settings.defaultRegion=document.getElementById('default-region').value;writeLocalRegions(settings)}
+function addLocalRegion(){let input=document.getElementById('new-region-name'),region=input.value.trim().toLowerCase(),status=document.getElementById('region-status');if(!/^[a-z0-9-]{1,30}$/.test(region)){status.textContent='Use 1-30 lowercase letters, numbers, or hyphens.';status.dataset.state='error';return}let settings=readLocalRegions();if(settings.regions.includes(region)){status.textContent='That region is already in the list.';status.dataset.state='error';return}settings.regions.push(region);settings.regions.sort();writeLocalRegions(settings);input.value='';status.textContent='Region added to this browser.';status.dataset.state='success';renderLocalRegions()}
+function removeLocalRegion(region){let settings=readLocalRegions();settings.regions=settings.regions.filter(item=>item!==region);if(settings.defaultRegion===region)settings.defaultRegion='';writeLocalRegions(settings);renderLocalRegions()}
+const loadDeviceSettingsWithLimits=loadDeviceSettings;
+loadDeviceSettings=async function(){await loadDeviceSettingsWithLimits();if(!loadedDeviceSettings)return;let maxPower=String(loadedDeviceSettings.max_tx_power??30),txPower=document.getElementById('custom-tx-power');txPower.max=maxPower;let pathHash=document.getElementById('path-hash-mode'),pathHashSupported=loadedDeviceSettings.device_info?.path_hash_mode!==undefined&&loadedDeviceSettings.device_info?.path_hash_mode!==null;pathHash.disabled=!pathHashSupported;pathHash.title=pathHashSupported?'':'Requires companion firmware v1.14 or newer'}
+const saveDeviceSettingsWithLimits=saveDeviceSettings;
+saveDeviceSettings=async function(event){let pathHash=document.getElementById('path-hash-mode'),wasDisabled=pathHash.disabled;pathHash.disabled=false;try{return await saveDeviceSettingsWithLimits(event)}finally{pathHash.disabled=wasDisabled}}
+window.addEventListener('DOMContentLoaded',()=>{initializeRadioPresets();renderLocalRegions()});
+</script>
 </body></html>'''
 
 
@@ -1777,6 +1791,13 @@ async def index_handler(request):
         text=PAGE.replace("{{MODEL_OPTIONS}}", options),
         content_type="text/html",
     )
+
+
+async def dashboard_logo_handler(request):
+    logo_path = Path(__file__).resolve().with_name("dashboard-logo.png")
+    if not logo_path.is_file():
+        raise web.HTTPNotFound()
+    return web.FileResponse(logo_path, headers={"Cache-Control": "no-cache"})
 
 
 async def status_handler(request):
@@ -1882,6 +1903,81 @@ async def restart_dashboard_handler(request):
     return web.json_response({"restarting": True}, status=202)
 
 
+async def update_app_handler(request):
+    repo_dir = Path(__file__).resolve().parent
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if status.returncode != 0:
+        return web.json_response(
+            {"error": status.stderr.strip() or "Could not inspect repository"},
+            status=500,
+        )
+    if status.stdout.strip():
+        return web.json_response(
+            {
+                "error": (
+                    "Update blocked: commit or discard local changes before "
+                    "updating."
+                )
+            },
+            status=409,
+        )
+
+    branch_result = subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    branch = branch_result.stdout.strip() or "main"
+    before = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+    pull = subprocess.run(
+        ["git", "pull", "--ff-only", "origin", branch],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if pull.returncode != 0:
+        return web.json_response(
+            {"error": pull.stderr.strip() or pull.stdout.strip() or "Update failed"},
+            status=502,
+        )
+
+    after = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+    if before == after:
+        return web.json_response(
+            {"updated": False, "message": "The app is already up to date."}
+        )
+
+    async def restart_after_update():
+        await asyncio.sleep(0.3)
+        await disconnect_hardware()
+        os.environ["MESHC_OPS_RESTARTING"] = "1"
+        os.execv(sys.executable, [sys.executable, *sys.argv])
+
+    asyncio.create_task(restart_after_update())
+    return web.json_response({"updated": True, "message": "Update installed. Restarting dashboard."}, status=202)
+
+
 async def peers_handler(request):
     await refresh_contacts()
     nodes = []
@@ -1976,7 +2072,14 @@ def validate_device_settings(current, values):
     if not isinstance(values, dict) or not values:
         raise ValueError("Provide at least one device setting to update")
 
-    allowed = {"name", "radio_freq", "radio_bw", "radio_sf", "radio_cr", "tx_power"}
+    allowed = {
+        "name", "adv_lat", "adv_lon", "radio_freq", "radio_bw", "radio_sf",
+        "radio_cr", "tx_power", "rx_delay", "airtime_factor",
+        "telemetry_mode_base", "telemetry_mode_loc", "telemetry_mode_env",
+        "adv_loc_policy", "manual_add_contacts", "multi_acks", "device_pin",
+        "repeat", "path_hash_mode", "gps_enabled", "gps_interval",
+        "auto_add_flags",
+    }
     unsupported = set(values) - allowed
     if unsupported:
         raise ValueError(f"Unsupported device settings: {', '.join(sorted(unsupported))}")
@@ -1988,6 +2091,15 @@ def validate_device_settings(current, values):
     if not isinstance(name, str) or not name.strip() or len(name.encode("utf-8")) > 32:
         raise ValueError("Device name must contain 1 to 32 UTF-8 bytes")
     updated["name"] = name.strip()
+
+    for key, minimum, maximum in (("adv_lat", -90, 90), ("adv_lon", -180, 180)):
+        try:
+            value = float(updated[key])
+        except (TypeError, ValueError):
+            raise ValueError(f"{key} must be a number") from None
+        if not math.isfinite(value) or not minimum <= value <= maximum:
+            raise ValueError(f"{key} must be between {minimum} and {maximum}")
+        updated[key] = value
 
     for key, minimum, maximum in (
         ("radio_freq", 100, 3000),
@@ -2004,11 +2116,35 @@ def validate_device_settings(current, values):
     for key, minimum, maximum in (
         ("radio_sf", 5, 12),
         ("radio_cr", 5, 8),
-        ("tx_power", 0, int(current.get("max_tx_power", 30))),
+        ("tx_power", -9, int(current.get("max_tx_power", 30))),
+        ("rx_delay", 0, 2**32 - 1),
+        ("airtime_factor", 0, 2**32 - 1),
+        ("telemetry_mode_base", 0, 2),
+        ("telemetry_mode_loc", 0, 2),
+        ("telemetry_mode_env", 0, 2),
+        ("adv_loc_policy", 0, 1),
+        ("path_hash_mode", 0, 2),
+        ("auto_add_flags", 0, 31),
     ):
         value = updated[key]
         if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
             raise ValueError(f"{key} must be an integer between {minimum} and {maximum}")
+    for key in ("manual_add_contacts", "multi_acks", "gps_enabled", "repeat"):
+        if not isinstance(updated[key], bool):
+            raise ValueError(f"{key} must be true or false")
+        updated[key] = int(updated[key])
+    gps_interval = updated.get("gps_interval")
+    if gps_interval not in (None, ""):
+        if isinstance(gps_interval, bool) or not isinstance(gps_interval, int):
+            raise ValueError("gps_interval must be an integer")
+        if not 60 <= gps_interval < 86400:
+            raise ValueError("gps_interval must be between 60 and 86399 seconds")
+    device_pin = updated.get("device_pin")
+    if device_pin not in (None, ""):
+        if not isinstance(device_pin, str) or not device_pin.isdigit():
+            raise ValueError("device_pin must be an unsigned integer")
+        if not 0 <= int(device_pin) <= 2**32 - 1:
+            raise ValueError("device_pin must be between 0 and 4294967295")
     return updated
 
 
@@ -2021,7 +2157,41 @@ async def device_settings_handler(request):
             result = await meshcore_instance.commands.send_appstart()
         if result.type == EventType.ERROR:
             return web.json_response({"error": str(result.payload)}, status=502)
-        return web.json_response(result.payload)
+        settings = dict(result.payload or {})
+        get_tuning = getattr(meshcore_instance.commands, "get_tuning", None)
+        if get_tuning:
+            try:
+                async with hardware_lock:
+                    tuning = await get_tuning()
+                if tuning.type != EventType.ERROR:
+                    settings.update(tuning.payload or {})
+            except Exception as error:
+                log_to_dash(f"Optional tuning read failed: {error}")
+        commands = meshcore_instance.commands
+        for method_name, key in (
+            ("send_device_query", "device_info"),
+            ("get_bat", "battery_info"),
+            ("get_custom_vars", "custom_vars"),
+            ("get_autoadd_config", "auto_add_config"),
+        ):
+            method = getattr(commands, method_name, None)
+            if method is None:
+                continue
+            try:
+                async with hardware_lock:
+                    extra = await method()
+                if extra.type != EventType.ERROR:
+                    settings[key] = extra.payload or {}
+            except Exception as error:
+                log_to_dash(f"Optional {key} read failed: {error}")
+        get_path_hash = getattr(commands, "get_path_hash_mode", None)
+        if get_path_hash:
+            try:
+                async with hardware_lock:
+                    settings["path_hash_mode"] = await get_path_hash()
+            except Exception as error:
+                log_to_dash(f"Optional path hash read failed: {error}")
+        return web.json_response(settings)
     except Exception as error:
         log_to_dash(f"Device settings read error: {error}")
         return web.json_response({"error": str(error)}, status=502)
@@ -2043,6 +2213,34 @@ async def update_device_settings_handler(request):
             if current_result.type == EventType.ERROR:
                 return web.json_response({"error": str(current_result.payload)}, status=502)
             current = current_result.payload
+            device_query = getattr(commands, "send_device_query", None)
+            if device_query:
+                device_info = await device_query()
+                if device_info.type != EventType.ERROR:
+                    current["repeat"] = (device_info.payload or {}).get("repeat")
+            tuning = getattr(commands, "get_tuning", None)
+            if tuning:
+                tuning_result = await tuning()
+                if tuning_result.type != EventType.ERROR:
+                    current.update(tuning_result.payload or {})
+            get_auto_add = getattr(commands, "get_autoadd_config", None)
+            if get_auto_add:
+                auto_add_result = await get_auto_add()
+                if auto_add_result.type != EventType.ERROR:
+                    current["auto_add_flags"] = (auto_add_result.payload or {}).get("config", 0)
+            get_path_hash = getattr(commands, "get_path_hash_mode", None)
+            if get_path_hash:
+                current["path_hash_mode"] = await get_path_hash()
+            get_custom_vars = getattr(commands, "get_custom_vars", None)
+            if get_custom_vars:
+                custom_result = await get_custom_vars()
+                if custom_result.type != EventType.ERROR:
+                    custom_vars = custom_result.payload or {}
+                    current["gps_enabled"] = custom_vars.get("gps") == "1"
+                    try:
+                        current["gps_interval"] = int(custom_vars.get("gps_interval", 0)) or None
+                    except (TypeError, ValueError):
+                        current["gps_interval"] = None
             updated = validate_device_settings(current, values)
 
             if updated["name"] != current.get("name"):
@@ -2050,19 +2248,90 @@ async def update_device_settings_handler(request):
                 if result.type == EventType.ERROR:
                     raise RuntimeError(str(result.payload))
 
-            radio_keys = ("radio_freq", "radio_bw", "radio_sf", "radio_cr")
+            radio_keys = ("radio_freq", "radio_bw", "radio_sf", "radio_cr", "repeat")
             if any(updated[key] != current.get(key) for key in radio_keys):
                 result = await commands.set_radio(
                     updated["radio_freq"],
                     updated["radio_bw"],
                     updated["radio_sf"],
                     updated["radio_cr"],
+                    repeat=updated["repeat"] if current.get("repeat") is not None else None,
                 )
                 if result.type == EventType.ERROR:
                     raise RuntimeError(str(result.payload))
 
             if updated["tx_power"] != current.get("tx_power"):
                 result = await commands.set_tx_power(updated["tx_power"])
+                if result.type == EventType.ERROR:
+                    raise RuntimeError(str(result.payload))
+
+            if any(
+                updated[key] != current.get(key)
+                for key in ("adv_lat", "adv_lon")
+            ):
+                result = await commands.set_coords(updated["adv_lat"], updated["adv_lon"])
+                if result.type == EventType.ERROR:
+                    raise RuntimeError(str(result.payload))
+
+            if current.get("rx_delay") is not None and current.get("airtime_factor") is not None and any(
+                updated[key] != current.get(key)
+                for key in ("rx_delay", "airtime_factor")
+            ):
+                result = await commands.set_tuning(
+                    updated["rx_delay"], updated["airtime_factor"]
+                )
+                if result.type == EventType.ERROR:
+                    raise RuntimeError(str(result.payload))
+
+            other_keys = (
+                "manual_add_contacts", "telemetry_mode_base", "telemetry_mode_loc",
+                "telemetry_mode_env", "adv_loc_policy", "multi_acks",
+            )
+            if any(updated[key] != current.get(key) for key in other_keys):
+                set_other = getattr(commands, "set_other_params_from_infos", None)
+                if set_other is None:
+                    set_other = commands.set_other_params
+                    result = await set_other(
+                        updated["manual_add_contacts"],
+                        updated["telemetry_mode_base"],
+                        updated["telemetry_mode_loc"],
+                        updated["telemetry_mode_env"],
+                        updated["adv_loc_policy"],
+                    )
+                else:
+                    result = await set_other(updated)
+                if result.type == EventType.ERROR:
+                    raise RuntimeError(str(result.payload))
+
+            if updated.get("device_pin") not in (None, ""):
+                result = await commands.set_devicepin(int(updated["device_pin"]))
+                if result.type == EventType.ERROR:
+                    raise RuntimeError(str(result.payload))
+
+            if "gps_enabled" in values:
+                result = await commands.set_custom_var(
+                    "gps", "1" if updated["gps_enabled"] else "0"
+                )
+                if result.type == EventType.ERROR:
+                    raise RuntimeError(str(result.payload))
+            if updated.get("gps_interval") not in (None, ""):
+                result = await commands.set_custom_var(
+                    "gps_interval", str(updated["gps_interval"])
+                )
+                if result.type == EventType.ERROR:
+                    raise RuntimeError(str(result.payload))
+            if "auto_add_flags" in values:
+                set_auto_add = getattr(commands, "set_autoadd_config", None)
+                if set_auto_add is None:
+                    raise RuntimeError("This MeshCore version cannot edit auto-add settings")
+                result = await set_auto_add(updated["auto_add_flags"])
+                if result.type == EventType.ERROR:
+                    raise RuntimeError(str(result.payload))
+            if "path_hash_mode" in values:
+                set_path_hash = getattr(commands, "set_path_hash_mode", None)
+                if set_path_hash is None:
+                    raise RuntimeError("This MeshCore version cannot edit path hash mode")
+                result = await set_path_hash(updated["path_hash_mode"])
                 if result.type == EventType.ERROR:
                     raise RuntimeError(str(result.payload))
 
@@ -2075,6 +2344,98 @@ async def update_device_settings_handler(request):
     except Exception as error:
         log_to_dash(f"Device settings update error: {error}")
         return web.json_response({"error": str(error)}, status=409)
+
+
+async def device_action_handler(request):
+    if not meshcore_instance or not app_state["is_connected"]:
+        return web.json_response({"error": "MeshCore is not connected"}, status=503)
+    try:
+        payload = await request.json()
+        action = payload.get("action")
+        commands = meshcore_instance.commands
+        async with hardware_lock:
+            if action == "sync_time":
+                result = await commands.set_time(int(datetime.now().timestamp()))
+            elif action == "reboot":
+                result = await commands.reboot()
+            elif action == "stats":
+                stats_type = payload.get("stats_type", "radio")
+                methods = {
+                    "core": "get_stats_core",
+                    "radio": "get_stats_radio",
+                    "packets": "get_stats_packets",
+                }
+                method = getattr(commands, methods.get(stats_type, ""), None)
+                if method is None:
+                    return web.json_response({"error": "This firmware does not support these statistics"}, status=501)
+                result = await method()
+            elif action == "telemetry":
+                method = getattr(commands, "get_self_telemetry", None)
+                if method is None:
+                    return web.json_response({"error": "This firmware does not support telemetry"}, status=501)
+                result = await method()
+            elif action == "delete_paths":
+                reset_path = getattr(commands, "reset_path", None)
+                if reset_path is None:
+                    return web.json_response({"error": "This MeshCore version cannot reset paths"}, status=501)
+                count = 0
+                for entry in app_state["contacts"].values():
+                    contact = entry.get("contact", entry) if isinstance(entry, dict) else {}
+                    public_key = contact.get("public_key") if isinstance(contact, dict) else None
+                    if not public_key:
+                        continue
+                    result = await reset_path(public_key)
+                    if result.type == EventType.ERROR:
+                        raise RuntimeError(str(result.payload))
+                    count += 1
+                return web.json_response({"message": f"Reset paths for {count} contacts."})
+            elif action == "refresh_contacts":
+                result = await commands.get_contacts()
+                if result.type != EventType.ERROR:
+                    app_state["contacts"] = normalize_entries(result.payload)
+                    return web.json_response({"message": f"Loaded {len(app_state['contacts'])} contacts."})
+            else:
+                return web.json_response({"error": "Unknown device action"}, status=400)
+        if result.type == EventType.ERROR:
+            return web.json_response({"error": str(result.payload)}, status=502)
+        return web.json_response({"message": "Device action completed.", "result": result.payload})
+    except Exception as error:
+        log_to_dash(f"Device action failed: {error}")
+        return web.json_response({"error": str(error)}, status=502)
+
+
+async def device_gpx_export_handler(request):
+    export_type = request.query.get("type", "all")
+    if export_type not in {"repeaters", "contacts", "all"}:
+        return web.json_response({"error": "Unknown GPX export type"}, status=400)
+
+    root = ET.Element("gpx", {"version": "1.1", "creator": "MeshCore Dashboard", "xmlns": "http://www.topografix.com/GPX/1/1"})
+    count = 0
+    for node_id, entry in app_state["contacts"].items():
+        contact = entry.get("contact", entry) if isinstance(entry, dict) else {}
+        if not isinstance(contact, dict):
+            contact = {}
+        node_type = contact.get("type", entry.get("type") if isinstance(entry, dict) else None)
+        if export_type == "repeaters" and str(node_type) != "2":
+            continue
+        if export_type == "contacts" and str(node_type) == "2":
+            continue
+        coordinates = coordinates_from_entry(entry)
+        if not coordinates:
+            continue
+        waypoint = ET.SubElement(root, "wpt", {"lat": f"{coordinates[0]:.7f}", "lon": f"{coordinates[1]:.7f}"})
+        ET.SubElement(waypoint, "name").text = display_name(node_id, entry)
+        ET.SubElement(waypoint, "type").text = {"1": "User", "2": "Repeater", "3": "Room server", "4": "Sensor"}.get(str(node_type), "MeshCore peer")
+        count += 1
+    if not count:
+        return web.json_response({"error": "No contacts with coordinates are available to export"}, status=404)
+    content = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    filename = f"meshcore_{export_type}.gpx"
+    return web.Response(
+        body=content,
+        content_type="application/gpx+xml",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 async def connect_handler(request):
@@ -2176,17 +2537,21 @@ async def on_cleanup(app):
 def create_app():
     app = web.Application()
     app.router.add_get("/", index_handler)
+    app.router.add_get("/dashboard-logo.png", dashboard_logo_handler)
     app.router.add_get("/api/status", status_handler)
     app.router.add_get("/api/config", config_handler)
     app.router.add_patch("/api/config", update_config_handler)
     app.router.add_get("/api/local-weather", local_weather_handler)
     app.router.add_post("/api/restart", restart_dashboard_handler)
+    app.router.add_post("/api/update", update_app_handler)
     app.router.add_get("/api/peers", peers_handler)
     app.router.add_get("/api/peer-telemetry", peer_telemetry_handler)
     app.router.add_get("/api/scan/bluetooth", bluetooth_scan_handler)
     app.router.add_get("/api/scan/serial", serial_scan_handler)
     app.router.add_get("/api/chat-history", chat_history_handler)
     app.router.add_get("/api/device-settings", device_settings_handler)
+    app.router.add_post("/api/device-settings/action", device_action_handler)
+    app.router.add_get("/api/device-settings/export", device_gpx_export_handler)
     app.router.add_post("/api/connect", connect_handler)
     app.router.add_post("/api/disconnect", disconnect_handler)
     app.router.add_post("/api/transmit", transmit_handler)
