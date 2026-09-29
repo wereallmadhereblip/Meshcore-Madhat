@@ -9,10 +9,12 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from bleak import BleakScanner
@@ -294,6 +296,27 @@ connection_lock = asyncio.Lock()
 # Sending back-to-back before the radio finishes the previous transmit
 # trips firmware's ERR_CODE_BAD_STATE, so pace multi-part replies.
 HARDWARE_SEND_INTERVAL = 1.5
+# The firmware also returns ERR_CODE_BAD_STATE (or drops the response
+# entirely) when a new command lands too soon after the previous one, even
+# for unrelated commands like get_contacts/get_channel, so every command
+# needs to wait out this gap since the last one finished.
+HARDWARE_COMMAND_MIN_INTERVAL = 0.4
+_last_hardware_command_at = 0.0
+
+
+@asynccontextmanager
+async def paced_hardware_lock():
+    global _last_hardware_command_at
+    async with hardware_lock:
+        wait = HARDWARE_COMMAND_MIN_INTERVAL - (time.monotonic() - _last_hardware_command_at)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        try:
+            yield
+        finally:
+            _last_hardware_command_at = time.monotonic()
+
+
 conversation_history = defaultdict(list)
 chat_history = defaultdict(list)
 processed_messages = set()
@@ -589,7 +612,7 @@ async def refresh_contacts():
     if not meshcore_instance or not app_state["is_connected"]:
         return
     try:
-        async with hardware_lock:
+        async with paced_hardware_lock():
             result = await meshcore_instance.commands.get_contacts()
         if result.type != EventType.ERROR:
             app_state["contacts"] = normalize_entries(result.payload)
@@ -620,7 +643,7 @@ async def refresh_channels():
                 # many empty channels doesn't block message sends for tens
                 # of seconds. BLE round-trips can exceed a second right after
                 # connecting, so allow more slack than the 1s used previously.
-                async with hardware_lock:
+                async with paced_hardware_lock():
                     result = await asyncio.wait_for(
                         getter(channel_index),
                         timeout=3.0,
@@ -679,7 +702,7 @@ async def refresh_gateway_telemetry():
 
     if request_self_telemetry is not None:
         try:
-            async with hardware_lock:
+            async with paced_hardware_lock():
                 result = await request_self_telemetry()
 
             if result.type != EventType.ERROR:
@@ -690,7 +713,7 @@ async def refresh_gateway_telemetry():
 
     if request_self_info is not None:
         try:
-            async with hardware_lock:
+            async with paced_hardware_lock():
                 result = await request_self_info()
             if result.type != EventType.ERROR and result.payload:
                 latitude = result.payload.get("adv_lat")
@@ -708,7 +731,7 @@ async def refresh_gateway_telemetry():
 
     if request_battery is not None:
         try:
-            async with hardware_lock:
+            async with paced_hardware_lock():
                 result = await request_battery()
 
             if (
@@ -1084,7 +1107,7 @@ async def handle_incoming_message(event):
     log_to_dash(f"AI reply: {reply}")
     reply_parts = split_reply_into_messages(reply, max_parts=current_reply_packet_limit())
 
-    async with hardware_lock:
+    async with paced_hardware_lock():
         try:
             contacts = await meshcore_instance.commands.get_contacts()
             recipient = sender
@@ -1164,7 +1187,7 @@ async def handle_incoming_channel_message(event):
         max_parts=current_reply_packet_limit(),
     )
 
-    async with hardware_lock:
+    async with paced_hardware_lock():
         try:
             for part_number, part in enumerate(reply_parts, start=1):
                 if part_number > 1:
@@ -1216,7 +1239,7 @@ async def handle_new_contact(event):
     prefix = f"{bot_settings['name']}: "
     greeting_parts = split_reply_into_messages(greeting, prefix=prefix)
     announced_contact_adverts[str(public_key)] = advert_timestamp
-    async with hardware_lock:
+    async with paced_hardware_lock():
         first_send = True
         for channel in channels:
             for part in greeting_parts:
@@ -2122,7 +2145,7 @@ async def peer_telemetry_handler(request):
         return web.json_response({"error": "This MeshCore version cannot request peer telemetry"}, status=501)
 
     try:
-        async with hardware_lock:
+        async with paced_hardware_lock():
             telemetry = await asyncio.wait_for(
                 request_telemetry(contact, min_timeout=8),
                 timeout=20,
@@ -2239,7 +2262,7 @@ async def device_settings_handler(request):
         return web.json_response({"error": "MeshCore is not connected"}, status=503)
 
     try:
-        async with hardware_lock:
+        async with paced_hardware_lock():
             result = await meshcore_instance.commands.send_appstart()
         if result.type == EventType.ERROR:
             return web.json_response({"error": str(result.payload)}, status=502)
@@ -2247,7 +2270,7 @@ async def device_settings_handler(request):
         get_tuning = getattr(meshcore_instance.commands, "get_tuning", None)
         if get_tuning:
             try:
-                async with hardware_lock:
+                async with paced_hardware_lock():
                     tuning = await get_tuning()
                 if tuning.type != EventType.ERROR:
                     settings.update(tuning.payload or {})
@@ -2264,7 +2287,7 @@ async def device_settings_handler(request):
             if method is None:
                 continue
             try:
-                async with hardware_lock:
+                async with paced_hardware_lock():
                     extra = await method()
                 if extra.type != EventType.ERROR:
                     settings[key] = extra.payload or {}
@@ -2273,7 +2296,7 @@ async def device_settings_handler(request):
         get_path_hash = getattr(commands, "get_path_hash_mode", None)
         if get_path_hash:
             try:
-                async with hardware_lock:
+                async with paced_hardware_lock():
                     settings["path_hash_mode"] = await get_path_hash()
             except Exception as error:
                 log_to_dash(f"Optional path hash read failed: {error}")
@@ -2293,7 +2316,7 @@ async def update_device_settings_handler(request):
         return web.json_response({"error": "Invalid JSON"}, status=400)
 
     try:
-        async with hardware_lock:
+        async with paced_hardware_lock():
             commands = meshcore_instance.commands
             current_result = await commands.send_appstart()
             if current_result.type == EventType.ERROR:
@@ -2439,7 +2462,7 @@ async def device_action_handler(request):
         payload = await request.json()
         action = payload.get("action")
         commands = meshcore_instance.commands
-        async with hardware_lock:
+        async with paced_hardware_lock():
             if action == "sync_time":
                 result = await commands.set_time(int(datetime.now().timestamp()))
             elif action == "reboot":
@@ -2584,7 +2607,7 @@ async def transmit_handler(request):
         return web.json_response({"error": "MeshCore is not connected"}, status=503)
 
     try:
-        async with hardware_lock:
+        async with paced_hardware_lock():
             result = await send_to_target(target, target_type, message)
         if result.type == EventType.ERROR:
             return web.json_response({"error": str(result.payload)}, status=500)
