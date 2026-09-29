@@ -37,6 +37,7 @@ DEFAULT_BOT_NAME = "MeshCore Assistant"
 DEFAULT_BOT_PERSONALITY = "helpful, friendly, and concise"
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
 BOT_SETTINGS_PATH = CONFIG_DIR / "meshcore-ollama-bot" / "bot_settings.json"
+CHAT_HISTORY_PATH = CONFIG_DIR / "meshcore-ollama-bot" / "chat_history.json"
 CONFIG_FILE_PATH = Path(__file__).resolve().with_name("config.json")
 AVAILABLE_THEMES = {"midnight", "light", "ocean", "amber", "linux", "macos", "cyberpunk"}
 TIME_OF_DAY_PATTERN = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
@@ -347,11 +348,69 @@ async def paced_hardware_lock():
 
 conversation_history = defaultdict(list)
 chat_history = defaultdict(list)
+chat_metadata = {}
 processed_messages = set()
 pending_weather_requests = set()
 announced_contact_adverts = {}
 meshcore_instance = None
 ollama_process = None
+
+
+def load_chat_store():
+    try:
+        saved_store = json.loads(CHAT_HISTORY_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(saved_store, dict):
+        return
+
+    saved_chats = saved_store.get("chats", {})
+    if isinstance(saved_chats, dict):
+        for key, messages in saved_chats.items():
+            if not isinstance(key, str) or not key.startswith(("node:", "channel:")):
+                continue
+            if not isinstance(messages, list):
+                continue
+            valid_messages = [
+                message for message in messages[-100:]
+                if isinstance(message, dict)
+                and message.get("direction") in {"incoming", "outgoing"}
+                and isinstance(message.get("text"), str)
+            ]
+            if valid_messages:
+                chat_history[key] = valid_messages
+
+    saved_metadata = saved_store.get("metadata", {})
+    if isinstance(saved_metadata, dict):
+        for key, metadata in saved_metadata.items():
+            if (
+                isinstance(key, str)
+                and key.startswith(("node:", "channel:"))
+                and isinstance(metadata, dict)
+            ):
+                chat_metadata[key] = {
+                    "archived": metadata.get("archived") is True,
+                    "pinned": metadata.get("pinned") is True,
+                }
+
+
+def save_chat_store():
+    temporary_path = CHAT_HISTORY_PATH.with_suffix(".json.tmp")
+    store = {
+        "chats": dict(chat_history),
+        "metadata": chat_metadata,
+    }
+    try:
+        CHAT_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path.write_text(json.dumps(store, indent=2) + "\n", encoding="utf-8")
+        temporary_path.replace(CHAT_HISTORY_PATH)
+    except OSError as error:
+        log_to_dash(f"Failed to save chat history: {error}")
+        return False
+    return True
+
+
+load_chat_store()
 
 
 def log_to_dash(message):
@@ -533,16 +592,31 @@ def limit_ai_reply(reply, max_length):
 
 def add_chat_message(target_type, target, direction, text):
     key = chat_key(target_type, target)
+    now = datetime.now()
     message = {
         "direction": direction,
         "text": text,
         "status": "sent" if direction == "outgoing" else "received",
-        "timestamp": datetime.now().strftime("%H:%M:%S"),
-        "sort_timestamp": datetime.now().timestamp(),
+        "timestamp": now.strftime("%H:%M:%S"),
+        "sort_timestamp": now.timestamp(),
     }
     chat_history[key].append(message)
     chat_history[key] = chat_history[key][-100:]
+    save_chat_store()
     return message
+
+
+def update_chat_message_status(message, status):
+    message["status"] = status
+    save_chat_store()
+
+
+def get_chat_metadata(target_type, target):
+    metadata = chat_metadata.get(chat_key(target_type, target), {})
+    return {
+        "archived": metadata.get("archived", False),
+        "pinned": metadata.get("pinned", False),
+    }
 
 
 def parse_lpp_telemetry(telemetry):
@@ -1224,8 +1298,9 @@ async def handle_incoming_message(event):
                     )
                     return
                 sent_message = add_chat_message("node", resolved_sender, "outgoing", part)
-                sent_message["status"] = (
-                    "delivered" if await confirm_delivery(result) else "unconfirmed"
+                update_chat_message_status(
+                    sent_message,
+                    "delivered" if await confirm_delivery(result) else "unconfirmed",
                 )
                 record_trace_event("direct", "outbound", resolved_sender)
             log_to_dash(
@@ -1302,8 +1377,9 @@ async def handle_incoming_channel_message(event):
                 sent_message = add_chat_message(
                     "channel", channel_target, "outgoing", part
                 )
-                sent_message["status"] = (
-                    "delivered" if await confirm_delivery(result) else "unconfirmed"
+                update_chat_message_status(
+                    sent_message,
+                    "delivered" if await confirm_delivery(result) else "unconfirmed",
                 )
                 record_trace_event("channel", "outbound", channel_target)
             log_to_dash(
@@ -1354,8 +1430,9 @@ async def handle_new_contact(event):
                     sent_message = add_chat_message(
                         "channel", channel, "outgoing", part
                     )
-                    sent_message["status"] = (
-                        "delivered" if await confirm_delivery(result) else "unconfirmed"
+                    update_chat_message_status(
+                        sent_message,
+                        "delivered" if await confirm_delivery(result) else "unconfirmed",
                     )
                 except Exception as error:
                     log_to_dash(f"Channel {channel} peer greeting failed: {error}")
@@ -1619,6 +1696,13 @@ button:hover{transform:translateY(-1px);border-color:var(--accent);background:va
 .favorite-toggle{width:34px;min-height:36px;padding:4px;color:var(--muted);font-size:17px}
 .favorite-toggle[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
 .chat-header{display:grid;gap:2px;min-height:38px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+.chat-header-main{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.chat-header-copy{display:grid;min-width:0;gap:2px}
+.chat-actions{position:relative;flex:none}
+.chat-actions summary{list-style:none;cursor:pointer;padding:6px 9px;border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:10px}
+.chat-actions summary::-webkit-details-marker{display:none}
+.chat-action-menu{position:absolute;z-index:5;top:calc(100% + 4px);right:0;display:grid;min-width:145px;padding:4px;border:1px solid var(--border);border-radius:4px;background:var(--panel-bg);box-shadow:0 8px 20px #0004}
+.chat-action-menu button{padding:7px;text-align:left;font-size:10px}
 .chat-header strong{color:var(--text);font-size:13px}
 .chat-header span{color:var(--muted);font-size:10px;overflow-wrap:anywhere}
 .peer-inline-detail{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px 10px;margin:4px 0 0;padding:0}
@@ -1815,12 +1899,14 @@ return nodes}
 function updateMapPeerFilters(){renderKnownPeers();renderMapMarkers()}
 function expandKnownPeerRow(peerId){let row=document.querySelector('#map-node-list .map-node-row[data-peer-id="'+String(peerId).replace(/"/g,'')+'"]');if(!row)return;let target=row.querySelector('.map-peer-target');if(target)target.click()}
 function renderKnownPeers(){let list=document.getElementById('map-node-list');if(!list)return;let peers=sortedFilteredNodes('map-node-sort','map-node-type-filter','map-node-search');list.replaceChildren();if(!peers.length){let empty=document.createElement('div');empty.className='map-empty';empty.textContent=mapNodes.length?'No peers match this filter.':'No peers are available yet. Connect to a MeshCore radio to load contacts.';list.appendChild(empty);return}for(let peer of peers){let row=document.createElement('div');row.className='map-node-row';row.dataset.peerId=String(peer.id);let main=document.createElement('div');main.className='map-node-row-main';let target=document.createElement('button');target.type='button';target.className='map-peer-target';target.title=Number.isFinite(peer.latitude)&&Number.isFinite(peer.longitude)?'Center map and view peer details':'View peer details';let details=document.createElement('div');let name=document.createElement('strong');name.textContent=peer.name;let id=document.createElement('span');id.textContent=String(peer.id);let detailBox=document.createElement('dl');detailBox.className='peer-inline-detail';detailBox.hidden=true;details.append(name,id,detailBox);target.appendChild(details);target.onclick=()=>{if(Number.isFinite(peer.latitude)&&Number.isFinite(peer.longitude))focusMapPoint(peer.latitude,peer.longitude);let willOpen=detailBox.hidden;document.querySelectorAll('#map-node-list .peer-inline-detail').forEach(el=>{if(el!==detailBox)el.hidden=true});if(willOpen)renderPeerDetails(peer.id,detailBox);else detailBox.hidden=true};main.append(target,createNodeFavoriteButton(peer.id));row.appendChild(main);list.appendChild(row)}}
-function renderConversationTargets(type){let isNode=type==='node',items=isNode?sortedFilteredNodes():meshChannels,list=document.getElementById(isNode?'node-target-list':'channel-target-list'),selected=isNode?selectedNodeId:selectedChannelId;list.replaceChildren();if(!items.length){let empty=document.createElement('p');empty.className='map-empty';empty.textContent=isNode?(mapNodes.length?'No nodes match this filter.':'No nodes found. Connect to a MeshCore radio to load contacts.'):'No channels found on this device.';list.appendChild(empty);return}for(let item of items){let button=document.createElement('button');button.type='button';button.className='conversation-target'+(selected===String(item.id)?' active':'');button.onclick=()=>selectConversation(type,item.id);let avatar=document.createElement('span');avatar.className='conversation-avatar';avatar.style.background=hashColor(item.id);avatar.textContent=String(item.name||'?').trim().charAt(0)||'?';let title=document.createElement('strong');title.textContent=item.name;let detail=document.createElement('small');detail.textContent=String(item.id);button.append(avatar,title,detail);if(isNode){let entry=document.createElement('div');entry.className='conversation-entry';entry.append(button,createNodeFavoriteButton(item.id));list.appendChild(entry)}else list.appendChild(button)}}
-function selectConversation(type,id){let normalized=String(id);if(type==='node'){let peer=mapNodes.find(item=>String(item.id)===normalized)||{id:normalized};selectedNodeId=normalized;document.getElementById('node-chat-title').textContent=peer.name||normalized;document.getElementById('node-chat-detail').textContent=peerSummary(peer);document.getElementById('node-send').disabled=false;renderConversationTargets('node');history('node',normalized,'node-chat-history');renderPeerDetails(normalized,document.getElementById('node-peer-details'))}else{let channel=meshChannels.find(item=>String(item.id)===normalized)||{id:normalized};selectedChannelId=normalized;document.getElementById('channel-chat-title').textContent=channel.name||'Channel '+normalized;document.getElementById('channel-chat-detail').textContent='Channel '+normalized;document.getElementById('channel-send').disabled=false;renderConversationTargets('channel');history('channel',normalized,'channel-chat-history')}}
+function updateConversationMenu(type,metadata={}){let prefix=type==='node'?'node':'channel',clear=document.getElementById(prefix+'-clear-action'),archive=document.getElementById(prefix+'-archive-action'),pin=document.getElementById(prefix+'-pin-action'),enabled=Boolean(type==='node'?selectedNodeId:selectedChannelId);clear.disabled=!enabled;archive.disabled=!enabled;pin.disabled=!enabled;archive.textContent=metadata.archived?'Unarchive chat':'Archive chat';pin.textContent=metadata.pinned?'Unpin chat':'Pin chat'}
+function renderConversationTargets(type){let isNode=type==='node',filter=document.getElementById(isNode?'node-chat-filter':'channel-chat-filter').value,items=[...(isNode?sortedFilteredNodes():meshChannels)].filter(item=>filter==='all'||(filter==='archived'?Boolean(item.archived):!item.archived)),list=document.getElementById(isNode?'node-target-list':'channel-target-list'),selected=isNode?selectedNodeId:selectedChannelId;items.sort((left,right)=>Number(Boolean(left.archived))-Number(Boolean(right.archived))||Number(Boolean(right.pinned))-Number(Boolean(left.pinned)));list.replaceChildren();if(!items.length){let empty=document.createElement('p');empty.className='map-empty';empty.textContent=filter==='archived'?'No archived chats.':(isNode?(mapNodes.length?'No nodes match this filter.':'No nodes found. Connect to a MeshCore radio to load contacts.'):'No channels found on this device.');list.appendChild(empty);return}for(let item of items){let button=document.createElement('button');button.type='button';button.className='conversation-target'+(selected===String(item.id)?' active':'');button.onclick=()=>selectConversation(type,item.id);let avatar=document.createElement('span');avatar.className='conversation-avatar';avatar.style.background=hashColor(item.id);avatar.textContent=String(item.name||'?').trim().charAt(0)||'?';let title=document.createElement('strong');title.textContent=item.name;let detail=document.createElement('small');detail.textContent=[item.pinned?'Pinned':'',item.archived?'Archived':'',String(item.id)].filter(Boolean).join(' · ');button.append(avatar,title,detail);if(isNode){let entry=document.createElement('div');entry.className='conversation-entry';entry.append(button,createNodeFavoriteButton(item.id));list.appendChild(entry)}else list.appendChild(button)}}
+function selectConversation(type,id){let normalized=String(id);if(type==='node'){let peer=mapNodes.find(item=>String(item.id)===normalized)||{id:normalized};selectedNodeId=normalized;document.getElementById('node-chat-title').textContent=peer.name||normalized;document.getElementById('node-chat-detail').textContent=peerSummary(peer);document.getElementById('node-send').disabled=false;updateConversationMenu('node',peer);renderConversationTargets('node');history('node',normalized,'node-chat-history');renderPeerDetails(normalized,document.getElementById('node-peer-details'))}else{let channel=meshChannels.find(item=>String(item.id)===normalized)||{id:normalized};selectedChannelId=normalized;document.getElementById('channel-chat-title').textContent=channel.name||'Channel '+normalized;document.getElementById('channel-chat-detail').textContent='Channel '+normalized;document.getElementById('channel-send').disabled=false;updateConversationMenu('channel',channel);renderConversationTargets('channel');history('channel',normalized,'channel-chat-history')}}
 function renderAnalyzerStats(){let located=mapNodes.filter(peer=>Number.isFinite(peer.latitude)&&Number.isFinite(peer.longitude)).length;document.getElementById('analyzer-nodes').textContent=String(mapNodes.length);document.getElementById('analyzer-channels').textContent=String(meshChannels.length);document.getElementById('analyzer-located').textContent=String(located)}
 async function peers(){let r=await fetch('/api/peers'),d=await r.json();gatewayTelemetry=d.gateway_telemetry||{};mapNodes=d.nodes||[];meshChannels=d.channels||[];gateway_battery.textContent=gatewayTelemetry.battery!=null?gatewayTelemetry.battery+'%':'Unavailable';if(!mapNodes.some(item=>String(item.id)===selectedNodeId))selectedNodeId='';if(!meshChannels.some(item=>String(item.id)===selectedChannelId))selectedChannelId='';renderConversationTargets('node');renderConversationTargets('channel');renderMapNodes();renderKnownPeers();renderAnalyzerStats();if(liveTraceMap)renderLiveTraceMarkers()}
 function parseChannelSender(text){let bracket=text.match(/^\[([^\]]{1,24})\]\s*/);if(bracket)return bracket[1];let colon=text.match(/^([A-Za-z0-9 _-]{1,24}):\s/);if(colon)return colon[1];return null}
-async function history(type,id,boxId){let box=document.getElementById(boxId);if(!id){box.replaceChildren();return}try{let response=await fetch('/api/chat-history?target_type='+encodeURIComponent(type)+'&target='+encodeURIComponent(id)),data=await response.json();if(!response.ok)throw new Error(data.error||'Message history could not be loaded');box.replaceChildren();let peerName=type==='node'?(mapNodes.find(item=>String(item.id)===id)?.name||id):(meshChannels.find(item=>String(item.id)===id)?.name||('Channel '+id));for(let message of data.messages||[]){let outgoing=message.direction==='outgoing';let item=document.createElement('div');item.className='chat-message '+(outgoing?'outgoing':'incoming');let sender=outgoing?'You':(type==='channel'?(parseChannelSender(message.text)||peerName):peerName);let meta=document.createElement('div');meta.className='chat-message-meta';let avatar=document.createElement('span');avatar.className='chat-avatar';avatar.style.background=hashColor(outgoing?'you':id);avatar.textContent=sender.charAt(0)||'?';let senderLabel=document.createElement('span');senderLabel.className='chat-sender';senderLabel.textContent=sender;let time=document.createElement('span');time.className='chat-time';time.textContent=message.timestamp;let status=document.createElement('span');status.className='chat-status';let statusLabels={sent:'Sent',delivered:'Delivered',unconfirmed:'Sent (not confirmed)',received:'Received'};status.textContent=statusLabels[message.status]||statusLabels[outgoing?'sent':'received'];meta.append(avatar,senderLabel,time,status);let body=document.createElement('div');body.className='chat-message-body';body.textContent=message.text;item.append(meta,body);box.appendChild(item)}box.scrollTop=box.scrollHeight}catch(error){box.textContent=error.message}}
+async function history(type,id,boxId){let box=document.getElementById(boxId);if(!id){box.replaceChildren();updateConversationMenu(type);return}try{let response=await fetch('/api/chat-history?target_type='+encodeURIComponent(type)+'&target='+encodeURIComponent(id)),data=await response.json();if(!response.ok)throw new Error(data.error||'Message history could not be loaded');updateConversationMenu(type,data.metadata||{});box.replaceChildren();let peerName=type==='node'?(mapNodes.find(item=>String(item.id)===id)?.name||id):(meshChannels.find(item=>String(item.id)===id)?.name||('Channel '+id));for(let message of data.messages||[]){let outgoing=message.direction==='outgoing';let item=document.createElement('div');item.className='chat-message '+(outgoing?'outgoing':'incoming');let sender=outgoing?'You':(type==='channel'?(parseChannelSender(message.text)||peerName):peerName);let meta=document.createElement('div');meta.className='chat-message-meta';let avatar=document.createElement('span');avatar.className='chat-avatar';avatar.style.background=hashColor(outgoing?'you':id);avatar.textContent=sender.charAt(0)||'?';let senderLabel=document.createElement('span');senderLabel.className='chat-sender';senderLabel.textContent=sender;let time=document.createElement('span');time.className='chat-time';time.textContent=message.timestamp;let status=document.createElement('span');status.className='chat-status';let statusLabels={sent:'Sent',delivered:'Delivered',unconfirmed:'Sent (not confirmed)',received:'Received'};status.textContent=statusLabels[message.status]||statusLabels[outgoing?'sent':'received'];meta.append(avatar,senderLabel,time,status);let body=document.createElement('div');body.className='chat-message-body';body.textContent=message.text;item.append(meta,body);box.appendChild(item)}box.scrollTop=box.scrollHeight}catch(error){box.textContent=error.message}}
+async function manageConversation(type,action){let selected=type==='node'?selectedNodeId:selectedChannelId;if(!selected)return;if(action==='clear'&&!confirm('Clear this conversation history? This cannot be undone.'))return;let response=await fetch('/api/chat-management',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_type:type,target:selected,action})}),data=await response.json();if(!response.ok){alert(data.error||'Conversation could not be updated');return}let menu=document.querySelector('#'+(type==='node'?'node':'channel')+'-chat-options');if(menu)menu.open=false;await history(type,selected,type==='node'?'node-chat-history':'channel-chat-history');await peers()}
 function selectNode(id){selectConversation('node',id)}
 function selectChannel(id){selectConversation('channel',id)}
 function refreshActiveHistory(){if(activeView==='nodes'&&selectedNodeId)history('node',selectedNodeId,'node-chat-history');if(activeView==='channels'&&selectedChannelId)history('channel',selectedChannelId,'channel-chat-history')}
@@ -1858,14 +1944,14 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 </main>
 <main id="nodes-view" class="view-panel page-view" hidden>
 <div class="messages-layout">
-<aside class="card conversation-rail"><div class="panel-heading"><div><span class="eyebrow">DIRECT MESSAGES</span><h2>Nodes</h2></div><span class="panel-index">02</span></div><div class="conversation-filters"><label for="node-search" class="node-search-label">Search<input type="search" id="node-search" placeholder="Filter by name or ID" oninput="renderConversationTargets('node')"></label><label for="node-sort">Sort<select id="node-sort" onchange="renderConversationTargets('node')"><option value="az">A-Z</option><option value="heard">Heard recently</option><option value="messages">Latest messages</option></select></label><label for="node-type-filter">Type<select id="node-type-filter" onchange="renderConversationTargets('node')"><option value="all">All</option><option value="favorites">Favorites</option><option value="users">Users</option><option value="repeaters">Repeaters</option><option value="room-servers">Room servers</option><option value="sensors">Sensors</option></select></label></div><div class="conversation-target-list" id="node-target-list"><p class="map-empty">Waiting for nodes...</p></div></aside>
-<section class="card chat-panel"><div class="chat-header"><strong id="node-chat-title">Select a node</strong><span id="node-chat-detail">Choose a node to view its conversation.</span><dl id="node-peer-details" class="peer-inline-detail" hidden aria-live="polite"></dl></div><div id="node-chat-history"></div><form onsubmit="sendMessage(event,'node','node-message','node-chat-history')"><input id="node-message" maxlength="100" placeholder="Message selected node" required><button id="node-send" disabled>Send to Node</button></form></section>
+<aside class="card conversation-rail"><div class="panel-heading"><div><span class="eyebrow">DIRECT MESSAGES</span><h2>Nodes</h2></div><span class="panel-index">02</span></div><div class="conversation-filters"><label for="node-search" class="node-search-label">Search<input type="search" id="node-search" placeholder="Filter by name or ID" oninput="renderConversationTargets('node')"></label><label for="node-sort">Sort<select id="node-sort" onchange="renderConversationTargets('node')"><option value="az">A-Z</option><option value="heard">Heard recently</option><option value="messages">Latest messages</option></select></label><label for="node-type-filter">Type<select id="node-type-filter" onchange="renderConversationTargets('node')"><option value="all">All</option><option value="favorites">Favorites</option><option value="users">Users</option><option value="repeaters">Repeaters</option><option value="room-servers">Room servers</option><option value="sensors">Sensors</option></select></label><label for="node-chat-filter">Chats<select id="node-chat-filter" onchange="renderConversationTargets('node')"><option value="active">Active</option><option value="archived">Archived</option><option value="all">All</option></select></label></div><div class="conversation-target-list" id="node-target-list"><p class="map-empty">Waiting for nodes...</p></div></aside>
+<section class="card chat-panel"><div class="chat-header"><div class="chat-header-main"><div class="chat-header-copy"><strong id="node-chat-title">Select a node</strong><span id="node-chat-detail">Choose a node to view its conversation.</span></div><details class="chat-actions" id="node-chat-options"><summary aria-label="Node chat options">Options</summary><div class="chat-action-menu"><button id="node-clear-action" type="button" disabled onclick="manageConversation('node','clear')">Clear chat</button><button id="node-archive-action" type="button" disabled onclick="manageConversation('node','archive')">Archive chat</button><button id="node-pin-action" type="button" disabled onclick="manageConversation('node','pin')">Pin chat</button></div></details></div><dl id="node-peer-details" class="peer-inline-detail" hidden aria-live="polite"></dl></div><div id="node-chat-history"></div><form onsubmit="sendMessage(event,'node','node-message','node-chat-history')"><input id="node-message" maxlength="100" placeholder="Message selected node" required><button id="node-send" disabled>Send to Node</button></form></section>
 </div>
 </main>
 <main id="channels-view" class="view-panel page-view" hidden>
 <div class="messages-layout">
-<aside class="card conversation-rail"><div class="panel-heading"><div><span class="eyebrow">SHARED FREQUENCY</span><h2>Channels</h2></div><span class="panel-index">03</span></div><div class="conversation-target-list" id="channel-target-list"><p class="map-empty">Waiting for channels...</p></div></aside>
-<section class="card chat-panel"><div class="chat-header"><strong id="channel-chat-title">Select a channel</strong><span id="channel-chat-detail">Choose a channel to view its conversation.</span></div><div id="channel-chat-history"></div><form onsubmit="sendMessage(event,'channel','channel-message','channel-chat-history')"><input id="channel-message" maxlength="100" placeholder="Message selected channel" required><button id="channel-send" disabled>Send to Channel</button></form></section>
+<aside class="card conversation-rail"><div class="panel-heading"><div><span class="eyebrow">SHARED FREQUENCY</span><h2>Channels</h2></div><span class="panel-index">03</span></div><div class="conversation-filters"><label for="channel-chat-filter">Chats<select id="channel-chat-filter" onchange="renderConversationTargets('channel')"><option value="active">Active</option><option value="archived">Archived</option><option value="all">All</option></select></label></div><div class="conversation-target-list" id="channel-target-list"><p class="map-empty">Waiting for channels...</p></div></aside>
+<section class="card chat-panel"><div class="chat-header"><div class="chat-header-main"><div class="chat-header-copy"><strong id="channel-chat-title">Select a channel</strong><span id="channel-chat-detail">Choose a channel to view its conversation.</span></div><details class="chat-actions" id="channel-chat-options"><summary aria-label="Channel chat options">Options</summary><div class="chat-action-menu"><button id="channel-clear-action" type="button" disabled onclick="manageConversation('channel','clear')">Clear chat</button><button id="channel-archive-action" type="button" disabled onclick="manageConversation('channel','archive')">Archive chat</button><button id="channel-pin-action" type="button" disabled onclick="manageConversation('channel','pin')">Pin chat</button></div></details></div><div id="channel-chat-history"></div><form onsubmit="sendMessage(event,'channel','channel-message','channel-chat-history')"><input id="channel-message" maxlength="100" placeholder="Message selected channel" required><button id="channel-send" disabled>Send to Channel</button></form></section>
 </div>
 </main>
 <main id="analyzer-view" class="view-panel page-view" hidden>
@@ -2243,6 +2329,7 @@ async def peers_handler(request):
         nodes.append({
             "id": str(node_id),
             "name": display_name(node_id, entry),
+            **get_chat_metadata("node", str(node_id)),
             "public_key": contact.get("public_key", str(node_id)),
             "type": contact.get("type", entry.get("type") if isinstance(entry, dict) else None),
             "last_heard": contact.get("last_advert", contact.get("last_heard", 0)),
@@ -2253,7 +2340,11 @@ async def peers_handler(request):
     return web.json_response({
         "nodes": nodes,
         "channels": [
-            {"id": str(i), "name": display_name(i, value)}
+            {
+                "id": str(i),
+                "name": display_name(i, value),
+                **get_chat_metadata("channel", str(i)),
+            }
             for i, value in app_state["channels"].items()
         ],
         "gateway_telemetry": app_state["gateway_telemetry"],
@@ -2317,7 +2408,44 @@ async def peer_telemetry_handler(request):
 async def chat_history_handler(request):
     target_type = request.query.get("target_type", "node")
     target = request.query.get("target", "")
-    return web.json_response({"messages": chat_history.get(chat_key(target_type, target), [])})
+    if target_type not in {"node", "channel"} or not target:
+        return web.json_response({"error": "A valid conversation target is required"}, status=400)
+    return web.json_response({
+        "messages": chat_history.get(chat_key(target_type, target), []),
+        "metadata": get_chat_metadata(target_type, target),
+    })
+
+
+async def manage_chat_handler(request):
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+    if not isinstance(data, dict):
+        return web.json_response({"error": "Invalid JSON object"}, status=400)
+
+    target_type = data.get("target_type")
+    target = str(data.get("target", "")).strip()
+    action = data.get("action")
+    if not isinstance(target_type, str) or target_type not in {"node", "channel"} or not target:
+        return web.json_response({"error": "A valid conversation target is required"}, status=400)
+    if not isinstance(action, str) or action not in {"clear", "archive", "pin"}:
+        return web.json_response({"error": "Choose clear, archive, or pin"}, status=400)
+
+    key = chat_key(target_type, target)
+    metadata = chat_metadata.setdefault(key, {"archived": False, "pinned": False})
+    if action == "clear":
+        chat_history[key] = []
+    else:
+        flag = "archived" if action == "archive" else "pinned"
+        metadata[flag] = not metadata.get(flag, False)
+
+    if not save_chat_store():
+        return web.json_response({"error": "Chat changes could not be saved"}, status=500)
+    return web.json_response({
+        "messages": chat_history.get(key, []),
+        "metadata": get_chat_metadata(target_type, target),
+    })
 
 
 def validate_device_settings(current, values):
@@ -2755,8 +2883,9 @@ async def transmit_handler(request):
         if result.type == EventType.ERROR:
             return web.json_response({"error": str(result.payload)}, status=500)
         sent_message = add_chat_message(target_type, target, "outgoing", message)
-        sent_message["status"] = (
-            "delivered" if await confirm_delivery(result) else "unconfirmed"
+        update_chat_message_status(
+            sent_message,
+            "delivered" if await confirm_delivery(result) else "unconfirmed",
         )
         record_trace_event(
             "direct" if target_type == "node" else "channel",
@@ -2803,6 +2932,7 @@ def create_app():
     app.router.add_get("/api/scan/bluetooth", bluetooth_scan_handler)
     app.router.add_get("/api/scan/serial", serial_scan_handler)
     app.router.add_get("/api/chat-history", chat_history_handler)
+    app.router.add_post("/api/chat-management", manage_chat_handler)
     app.router.add_get("/api/device-settings", device_settings_handler)
     app.router.add_post("/api/device-settings/action", device_action_handler)
     app.router.add_get("/api/device-settings/export", device_gpx_export_handler)
