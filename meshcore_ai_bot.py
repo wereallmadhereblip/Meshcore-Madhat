@@ -281,10 +281,11 @@ app_state = {
     "is_connected": False,
     "logs": [],
     "trace_events": [],
-    "available_models": [DEFAULT_MODEL],
+    "available_models": [DEFAULT_MODEL, "qwen2.5:0.5b"],
     "contacts": {},
     "channels": {},
     "gateway_telemetry": {},
+    "ollama_running": False,
 }
 
 executor = ThreadPoolExecutor(max_workers=1)
@@ -563,6 +564,7 @@ async def fetch_available_models():
     models = [m.get("name") for m in result.get("models", []) if m.get("name")]
     if models:
         app_state["available_models"] = models
+    app_state["ollama_running"] = True
 
 
 async def update_available_models():
@@ -606,6 +608,43 @@ async def update_available_models():
         "Could not connect to Ollama after starting it. Check the Ollama server "
         "and confirm it is listening on 127.0.0.1:11434."
     )
+
+
+async def stop_ollama_server():
+    """Stop the local Ollama server to save power, without crashing the dashboard.
+
+    generate_ai_response() already treats any ollama.chat() failure as a soft
+    error, so replies simply fall back to "I could not process that message."
+    while the server is off instead of the dashboard crashing.
+    """
+    global ollama_process
+
+    if ollama_process is not None and ollama_process.poll() is None:
+        ollama_process.terminate()
+        try:
+            ollama_process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            ollama_process.kill()
+        ollama_process = None
+        app_state["ollama_running"] = False
+        log_to_dash("Ollama server stopped to save power.")
+        return
+
+    # Not a process we spawned (e.g. started manually or by another session);
+    # ask any running instance to exit gracefully rather than force-killing it.
+    ollama_executable = shutil.which("ollama")
+    if ollama_executable is None:
+        app_state["ollama_running"] = False
+        return
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(
+        executor,
+        lambda: subprocess.run(
+            ["pkill", "-f", "ollama serve"], capture_output=True, check=False
+        ),
+    )
+    app_state["ollama_running"] = False
+    log_to_dash("Ollama server stopped to save power.")
 
 
 async def refresh_contacts():
@@ -1675,7 +1714,10 @@ async function scanDevices(kind){let bluetooth=kind==='bluetooth',select=documen
 function scanBluetooth(){return scanDevices('bluetooth')}
 function scanSerial(){return scanDevices('serial')}
 function updateClock(){document.getElementById('current-datetime').textContent=new Date().toLocaleString()}
-async function status(){let r=await fetch('/api/status'),d=await r.json();let b=document.getElementById('status');b.textContent=d.is_connected?'CONNECTED':'DISCONNECTED';b.className='header-status '+(d.is_connected?'connected':'disconnected');document.getElementById('console').innerText=d.logs.join('\n');handleTraceEvents(d.trace_events||[])}
+async function status(){let r=await fetch('/api/status'),d=await r.json();let b=document.getElementById('status');b.textContent=d.is_connected?'CONNECTED':'DISCONNECTED';b.className='header-status '+(d.is_connected?'connected':'disconnected');document.getElementById('console').innerText=d.logs.join('\n');handleTraceEvents(d.trace_events||[]);renderOllamaPower(d.ollama_running)}
+let ollamaToggleBusy=false;
+function renderOllamaPower(running){let button=document.getElementById('ollama-power-toggle'),status=document.getElementById('ollama-power-status');if(!button||ollamaToggleBusy)return;button.textContent=running?'Turn off':'Turn on';status.textContent=running?'Running. Turn it off between chats to save power.':'Stopped to save power. Replies will fail until it is turned back on.'}
+async function toggleOllama(){let button=document.getElementById('ollama-power-toggle'),status=document.getElementById('ollama-power-status'),running=button.textContent.trim()==='Turn off';ollamaToggleBusy=true;button.disabled=true;status.textContent=running?'Stopping Ollama...':'Starting Ollama...';try{let r=await fetch('/api/ollama/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!running})}),d=await r.json();if(!r.ok)throw new Error(d.error||'Could not change Ollama state');ollamaToggleBusy=false;renderOllamaPower(d.ollama_running)}catch(error){ollamaToggleBusy=false;status.textContent=error.message}finally{button.disabled=false}}
 function handleTraceEvents(events){if(!traceEventsInitialized){for(let event of events)addTraceActivity(event);lastSeenTraceEventId=events.length?Number(events[events.length-1].id):0;traceEventsInitialized=true;return}for(let event of events){let eventId=Number(event.id);if(eventId<=lastSeenTraceEventId)continue;addTraceActivity(event);if(event.kind==='direct')pulseTrace(event.target_id,event.direction);lastSeenTraceEventId=eventId}}
 function addTraceActivity(event){let list=document.getElementById('live-trace-feed-list');if(list){document.getElementById('live-trace-feed-empty')?.remove();let target=event.target_name||event.target_id||'Unknown';let label=event.kind==='direct'?(event.direction==='inbound'?'Direct message from ':'Direct message to ')+target:(event.direction==='inbound'?'Message received on ':'Message sent to ')+'Channel '+target;let entry=document.createElement('div');entry.className='live-trace-feed-item';let timestamp=document.createElement('time');timestamp.textContent=event.timestamp||'';let body=document.createElement('div');body.textContent=label;entry.append(timestamp,body);list.prepend(entry);while(list.children.length>60)list.lastElementChild.remove()}addAnalyzerPacket(event)}
 function addAnalyzerPacket(event){let list=document.getElementById('analyzer-packet-list');if(!list)return;let empty=list.querySelector('.packet-empty');empty?.parentElement.remove();let row=document.createElement('tr');row.tabIndex=0;let direction=event.direction==='inbound'?'IN':'OUT';let transport=event.kind==='direct'?'DIRECT':'CHANNEL';let status=event.direction==='inbound'?'RECEIVED':'SENT';let values=[event.timestamp||'--',direction,transport,event.target_name||event.target_id||'Unknown',status];values.forEach((value,index)=>{let cell=document.createElement('td');cell.textContent=String(value);if(index===1)cell.className='packet-direction';if(index===2&&transport==='CHANNEL')cell.className='packet-channel';row.appendChild(cell)});row.onclick=()=>showAnalyzerEvent(event);row.onkeydown=key=>{if(key.key==='Enter'||key.key===' '){key.preventDefault();showAnalyzerEvent(event)}};list.prepend(row);while(list.children.length>60)list.lastElementChild.remove();analyzerEventCount=Math.min(analyzerEventCount+1,60);document.getElementById('analyzer-total').textContent=String(analyzerEventCount)}
@@ -1780,6 +1822,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <div class="settings-grid">
 <div class="settings-item"><label for="theme-select">Color theme</label><select id="theme-select" onchange="applyTheme(this.value)"><option value="midnight">Midnight</option><option value="light">Light</option><option value="ocean">Ocean</option><option value="amber">Amber</option><option value="linux">Linux Console</option><option value="macos">macOS</option><option value="cyberpunk">Hacker Cyberpunk</option></select><p class="settings-description">Saved in config.json and applied to this dashboard.</p></div>
 <div class="settings-item"><label for="model">Ollama model</label><select id="model" onchange="savePreference('model',this.value)">{{MODEL_OPTIONS}}</select><p class="settings-description">Saved in config.json and used for bot replies.</p></div>
+<div class="settings-item"><label for="ollama-power-toggle">Ollama server</label><button type="button" id="ollama-power-toggle" onclick="toggleOllama()">Turn off</button><p class="settings-description" id="ollama-power-status">Checking status...</p></div>
 </div>
 <p id="preferences-status" class="preferences-status" aria-live="polite"></p>
 </section>
@@ -1886,7 +1929,22 @@ async def status_handler(request):
         "is_connected": app_state["is_connected"],
         "logs": app_state["logs"],
         "trace_events": app_state["trace_events"],
+        "ollama_running": app_state["ollama_running"],
     })
+
+
+async def ollama_toggle_handler(request):
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+
+    enabled = bool(data.get("enabled", not app_state["ollama_running"]))
+    if enabled:
+        await update_available_models()
+    else:
+        await stop_ollama_server()
+    return web.json_response({"ollama_running": app_state["ollama_running"]})
 
 
 async def config_handler(request):
@@ -2670,6 +2728,7 @@ def create_app():
     app.router.add_get("/api/local-weather", local_weather_handler)
     app.router.add_post("/api/restart", restart_dashboard_handler)
     app.router.add_post("/api/update", update_app_handler)
+    app.router.add_post("/api/ollama/toggle", ollama_toggle_handler)
     app.router.add_get("/api/peers", peers_handler)
     app.router.add_get("/api/peer-telemetry", peer_telemetry_handler)
     app.router.add_get("/api/scan/bluetooth", bluetooth_scan_handler)

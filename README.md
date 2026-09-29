@@ -99,9 +99,11 @@ curl -fsSL https://ollama.com/install.sh | sh
 
 ```bash
 ollama pull llama3.2:1b
+ollama pull qwen2.5:0.5b
 ```
 
 - Confirm your virtual environment is active before running the dashboard.
+- The Settings page has an Ollama server toggle to stop/start it on demand, which lowers power draw when you don't need AI replies.
 
 ## Stop the dashboard
 

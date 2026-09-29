@@ -57,6 +57,7 @@ if [[ "$ollama_ready" != true ]]; then
 fi
 
 ollama pull llama3.2:1b
+ollama pull qwen2.5:0.5b
 
 echo "Setup complete."
 echo "Desktop shortcut created: $DESKTOP_DIR/MeshCore AI Bot Dashboard.desktop"
