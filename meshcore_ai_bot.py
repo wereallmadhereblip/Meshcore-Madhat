@@ -277,6 +277,7 @@ app_state = {
     "selected_model": app_config["model"],
     "is_connected": False,
     "logs": [],
+    "trace_events": [],
     "available_models": [DEFAULT_MODEL],
     "contacts": {},
     "channels": {},
@@ -302,6 +303,37 @@ def log_to_dash(message):
     print(formatted)
     app_state["logs"].append(formatted)
     app_state["logs"] = app_state["logs"][-50:]
+
+
+def record_trace_event(kind, direction, target_id):
+    target_id = str(target_id)
+    collection = app_state["contacts"] if kind == "direct" else app_state["channels"]
+    entry = next(
+        (
+            value
+            for key, value in collection.items()
+            if str(key) == target_id
+            or (
+                kind == "direct"
+                and (
+                    str(key).startswith(target_id)
+                    or target_id.startswith(str(key))
+                )
+            )
+        ),
+        {},
+    )
+    trace_events = app_state["trace_events"]
+    event_id = trace_events[-1]["id"] + 1 if trace_events else 1
+    trace_events.append({
+        "id": event_id,
+        "timestamp": datetime.now().strftime("%H:%M:%S"),
+        "kind": kind,
+        "direction": direction,
+        "target_id": target_id,
+        "target_name": display_name(target_id, entry),
+    })
+    app_state["trace_events"] = trace_events[-60:]
 
 
 def normalize_entries(payload):
@@ -982,6 +1014,7 @@ async def handle_incoming_message(event):
         return
     processed_messages.add(message_id)
     add_chat_message("node", sender, "incoming", text)
+    record_trace_event("direct", "inbound", sender)
     log_to_dash(f"Received DM from {sender}: {text}")
 
     reply = await generate_ai_response(sender, text)
@@ -1005,6 +1038,7 @@ async def handle_incoming_message(event):
                     )
                     return
                 add_chat_message("node", sender, "outgoing", part)
+                record_trace_event("direct", "outbound", sender)
             log_to_dash(
                 f"Direct message reply sent in {len(reply_parts)} message(s)."
             )
@@ -1038,6 +1072,7 @@ async def handle_incoming_channel_message(event):
         return
     processed_messages.add(message_id)
     add_chat_message("channel", channel_target, "incoming", text)
+    record_trace_event("channel", "inbound", channel_target)
     log_to_dash(f"Received channel {channel_target} message: {text}")
 
     # Some MeshCore clients prefix channel text with the sender's name
@@ -1076,6 +1111,7 @@ async def handle_incoming_channel_message(event):
                     )
                     return
                 add_chat_message("channel", channel_target, "outgoing", part)
+                record_trace_event("channel", "outbound", channel_target)
             log_to_dash(
                 f"Channel reply sent in {len(reply_parts)} message(s)."
             )
@@ -1502,10 +1538,9 @@ async function scanDevices(kind){let bluetooth=kind==='bluetooth',select=documen
 function scanBluetooth(){return scanDevices('bluetooth')}
 function scanSerial(){return scanDevices('serial')}
 function updateClock(){document.getElementById('current-datetime').textContent=new Date().toLocaleString()}
-async function status(){let r=await fetch('/api/status'),d=await r.json();let b=document.getElementById('status');b.textContent=d.is_connected?'CONNECTED':'DISCONNECTED';b.className='header-status '+(d.is_connected?'connected':'disconnected');document.getElementById('console').innerText=d.logs.join('\n');handleNewLogs(d.logs||[])}
-function handleNewLogs(logs){let index=lastSeenLog?logs.lastIndexOf(lastSeenLog):-1,newEntries=index===-1?logs:logs.slice(index+1);if(logs.length)lastSeenLog=logs[logs.length-1];if(!newEntries.length)return;for(let line of newEntries){addLiveTraceFeedEntry(line);matchAndPulseTrace(line)}}
-function addLiveTraceFeedEntry(line){let list=document.getElementById('live-trace-feed-list');if(!list)return;document.getElementById('live-trace-feed-empty')?.remove();let match=line.match(/^\[(\d{2}:\d{2}:\d{2})\]\s*(.*)$/),time=match?match[1]:'',text=match?match[2]:line;let entry=document.createElement('div');entry.className='live-trace-feed-item';let timestamp=document.createElement('time');timestamp.textContent=time;let body=document.createElement('div');body.textContent=text;entry.append(timestamp,body);list.prepend(entry);while(list.children.length>60)list.lastElementChild.remove()}
-function matchAndPulseTrace(line){for(let node of mapNodes){if(node.name&&line.includes(node.name)||line.includes(String(node.id))){pulseTrace(node.id);break}}}
+async function status(){let r=await fetch('/api/status'),d=await r.json();let b=document.getElementById('status');b.textContent=d.is_connected?'CONNECTED':'DISCONNECTED';b.className='header-status '+(d.is_connected?'connected':'disconnected');document.getElementById('console').innerText=d.logs.join('\n');handleTraceEvents(d.trace_events||[])}
+function handleTraceEvents(events){if(!traceEventsInitialized){for(let event of events)addTraceActivity(event);lastSeenTraceEventId=events.length?Number(events[events.length-1].id):0;traceEventsInitialized=true;return}for(let event of events){let eventId=Number(event.id);if(eventId<=lastSeenTraceEventId)continue;addTraceActivity(event);if(event.kind==='direct')pulseTrace(event.target_id,event.direction);lastSeenTraceEventId=eventId}}
+function addTraceActivity(event){let list=document.getElementById('live-trace-feed-list');if(!list)return;document.getElementById('live-trace-feed-empty')?.remove();let target=event.target_name||event.target_id||'Unknown';let label=event.kind==='direct'?(event.direction==='inbound'?'Direct message from ':'Direct message to ')+target:(event.direction==='inbound'?'Message received on ':'Message sent to ')+'Channel '+target;let entry=document.createElement('div');entry.className='live-trace-feed-item';let timestamp=document.createElement('time');timestamp.textContent=event.timestamp||'';let body=document.createElement('div');body.textContent=label;entry.append(timestamp,body);list.prepend(entry);while(list.children.length>60)list.lastElementChild.remove()}
 let mapNodes=[];
 let dashboardMap=null;
 let mapMarkers=null;
@@ -1513,13 +1548,14 @@ let mapBoundsSignature='';
 let liveTraceMap=null;
 let liveTraceMarkers=null;
 let liveTraceMarkerById=new Map();
-let lastSeenLog='';
+let lastSeenTraceEventId=0;
+let traceEventsInitialized=false;
 function hashColor(id){let str=String(id),hash=0;for(let i=0;i<str.length;i++){hash=(hash*31+str.charCodeAt(i))|0}return 'hsl('+(Math.abs(hash)%360)+',65%,50%)'}
 function showView(view){let target=document.getElementById(view+'-view');if(!target)return;activeView=view;document.querySelectorAll('.view-panel').forEach(panel=>panel.hidden=panel!==target);document.querySelectorAll('.nav-tab').forEach(tab=>tab.setAttribute('aria-pressed',String(tab.dataset.view===view)));if(view==='map')openMap();if(view==='live-trace')openLiveTrace();if(view==='device-settings'&&!deviceSettingsLoaded)loadDeviceSettings()}
 function openMap(){if(!window.L){document.getElementById('map-message').textContent='Map library unavailable. Check your internet connection and reload.';return}if(!dashboardMap){dashboardMap=L.map('map-canvas',{zoomControl:true}).setView([20,0],2);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(dashboardMap);mapMarkers=L.layerGroup().addTo(dashboardMap)}setTimeout(()=>dashboardMap.invalidateSize(),80);renderMapMarkers()}
 function openLiveTrace(){if(!window.L)return;if(!liveTraceMap){liveTraceMap=L.map('live-trace-canvas',{zoomControl:true}).setView([20,0],2);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(liveTraceMap);liveTraceMarkers=L.layerGroup().addTo(liveTraceMap)}setTimeout(()=>liveTraceMap.invalidateSize(),80);renderLiveTraceMarkers()}
 function renderLiveTraceMarkers(){if(!liveTraceMap||!liveTraceMarkers)return;liveTraceMarkers.clearLayers();liveTraceMarkerById=new Map();let bounds=[],located=0;for(let peer of mapNodes){if(!Number.isFinite(peer.latitude)||!Number.isFinite(peer.longitude))continue;let point=[peer.latitude,peer.longitude],marker=L.marker(point,{icon:peerMarkerIcon(peer),title:peer.name}).bindPopup(popupContent(peer.name,peer.id)).addTo(liveTraceMarkers);liveTraceMarkerById.set(String(peer.id),{marker,point});bounds.push(point);located++}if(Number.isFinite(gatewayTelemetry.latitude)&&Number.isFinite(gatewayTelemetry.longitude)){let point=[gatewayTelemetry.latitude,gatewayTelemetry.longitude];L.circleMarker(point,{radius:9,color:'#0d1117',weight:2,fillColor:'#36d1dc',fillOpacity:1}).bindPopup(popupContent('This gateway','Current radio location')).addTo(liveTraceMarkers);liveTraceMarkerById.set('gateway',{marker:null,point});bounds.push(point);located++}if(bounds.length)liveTraceMap.fitBounds(bounds,{padding:[36,36],maxZoom:12});let countLabel=document.getElementById('live-trace-count');if(countLabel)countLabel.textContent=String(located)}
-function pulseTrace(nodeId){if(!liveTraceMap)return;let target=liveTraceMarkerById.get(String(nodeId)),gateway=liveTraceMarkerById.get('gateway');if(!target)return;if(target.marker){let element=target.marker.getElement();if(element){element.classList.remove('trace-pulse-marker');void element.offsetWidth;element.classList.add('trace-pulse-marker')}}if(!gateway)return;let line=L.polyline([gateway.point,target.point],{color:'#4ade80',weight:2,opacity:.85,dashArray:'4 6'}).addTo(liveTraceMap);let dot=L.circleMarker(gateway.point,{radius:5,color:'#4ade80',weight:1,fillColor:'#4ade80',fillOpacity:1,className:'trace-pulse-dot'}).addTo(liveTraceMap);let start=performance.now(),duration=900;function animate(now){let t=Math.min(1,(now-start)/duration),lat=gateway.point[0]+(target.point[0]-gateway.point[0])*t,lng=gateway.point[1]+(target.point[1]-gateway.point[1])*t;dot.setLatLng([lat,lng]);if(t<1)requestAnimationFrame(animate);else setTimeout(()=>{liveTraceMap.removeLayer(line);liveTraceMap.removeLayer(dot)},400)}requestAnimationFrame(animate)}
+function pulseTrace(nodeId,direction){if(!liveTraceMap)return;let id=String(nodeId),target=liveTraceMarkerById.get(id);if(!target){let match=[...liveTraceMarkerById.entries()].find(([peerId])=>peerId!=='gateway'&&(peerId.startsWith(id)||id.startsWith(peerId)));if(match)target=match[1]}let gateway=liveTraceMarkerById.get('gateway');if(!target)return;if(target.marker){let element=target.marker.getElement();if(element){element.classList.remove('trace-pulse-marker');void element.offsetWidth;element.classList.add('trace-pulse-marker')}}if(!gateway)return;let points=direction==='inbound'?[target.point,gateway.point]:[gateway.point,target.point];let line=L.polyline(points,{color:'#4ade80',weight:2,opacity:.85,dashArray:'4 6'}).addTo(liveTraceMap);let dot=L.circleMarker(points[0],{radius:5,color:'#4ade80',weight:1,fillColor:'#4ade80',fillOpacity:1,className:'trace-pulse-dot'}).addTo(liveTraceMap);let start=performance.now(),duration=900;function animate(now){let t=Math.min(1,(now-start)/duration),lat=points[0][0]+(points[1][0]-points[0][0])*t,lng=points[0][1]+(points[1][1]-points[0][1])*t;dot.setLatLng([lat,lng]);if(t<1)requestAnimationFrame(animate);else setTimeout(()=>{liveTraceMap.removeLayer(line);liveTraceMap.removeLayer(dot)},400)}requestAnimationFrame(animate)}
 function popupContent(title,detail){let content=document.createElement('div');let heading=document.createElement('strong');heading.textContent=title;content.appendChild(heading);if(detail){let line=document.createElement('div');line.textContent=detail;content.appendChild(line)}return content}
 function focusMapPoint(latitude,longitude){showView('map');if(dashboardMap&&Number.isFinite(latitude)&&Number.isFinite(longitude))dashboardMap.setView([latitude,longitude],12)}
 function appendPeerDetail(container,label,value){if(value===null||value===undefined||value==='')return;let field=document.createElement('div'),term=document.createElement('dt'),description=document.createElement('dd');term.textContent=label;description.textContent=value;field.append(term,description);container.appendChild(field)}
@@ -1655,7 +1691,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <div class="panel-heading"><div><span class="eyebrow">LEGEND</span><h2>Map Key</h2></div></div>
 <div class="live-trace-legend-list">
 <div class="live-trace-legend-item"><span class="live-trace-legend-dot" style="background:#36d1dc"></span>This gateway</div>
-<div class="live-trace-legend-item"><span class="live-trace-legend-dot" style="background:#4ade80"></span>Trace pulse to node</div>
+<div class="live-trace-legend-item"><span class="live-trace-legend-dot" style="background:#4ade80"></span>Direct message route</div>
 <div class="live-trace-legend-item"><span class="live-trace-legend-dot" style="background:#8b949e"></span>Known peer</div>
 </div>
 </section>
@@ -1683,6 +1719,7 @@ async def status_handler(request):
     return web.json_response({
         "is_connected": app_state["is_connected"],
         "logs": app_state["logs"],
+        "trace_events": app_state["trace_events"],
     })
 
 
@@ -2039,6 +2076,11 @@ async def transmit_handler(request):
         if result.type == EventType.ERROR:
             return web.json_response({"error": str(result.payload)}, status=500)
         add_chat_message(target_type, target, "outgoing", message)
+        record_trace_event(
+            "direct" if target_type == "node" else "channel",
+            "outbound",
+            target,
+        )
         log_to_dash(f"{target_type.title()} message sent to {target}")
         return web.json_response({"success": True})
     except Exception as error:
