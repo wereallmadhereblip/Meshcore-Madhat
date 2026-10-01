@@ -310,6 +310,8 @@ app_state = {
     "logs": [],
     "trace_events": [],
     "available_models": [DEFAULT_MODEL, "qwen2.5:0.5b"],
+    "models_info": [],
+    "model_action_busy": False,
     "contacts": {},
     "channels": {},
     "gateway_telemetry": {},
@@ -659,12 +661,56 @@ def battery_percentage(battery_mv):
     return round(max(0, min(100, percentage)))
 
 
+def format_model_size(size_bytes):
+    if not size_bytes or size_bytes <= 0:
+        return ""
+    try:
+        b = float(size_bytes)
+        for unit in ["B", "KB", "MB", "GB", "TB"]:
+            if b < 1024.0:
+                return f"{b:.1f} {unit}" if unit != "B" else f"{int(b)} B"
+            b /= 1024.0
+        return f"{b:.1f} PB"
+    except Exception:
+        return ""
+
+
+def get_model_name(m):
+    name = getattr(m, "model", None) or getattr(m, "name", None)
+    if not name and hasattr(m, "get"):
+        name = m.get("model") or m.get("name")
+    return str(name) if name else None
+
+
+def get_model_size(m):
+    size = getattr(m, "size", None)
+    if size is None and hasattr(m, "get"):
+        size = m.get("size")
+    return size if isinstance(size, (int, float)) else None
+
+
 async def fetch_available_models():
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(executor, ollama.list)
-    models = [m.get("name") for m in result.get("models", []) if m.get("name")]
+    raw_models = getattr(result, "models", None)
+    if raw_models is None and hasattr(result, "get"):
+        raw_models = result.get("models", [])
+    raw_models = raw_models or []
+
+    models = []
+    models_info = []
+    for m in raw_models:
+        name = get_model_name(m)
+        if name:
+            models.append(name)
+            models_info.append({
+                "name": name,
+                "size": format_model_size(get_model_size(m)),
+                "size_bytes": get_model_size(m),
+            })
     if models:
         app_state["available_models"] = models
+    app_state["models_info"] = models_info
     app_state["ollama_running"] = True
 
 
@@ -1619,16 +1665,17 @@ body[data-theme="cyberpunk"]{--page-bg:#090511;--panel-bg:#160b24;--panel-raised
 .brand-copy h1{margin:0;color:var(--text);font-size:16px;font-weight:600;line-height:1.2}
 .brand-copy h1 span{color:var(--accent);font-weight:500}
 .header-label,.eyebrow{display:block;margin-bottom:3px;color:var(--muted);font-size:9px;font-weight:700;letter-spacing:.8px;text-transform:uppercase}
-.header-meta{display:grid;grid-auto-flow:column;grid-auto-columns:max-content;align-items:stretch;gap:16px;min-width:0}
-.header-meta-item{display:flex;flex-direction:column;justify-content:center;gap:3px}
-.header-meta-item.weather-widget{min-width:170px}
+.header-meta{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-items:stretch;gap:0;width:560px;max-width:100%;min-width:0;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--panel-raised)}
+.header-meta-item{display:flex;flex-direction:column;justify-content:center;gap:3px;min-width:0;padding:7px 14px;border-right:1px solid var(--border)}
+.header-meta-item:last-child{border-right:0}
+.header-meta-item.weather-widget{min-width:0}
 .weather-current{display:flex;align-items:center;gap:8px;white-space:nowrap}
 .weather-icon{flex:none;width:40px;height:40px;display:grid;place-items:center;color:var(--accent)}
 .weather-icon svg{width:36px;height:36px;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round;stroke-width:1.7}
 .weather-current strong{color:var(--text);font-size:14px;font-weight:700;font-variant-numeric:tabular-nums}
 .weather-current span,.weather-location{color:var(--muted);font-size:10px}
 .weather-current .weather-icon{color:var(--accent)}
-.weather-location{display:block;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.weather-location{display:none}
 .header-metric{color:var(--text);font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
 .header-status,.live-tag{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border:1px solid var(--border);border-radius:5px;background:var(--panel-raised);color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.5px;white-space:nowrap}
 .header-status::before,.live-tag::before{width:6px;height:6px;border-radius:50%;background:var(--danger);content:""}
@@ -1663,6 +1710,26 @@ body[data-theme="cyberpunk"]{--page-bg:#090511;--panel-bg:#160b24;--panel-raised
 .config-status[data-state="success"],.preferences-status[data-state="success"]{color:var(--accent)}
 .settings-item{min-width:0;padding:12px;border:1px solid var(--border);border-radius:6px;background:var(--panel-raised)}
 .settings-item select{margin-top:4px}
+.settings-item-full{grid-column:1/-1}
+.model-manager-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.model-manager-header label{margin:0}
+.refresh-btn{min-height:28px;padding:3px 10px;font-size:10px}
+.installed-models-list{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.model-card{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;border:1px solid var(--border);border-radius:6px;background:var(--panel-bg);flex-wrap:wrap}
+.model-card-info{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.model-card-name{font-weight:600;font-family:ui-monospace,monospace;color:var(--text);font-size:12px}
+.model-card-size{color:var(--muted);font-size:11px;font-family:ui-monospace,monospace}
+.model-card-badge{display:inline-block;padding:2px 7px;border-radius:10px;background:var(--accent-dim);color:var(--accent);font-size:10px;font-weight:700;text-transform:uppercase;border:1px solid var(--accent)}
+.model-card-actions{display:flex;gap:6px;align-items:center}
+.model-card-actions button{min-height:28px;padding:4px 10px;font-size:11px}
+.model-card-actions .delete-btn{color:var(--danger)!important;border-color:color-mix(in srgb,var(--danger) 45%,var(--border))!important}
+.model-card-actions .delete-btn:hover{background:color-mix(in srgb,var(--danger) 15%,transparent)}
+.download-control{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-top:6px}
+.download-control button{min-width:90px;border-color:var(--accent);background:var(--accent);color:var(--button-text)}
+.download-control button:hover{background:color-mix(in srgb,var(--accent) 85%,white)}
+.model-preset-row{display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap;font-size:11px;color:var(--muted)}
+.preset-btn{min-height:26px;padding:2px 8px;font-size:10px;border-radius:12px;background:var(--panel-bg);color:var(--muted);border:1px solid var(--border)}
+.preset-btn:hover{color:var(--text);border-color:var(--accent)}
 .settings-description{margin:8px 0 0;color:var(--muted);font-size:11px}
 .card{min-width:0;margin-bottom:12px;padding:12px;background:var(--panel-bg);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12)}
 .panel-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
@@ -1731,12 +1798,12 @@ button:hover{transform:translateY(-1px);border-color:var(--accent);background:va
 .chat-panel form input{min-width:0}
 .chat-panel form button{border-color:var(--accent);background:var(--accent);color:var(--button-text);white-space:nowrap}
 .chat-panel form button:disabled{opacity:.55;cursor:not-allowed}
-.device-settings-layout{width:min(100%,820px);display:grid;gap:12px}
-.device-settings-layout form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.device-settings-layout{width:min(100%,1700px);column-width:340px;column-gap:12px}
+.device-settings-layout form{display:contents}
 .device-settings-layout label{margin:0}
 .device-settings-layout label span{display:block;margin-bottom:5px}
 .device-settings-layout .settings-description{grid-column:1/-1;margin:0}
-.device-settings-layout .settings-actions{grid-column:1/-1;display:flex;align-items:center;gap:10px}
+.device-settings-layout .settings-actions{grid-column:1/-1;display:flex;align-items:center;gap:10px;break-inside:avoid;margin-bottom:12px}
 .custom-radio-fields{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 .custom-radio-fields[hidden],#custom-power-field[hidden]{display:none}
 .settings-status{min-height:18px;margin:0;color:var(--muted);font-size:11px}
@@ -1761,7 +1828,7 @@ button:hover{transform:translateY(-1px);border-color:var(--accent);background:va
 .map-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:12px;padding:12px 14px}
 .map-toolbar h2{margin:0;color:var(--text);font-size:15px;font-weight:600}
 .map-layout{display:grid;grid-template-columns:minmax(230px,300px) minmax(0,1fr);align-items:stretch;gap:12px}
-.map-rail{min-height:520px;margin:0;display:flex;flex-direction:column}
+.map-rail{min-height:0;margin:0;display:flex;flex-direction:column}
 .map-rail-summary{margin:0 0 12px;color:var(--muted);font-size:11px}
 .map-peer-filters{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:8px}
 .map-peer-filters label{min-width:0;margin:0;font-size:10px}
@@ -1791,8 +1858,8 @@ button:hover{transform:translateY(-1px);border-color:var(--accent);background:va
 .map-peer-icon-room-servers{background:#f3e8ff;color:#7e22ce}
 .map-peer-icon-sensors{background:#ffe4e6;color:#be123c}
 .map-peer-icon-unknown{background:#e2e8f0;color:#334155}
-.map-surface{position:relative;min-width:0;min-height:520px;margin:0;padding:0;overflow:hidden}
-#map-canvas{width:100%;height:min(720px,calc(100vh - 170px));min-height:520px;background:#d9e2df}
+.map-surface{position:relative;min-width:0;min-height:0;margin:0;padding:0;overflow:hidden}
+#map-canvas{width:100%;height:100%;min-height:260px;background:#d9e2df}
 .map-message{position:absolute;z-index:500;top:14px;left:50%;max-width:calc(100% - 28px);padding:8px 12px;transform:translateX(-50%);border:1px solid var(--border);border-radius:5px;background:var(--panel-bg);color:var(--muted);font-size:11px;text-align:center;box-shadow:0 4px 14px rgba(0,0,0,.2)}
 .map-message[hidden]{display:none}
 .leaflet-container{font:12px/1.4 "Segoe UI",system-ui,sans-serif}
@@ -1815,17 +1882,18 @@ button:hover{transform:translateY(-1px);border-color:var(--accent);background:va
 .trace-pulse-marker{animation:trace-pulse-ring 1.1s ease-out 2}
 @keyframes trace-pulse-ring{0%{filter:drop-shadow(0 0 0 var(--accent))}50%{filter:drop-shadow(0 0 8px var(--accent))}100%{filter:drop-shadow(0 0 0 transparent)}}
 .trace-pulse-dot{filter:drop-shadow(0 0 6px var(--accent))}
-@media(max-width:1050px){.header-meta{gap:10px}}
+.header-metric,.header-status,.weather-current{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:1050px){.header-meta{gap:0}}
 @media(max-width:1050px){.dashboard-header{flex-wrap:wrap}.top-nav{order:3;flex-basis:100%}.map-layout{grid-template-columns:minmax(210px,260px) minmax(0,1fr)}}
-@media(max-width:720px){body{padding:8px}.dashboard-header{align-items:flex-start;flex-direction:column;gap:12px}.top-nav{order:0;max-width:100%;overflow-x:auto}.nav-tab{flex:none}.header-meta{width:100%;flex-wrap:wrap;justify-content:space-between}.settings-grid,.device-settings-layout form{grid-template-columns:minmax(0,1fr)}.messages-layout{grid-template-columns:minmax(0,1fr)}.conversation-rail{min-height:0;max-height:190px}.device-settings-layout .settings-description,.device-settings-layout .settings-actions{grid-column:1}.map-layout{grid-template-columns:minmax(0,1fr)}.map-rail{min-height:180px;max-height:230px}.map-surface{min-height:48vh}#map-canvas{height:50vh;min-height:320px}.map-toolbar{align-items:flex-start;flex-direction:column}.console-dock{top:auto!important;right:8px;bottom:8px;left:8px!important;width:auto!important;max-width:none;height:38vh!important}.console-toggle{right:0}.messages-layout{grid-template-rows:auto minmax(0,1fr)}.chat-panel{min-height:340px}.page-view{padding-bottom:8px}}
+@media(max-width:720px){body{padding:8px}.dashboard-header{align-items:flex-start;flex-direction:column;gap:12px}.top-nav{order:0;max-width:100%;overflow-x:auto}.nav-tab{flex:none}.header-meta{width:100%;grid-template-columns:repeat(2,minmax(0,1fr))}.settings-grid,.device-settings-layout form{grid-template-columns:minmax(0,1fr)}.messages-layout{grid-template-columns:minmax(0,1fr)}.conversation-rail{min-height:0;max-height:190px}.device-settings-layout .settings-description,.device-settings-layout .settings-actions{grid-column:1}.map-layout{grid-template-columns:minmax(0,1fr)}.map-rail{min-height:180px;max-height:230px}.map-surface{min-height:48vh}#map-canvas{height:50vh;min-height:320px}.map-toolbar{align-items:flex-start;flex-direction:column}.console-dock{top:auto!important;right:8px;bottom:8px;left:8px!important;width:auto!important;max-width:none;height:38vh!important}.console-toggle{right:0}.messages-layout{grid-template-rows:auto minmax(0,1fr)}.chat-panel{min-height:340px}.page-view{padding-bottom:8px}}
 body[data-theme="midnight"],body[data-theme="ocean"]{--page-bg:#091117;--panel-bg:#0f1b22;--panel-raised:#14252d;--text:#d7e4e8;--muted:#78919a;--accent:#42d9c3;--accent-dim:#103c3d;--border:#23404a;--input-bg:#0a151b;--input-border:#315562;--log-bg:#071016}
 body{padding:0;background-image:linear-gradient(rgba(66,217,195,.018) 1px,transparent 1px),linear-gradient(90deg,rgba(66,217,195,.018) 1px,transparent 1px);background-size:24px 24px;font-family:ui-monospace,"SFMono-Regular",monospace}
 .dashboard-header{width:100%;max-width:none;margin:0 0 10px;padding:10px 16px;border-width:0 0 1px;border-radius:0;background:#0b151b;box-shadow:0 4px 20px rgba(0,0,0,.22)}
 .brand-mark{border-radius:2px}.brand-copy h1{font-family:ui-monospace,"SFMono-Regular",monospace;font-size:14px;letter-spacing:.08em}.top-nav{gap:0}.nav-tab{min-height:36px;border-width:0 0 2px;border-radius:0;text-transform:uppercase;font:10px ui-monospace,"SFMono-Regular",monospace;letter-spacing:.05em}.nav-tab:hover,.nav-tab[aria-pressed="true"]{border-color:var(--accent);background:rgba(66,217,195,.08);color:var(--accent);transform:none}.nav-count{border-radius:2px}.page-view{width:min(100% - 24px,1800px)}.card,.map-workspace,.live-trace-workspace,.analyzer-main,.analyzer-side{border-radius:2px}.panel-heading{border-bottom:1px solid var(--border)}.chat-panel,.conversation-rail,.map-rail,.map-surface,.map-toolbar{box-shadow:0 10px 30px rgba(0,0,0,.13)}
 .dashboard-logo{width:120px;height:120px;flex:none;object-fit:contain}.brand-copy h1{font-size:20px;letter-spacing:.14em}.device-settings-layout form{gap:0}.device-settings-layout form>label,.device-settings-layout form>.custom-radio-fields{padding:12px 14px;border-bottom:1px solid var(--border)}.device-settings-layout form>.settings-section-label{padding:14px;color:var(--accent);background:var(--panel-raised);font:10px ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase}.device-settings-layout form>.settings-description{margin:0;padding:12px 14px;border-bottom:1px solid var(--border)}
-.reference-device-settings{width:min(100%,820px);display:grid;gap:12px;margin-bottom:16px}.device-settings-card{padding:0;overflow:hidden}.device-settings-card>.panel-heading{margin:0;padding:13px 16px}.device-settings-card>.panel-heading h2{font-size:14px}.device-setting-row{width:100%;min-height:56px;padding:11px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;border:0;border-bottom:1px solid var(--border);border-radius:0;background:transparent;color:var(--text);text-align:left}.device-setting-row:hover{background:var(--panel-raised);transform:none}.device-setting-row strong,.device-toggle-row strong{display:block;font-size:12px}.device-setting-row small,.device-toggle-row small{display:block;margin-top:3px;color:var(--muted);font-size:10px}.device-info-grid{margin:0;padding:8px 16px 14px;display:grid;grid-template-columns:minmax(100px,.35fr) minmax(0,1fr);gap:6px 12px;border-top:1px solid var(--border);font-size:10px}.device-info-grid[hidden]{display:none}.device-info-grid dt{color:var(--muted)}.device-info-grid dd{margin:0;overflow-wrap:anywhere;color:var(--text);font-family:ui-monospace,monospace}.device-settings-grid{padding:12px 16px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 14px}.device-settings-grid>label{margin:0;min-width:0}.device-settings-grid>label>span{display:block;margin-bottom:5px;color:var(--muted);font-size:10px}.device-settings-grid .device-toggle-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0}.device-toggle-row input{width:18px;min-width:18px;height:18px;margin:0;accent-color:var(--accent)}.device-action-grid{padding:12px 16px;display:flex;flex-wrap:wrap;gap:8px}.device-action-grid button{flex:1 1 145px}.danger-action{color:var(--danger)!important;border-color:color-mix(in srgb,var(--danger) 45%,var(--border))!important}.device-debug-output{max-height:300px;margin:0 16px 12px;padding:10px;overflow:auto;border:1px solid var(--border);background:var(--log-bg);color:var(--muted);font:10px/1.5 ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
+.reference-device-settings{width:min(100%,1700px);column-width:340px;column-gap:12px;overflow-x:auto;margin-bottom:16px}.device-settings-card{padding:0;overflow:hidden;break-inside:avoid}.device-settings-card>.panel-heading{margin:0;padding:13px 16px}.device-settings-card>.panel-heading h2{font-size:14px}.device-setting-row{width:100%;min-height:56px;padding:11px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;border:0;border-bottom:1px solid var(--border);border-radius:0;background:transparent;color:var(--text);text-align:left}.device-setting-row:hover{background:var(--panel-raised);transform:none}.device-setting-row strong,.device-toggle-row strong{display:block;font-size:12px}.device-setting-row small,.device-toggle-row small{display:block;margin-top:3px;color:var(--muted);font-size:10px}.device-info-grid{margin:0;padding:8px 16px 14px;display:grid;grid-template-columns:minmax(100px,.35fr) minmax(0,1fr);gap:6px 12px;border-top:1px solid var(--border);font-size:10px}.device-info-grid[hidden]{display:none}.device-info-grid dt{color:var(--muted)}.device-info-grid dd{margin:0;overflow-wrap:anywhere;color:var(--text);font-family:ui-monospace,monospace}.device-settings-grid{padding:12px 16px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 14px}.device-settings-grid>label{margin:0;min-width:0}.device-settings-grid>label>span{display:block;margin-bottom:5px;color:var(--muted);font-size:10px}.device-settings-grid .device-toggle-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0}.device-toggle-row input{width:18px;min-width:18px;height:18px;margin:0;accent-color:var(--accent)}.device-action-grid{padding:12px 16px;display:flex;flex-wrap:wrap;gap:8px}.device-action-grid button{flex:1 1 145px}.danger-action{color:var(--danger)!important;border-color:color-mix(in srgb,var(--danger) 45%,var(--border))!important}.device-debug-output{max-height:300px;margin:0 16px 12px;padding:10px;overflow:auto;border:1px solid var(--border);background:var(--log-bg);color:var(--muted);font:10px/1.5 ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
 .local-region-list{padding:0 16px 12px}.local-region-item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--border);font:11px ui-monospace,monospace}.local-region-item button{padding:4px 8px;color:var(--danger)}
-@media(max-width:640px){.device-settings-grid{grid-template-columns:minmax(0,1fr)}.reference-device-settings{width:calc(100% - 12px)}}
+@media(max-width:640px){.device-settings-grid{grid-template-columns:minmax(0,1fr)}.reference-device-settings{width:calc(100% - 12px);column-width:auto;column-count:1}}
 </style>
 <script>
 let gatewayTelemetry={};
@@ -1840,12 +1908,12 @@ let appConfig={model:'llama3.2:1b',theme:'midnight',connection:{type:'bluetooth'
 let configEditorLoaded=false;
 const commonRadioProfiles={balanced:{radio_bw:125,radio_sf:7,radio_cr:5},long_range:{radio_bw:125,radio_sf:10,radio_cr:5},high_throughput:{radio_bw:250,radio_sf:7,radio_cr:5}};
 function applyTheme(theme,persist=true){document.body.dataset.theme=theme;document.getElementById('theme-select').value=theme;if(persist)saveAppConfig({...appConfig,theme})}
-function showSettingsTab(tab){document.querySelectorAll('.settings-tab').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.settingsTab===tab)));for(let panel of document.querySelectorAll('.settings-tab-panel'))panel.hidden=panel.id!=='settings-'+tab+'-panel';if(tab==='config'&&!configEditorLoaded)loadConfigEditor()}
+function showSettingsTab(tab){document.querySelectorAll('.settings-tab').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.settingsTab===tab)));for(let panel of document.querySelectorAll('.settings-tab-panel'))panel.hidden=panel.id!=='settings-'+tab+'-panel';if(tab==='config'&&!configEditorLoaded)loadConfigEditor();if(tab==='ollama')loadOllamaModels()}
 function syncConfigControls(){document.getElementById('theme-select').value=appConfig.theme;let modelSelect=document.getElementById('model');if(![...modelSelect.options].some(option=>option.value===appConfig.model))modelSelect.add(new Option(appConfig.model,appConfig.model));modelSelect.value=appConfig.model;document.getElementById('weather-city').value=appConfig.weather.city;document.getElementById('weather-state').value=appConfig.weather.state;document.getElementById('bot-name').value=appConfig.bot.name;document.getElementById('bot-personality').value=appConfig.bot.personality;document.getElementById('bot-response-length').value=appConfig.bot.response_length;document.getElementById('ollama-schedule-enabled').checked=appConfig.ollama.schedule_enabled;document.getElementById('ollama-schedule-start').value=appConfig.ollama.start_time;document.getElementById('ollama-schedule-end').value=appConfig.ollama.end_time;applyTheme(appConfig.theme,false)}
 const weatherIcons={sun:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>',partly:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="16" cy="7" r="3"/><path d="M16 2v1m0 8v1m5-5h-1m-8 0h-1M5 19h12a3 3 0 0 0 .3-6A5 5 0 0 0 8 11.5 3.8 3.8 0 0 0 5 19Z"/></svg>',cloud:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19h13a4 4 0 0 0 .4-8A6 6 0 0 0 7 9.5 4.8 4.8 0 0 0 5 19Z"/></svg>',fog:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm-2 4h14m-10 3h14"/></svg>',rain:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 15h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 7 4 4 0 0 0 5 15Zm2 3-1 2m7-2-1 2m7-2-1 2"/></svg>',snow:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm2 4h.01M12 19h.01M18 18h.01"/></svg>',storm:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm8 1-3 4h3l-1 3 4-5h-3l1-2"/></svg>'};
 function weatherIconName(code){if(code===null||code===undefined||!Number.isFinite(Number(code)))return 'cloud';code=Number(code);if(code===0)return 'sun';if(code===1||code===2)return 'partly';if(code===45||code===48)return 'fog';if(code===51||code===53||code===55||code===56||code===57||code===61||code===63||code===65||code===66||code===67||code===80||code===81||code===82)return 'rain';if(code===71||code===73||code===75||code===77||code===85||code===86)return 'snow';if(code===95||code===96||code===99)return 'storm';return 'cloud'}
 function renderWeatherIcon(code,condition='Weather condition unavailable'){let icon=document.getElementById('weather-icon');icon.innerHTML=weatherIcons[weatherIconName(code)]||weatherIcons.cloud;icon.setAttribute('aria-label',condition);icon.title=condition}
-async function loadLocalWeather(){let temperature=document.getElementById('weather-temperature'),condition=document.getElementById('weather-condition'),location=document.getElementById('weather-location');condition.textContent='Loading';try{let response=await fetch('/api/local-weather'),data=await response.json();if(!response.ok)throw new Error(data.error||'Weather unavailable');temperature.textContent=Math.round(data.temperature_f)+'°F';condition.textContent=data.condition;location.textContent=data.location;renderWeatherIcon(data.weather_code,data.condition)}catch(error){temperature.textContent='--°F';condition.textContent=error.message.includes('Enter a city')?'Set location':'Unavailable';location.textContent=appConfig.weather.city?(appConfig.weather.state?appConfig.weather.city+', '+appConfig.weather.state:appConfig.weather.city):'Location not set';renderWeatherIcon(null,condition.textContent)}}
+async function loadLocalWeather(){let temperature=document.getElementById('weather-temperature'),condition=document.getElementById('weather-condition'),location=document.getElementById('weather-location'),widget=document.getElementById('banner-item-weather');condition.textContent='Loading';try{let response=await fetch('/api/local-weather'),data=await response.json();if(!response.ok)throw new Error(data.error||'Weather unavailable');temperature.textContent=Math.round(data.temperature_f)+'°F';condition.textContent=data.condition;location.textContent=data.location;if(widget)widget.title=data.location;renderWeatherIcon(data.weather_code,data.condition)}catch(error){temperature.textContent='--°F';condition.textContent=error.message.includes('Enter a city')?'Set location':'Unavailable';location.textContent=appConfig.weather.city?(appConfig.weather.state?appConfig.weather.city+', '+appConfig.weather.state:appConfig.weather.city):'Location not set';if(widget)widget.title=location.textContent;renderWeatherIcon(null,condition.textContent)}}
 async function loadAppConfig(){try{let response=await fetch('/api/config'),data=await response.json();if(!response.ok)throw new Error(data.error||'Settings could not be loaded');appConfig=data;syncConfigControls();loadLocalWeather()}catch(error){let statusMessage=document.getElementById('preferences-status');statusMessage.dataset.state='error';statusMessage.textContent=error.message}}
 async function saveAppConfig(config,statusId='preferences-status'){let statusMessage=document.getElementById(statusId);statusMessage.dataset.state='';statusMessage.textContent='Saving config.json...';try{let response=await fetch('/api/config',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)}),data=await response.json();if(!response.ok)throw new Error(data.error||'Settings could not be saved');appConfig=data;syncConfigControls();if(statusId==='config-status'){document.getElementById('config-json-editor').value=JSON.stringify(appConfig,null,2);configEditorLoaded=true}statusMessage.textContent='Saved to config.json.';statusMessage.dataset.state='success'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
 async function savePreference(key,value){await saveAppConfig({...appConfig,[key]:value})}
@@ -1867,7 +1935,13 @@ function updateClock(){document.getElementById('current-datetime').textContent=n
 async function status(){let r=await fetch('/api/status'),d=await r.json();let b=document.getElementById('status');b.textContent=d.is_connected?'CONNECTED':'DISCONNECTED';b.className='header-status '+(d.is_connected?'connected':'disconnected');document.getElementById('console').innerText=d.logs.join('\n');handleTraceEvents(d.trace_events||[]);renderOllamaPower(d.ollama_running)}
 let ollamaToggleBusy=false;
 function renderOllamaPower(running){let button=document.getElementById('ollama-power-toggle'),status=document.getElementById('ollama-power-status');if(!button||ollamaToggleBusy)return;button.textContent=running?'Turn off':'Turn on';status.textContent=running?'Running. Turn it off between chats to save power.':'Stopped to save power. Replies will fail until it is turned back on.'}
-async function toggleOllama(){let button=document.getElementById('ollama-power-toggle'),status=document.getElementById('ollama-power-status'),running=button.textContent.trim()==='Turn off';ollamaToggleBusy=true;button.disabled=true;status.textContent=running?'Stopping Ollama...':'Starting Ollama...';try{let r=await fetch('/api/ollama/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!running})}),d=await r.json();if(!r.ok)throw new Error(d.error||'Could not change Ollama state');ollamaToggleBusy=false;renderOllamaPower(d.ollama_running)}catch(error){ollamaToggleBusy=false;status.textContent=error.message}finally{button.disabled=false}}
+async function toggleOllama(){let button=document.getElementById('ollama-power-toggle'),status=document.getElementById('ollama-power-status'),running=button.textContent.trim()==='Turn off';ollamaToggleBusy=true;button.disabled=true;status.textContent=running?'Stopping Ollama...':'Starting Ollama...';try{let r=await fetch('/api/ollama/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!running})}),d=await r.json();if(!r.ok)throw new Error(d.error||'Could not change Ollama state');ollamaToggleBusy=false;renderOllamaPower(d.ollama_running);loadOllamaModels()}catch(error){ollamaToggleBusy=false;status.textContent=error.message}finally{button.disabled=false}}
+let ollamaModelsBusy=false;
+async function loadOllamaModels(){let listEl=document.getElementById('installed-models-list');if(!listEl)return;try{let res=await fetch('/api/ollama/models');let data=await res.json();if(!res.ok)throw new Error(data.error||'Failed to load models');let models=data.models||[];let available=data.available_models||[];let currentModel=appConfig.model||data.selected_model;let modelSelect=document.getElementById('model');if(modelSelect){let prevVal=modelSelect.value||currentModel;modelSelect.replaceChildren();for(let name of available)modelSelect.add(new Option(name,name));if(prevVal&&[...modelSelect.options].some(o=>o.value===prevVal))modelSelect.value=prevVal;else if([...modelSelect.options].some(o=>o.value===currentModel))modelSelect.value=currentModel}if(!data.ollama_running){listEl.innerHTML='<p class="map-empty">Ollama server is currently stopped. Turn it on above to view or manage models.</p>';return}if(models.length===0){listEl.innerHTML='<p class="map-empty">No models installed in Ollama yet. Use the download section below to pull a model.</p>';return}listEl.replaceChildren();for(let m of models){let isCurrent=m.name===currentModel;let card=document.createElement('div');card.className='model-card';let info=document.createElement('div');info.className='model-card-info';let name=document.createElement('span');name.className='model-card-name';name.textContent=m.name;info.appendChild(name);if(m.size){let size=document.createElement('span');size.className='model-card-size';size.textContent=m.size;info.appendChild(size)}if(isCurrent){let badge=document.createElement('span');badge.className='model-card-badge';badge.textContent='Active';info.appendChild(badge)}card.appendChild(info);let actions=document.createElement('div');actions.className='model-card-actions';if(!isCurrent){let useBtn=document.createElement('button');useBtn.type='button';useBtn.className='secondary';useBtn.textContent='Use';useBtn.onclick=()=>setActiveModel(m.name);actions.appendChild(useBtn)}let delBtn=document.createElement('button');delBtn.type='button';delBtn.className='delete-btn';delBtn.textContent='Delete';delBtn.onclick=()=>deleteOllamaModel(m.name);actions.appendChild(delBtn);card.appendChild(actions);listEl.appendChild(card)}}catch(err){listEl.replaceChildren();let errP=document.createElement('p');errP.className='map-empty';errP.textContent='Could not load models: '+err.message;listEl.appendChild(errP)}}
+async function setActiveModel(modelName){let statusEl=document.getElementById('ollama-model-status');statusEl.dataset.state='';statusEl.textContent='Activating model '+modelName+'...';try{await savePreference('model',modelName);statusEl.dataset.state='success';statusEl.textContent='Active model set to '+modelName+'.';loadOllamaModels()}catch(err){statusEl.dataset.state='error';statusEl.textContent=err.message}}
+function setDownloadModel(modelName){let input=document.getElementById('ollama-download-input');if(input){input.value=modelName;input.focus()}}
+async function downloadOllamaModel(){let input=document.getElementById('ollama-download-input'),btn=document.getElementById('ollama-download-button'),statusEl=document.getElementById('ollama-model-status'),model=(input?input.value:'').trim();if(!model){statusEl.dataset.state='error';statusEl.textContent='Enter a model name to download.';return}ollamaModelsBusy=true;if(btn)btn.disabled=true;if(input)input.disabled=true;statusEl.dataset.state='';statusEl.textContent='Downloading "'+model+'"... This may take a few minutes depending on network speed.';try{let res=await fetch('/api/ollama/models/pull',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model})}),data=await res.json();if(!res.ok)throw new Error(data.error||'Failed to download model');statusEl.dataset.state='success';statusEl.textContent='Model "'+model+'" downloaded successfully!';if(input)input.value='';await loadOllamaModels()}catch(err){statusEl.dataset.state='error';statusEl.textContent=err.message}finally{ollamaModelsBusy=false;if(btn)btn.disabled=false;if(input)input.disabled=false}}
+async function deleteOllamaModel(modelName){if(!window.confirm('Delete model "'+modelName+'"? This will permanently remove its files from disk.'))return;let statusEl=document.getElementById('ollama-model-status');statusEl.dataset.state='';statusEl.textContent='Deleting "'+modelName+'"...';try{let res=await fetch('/api/ollama/models/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:modelName})}),data=await res.json();if(!res.ok)throw new Error(data.error||'Failed to delete model');statusEl.dataset.state='success';statusEl.textContent='Model "'+modelName+'" deleted successfully.';if(data.selected_model&&data.selected_model!==appConfig.model){appConfig.model=data.selected_model;syncConfigControls()}await loadOllamaModels()}catch(err){statusEl.dataset.state='error';statusEl.textContent=err.message}}
 function handleTraceEvents(events){if(!traceEventsInitialized){for(let event of events)addTraceActivity(event);lastSeenTraceEventId=events.length?Number(events[events.length-1].id):0;traceEventsInitialized=true;return}for(let event of events){let eventId=Number(event.id);if(eventId<=lastSeenTraceEventId)continue;addTraceActivity(event);if(event.kind==='direct')pulseTrace(event.target_id,event.direction);lastSeenTraceEventId=eventId}}
 function addTraceActivity(event){let list=document.getElementById('live-trace-feed-list');if(list){document.getElementById('live-trace-feed-empty')?.remove();let target=event.target_name||event.target_id||'Unknown';let label=event.kind==='direct'?(event.direction==='inbound'?'Direct message from ':'Direct message to ')+target:(event.direction==='inbound'?'Message received on ':'Message sent to ')+'Channel '+target;let entry=document.createElement('div');entry.className='live-trace-feed-item';let timestamp=document.createElement('time');timestamp.textContent=event.timestamp||'';let body=document.createElement('div');body.textContent=label;entry.append(timestamp,body);list.prepend(entry);while(list.children.length>60)list.lastElementChild.remove()}addAnalyzerPacket(event)}
 function addAnalyzerPacket(event){let list=document.getElementById('analyzer-packet-list');if(!list)return;let empty=list.querySelector('.packet-empty');empty?.parentElement.remove();let row=document.createElement('tr');row.tabIndex=0;let direction=event.direction==='inbound'?'IN':'OUT';let transport=event.kind==='direct'?'DIRECT':'CHANNEL';let status=event.direction==='inbound'?'RECEIVED':'SENT';let values=[event.timestamp||'--',direction,transport,event.target_name||event.target_id||'Unknown',status];values.forEach((value,index)=>{let cell=document.createElement('td');cell.textContent=String(value);if(index===1)cell.className='packet-direction';if(index===2&&transport==='CHANNEL')cell.className='packet-channel';row.appendChild(cell)});row.onclick=()=>showAnalyzerEvent(event);row.onkeydown=key=>{if(key.key==='Enter'||key.key===' '){key.preventDefault();showAnalyzerEvent(event)}};list.prepend(row);while(list.children.length>60)list.lastElementChild.remove();analyzerEventCount=Math.min(analyzerEventCount+1,60);document.getElementById('analyzer-total').textContent=String(analyzerEventCount)}
@@ -1936,7 +2010,7 @@ function stopConsoleDrag(){consoleDrag=null;let dock=document.getElementById('co
 function initConsoleDock(){let dock=document.getElementById('console-dock'),toggle=document.getElementById('console-toggle');if(!dock||!toggle)return;let collapsed=false;try{collapsed=localStorage.getItem('meshcore-console-collapsed')==='1'}catch(error){}dock.classList.toggle('collapsed',collapsed);toggle.setAttribute('aria-expanded',String(!collapsed));restoreConsoleLayout();if(window.ResizeObserver)new ResizeObserver(()=>{if(!consoleDrag)saveConsoleLayout()}).observe(dock);window.addEventListener('resize',()=>clampConsolePosition(dock))}
 function applyBannerVisibility(){let prefs={link:true,battery:true,weather:true,time:true};try{prefs={...prefs,...JSON.parse(localStorage.getItem('meshcore-banner-visibility')||'{}')}}catch(error){}let map={link:'banner-item-link',battery:'banner-item-battery',weather:'banner-item-weather',time:'banner-item-time'};for(let key of Object.keys(map)){let item=document.getElementById(map[key]);if(item)item.hidden=!prefs[key];let checkbox=document.getElementById('banner-toggle-'+key);if(checkbox)checkbox.checked=prefs[key]}}
 function saveBannerVisibility(){let prefs={link:document.getElementById('banner-toggle-link').checked,battery:document.getElementById('banner-toggle-battery').checked,weather:document.getElementById('banner-toggle-weather').checked,time:document.getElementById('banner-toggle-time').checked};try{localStorage.setItem('meshcore-banner-visibility',JSON.stringify(prefs))}catch(error){}applyBannerVisibility()}
-window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();status();peers();loadAppConfig();updateClock();initConsoleDock();applyBannerVisibility();setInterval(updateClock,1000);setInterval(refreshActiveHistory,3000);setInterval(loadLocalWeather,30*60*1000)});setInterval(status,2000);setInterval(peers,10000);
+window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();status();peers();loadAppConfig();loadOllamaModels();updateClock();initConsoleDock();applyBannerVisibility();setInterval(updateClock,1000);setInterval(refreshActiveHistory,3000);setInterval(loadLocalWeather,30*60*1000)});setInterval(status,2000);setInterval(peers,10000);
 </script></head><body>
 <header class="dashboard-header">
 <div class="brand-lockup"><img class="dashboard-logo" src="/dashboard-logo.png" alt="Dashboard logo"><div class="brand-copy"><span class="header-label">MESHCORE + OLLAMA</span><h1>DASHBOARD</h1></div></div>
@@ -1988,9 +2062,32 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <p id="preferences-status" class="preferences-status" aria-live="polite"></p>
 </section>
 <section id="settings-ollama-panel" class="settings-tab-panel" hidden>
-<form class="settings-grid" onsubmit="saveOllamaSettings(event)">
-<div class="settings-item"><label for="model">Ollama model</label><select id="model" onchange="savePreference('model',this.value)">{{MODEL_OPTIONS}}</select><p class="settings-description">Saved in config.json and used for bot replies.</p></div>
+<div class="settings-grid">
+<div class="settings-item"><label for="model">Active Ollama model</label><select id="model" onchange="savePreference('model',this.value)">{{MODEL_OPTIONS}}</select><p class="settings-description">Saved in config.json and used for bot replies.</p></div>
 <div class="settings-item"><label for="ollama-power-toggle">Ollama server</label><button type="button" id="ollama-power-toggle" onclick="toggleOllama()">Turn off</button><p class="settings-description" id="ollama-power-status">Checking status...</p></div>
+<div class="settings-item settings-item-full">
+<div class="model-manager-header"><label>Installed models</label><button type="button" class="secondary refresh-btn" onclick="loadOllamaModels()">Refresh</button></div>
+<p class="settings-description">Manage installed models on disk. Deleting unused models frees up space on Live Kali or small drives.</p>
+<div id="installed-models-list" class="installed-models-list"><p class="map-empty">Loading models...</p></div>
+<p id="ollama-model-status" class="preferences-status" aria-live="polite"></p>
+</div>
+<div class="settings-item settings-item-full">
+<label for="ollama-download-input">Download new model</label>
+<div class="download-control">
+<input id="ollama-download-input" placeholder="e.g. qwen2.5:0.5b or llama3.2:1b">
+<button type="button" id="ollama-download-button" onclick="downloadOllamaModel()">Download</button>
+</div>
+<div class="model-preset-row">
+<span>Presets:</span>
+<button type="button" class="preset-btn" onclick="setDownloadModel('qwen2.5:0.5b')">qwen2.5:0.5b (~400 MB)</button>
+<button type="button" class="preset-btn" onclick="setDownloadModel('llama3.2:1b')">llama3.2:1b (~1.3 GB)</button>
+<button type="button" class="preset-btn" onclick="setDownloadModel('llama3.2:3b')">llama3.2:3b (~2.0 GB)</button>
+<button type="button" class="preset-btn" onclick="setDownloadModel('phi3:mini')">phi3:mini (~2.2 GB)</button>
+</div>
+<p class="settings-description">Enter any Ollama model name or select a preset to pull it from the Ollama library.</p>
+</div>
+</div>
+<form class="settings-grid" style="margin-top:16px" onsubmit="saveOllamaSettings(event)">
 <div class="settings-item"><label><input type="checkbox" id="ollama-schedule-enabled"> Schedule on/off automatically</label><p class="settings-description">Turns Ollama on at the start time and off at the end time every day, to lower power use.</p></div>
 <div class="settings-item"><label for="ollama-schedule-start">Turn on at</label><input type="time" id="ollama-schedule-start" value="07:00"></div>
 <div class="settings-item"><label for="ollama-schedule-end">Turn off at</label><input type="time" id="ollama-schedule-end" value="17:00"></div>
@@ -2126,6 +2223,133 @@ async def ollama_toggle_handler(request):
     else:
         await stop_ollama_server()
     return web.json_response({"ollama_running": app_state["ollama_running"]})
+
+
+async def ollama_models_handler(request):
+    if app_state["ollama_running"]:
+        try:
+            await fetch_available_models()
+        except Exception as error:
+            log_to_dash(f"Failed to refresh Ollama models: {error}")
+
+    return web.json_response({
+        "models": app_state.get("models_info", []),
+        "available_models": list(app_state.get("available_models", [])),
+        "selected_model": app_config.get("model", DEFAULT_MODEL),
+        "ollama_running": app_state["ollama_running"],
+        "busy": app_state.get("model_action_busy", False),
+    })
+
+
+async def ollama_pull_model_handler(request):
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+    model_name = str(data.get("model", "")).strip()
+    if not model_name:
+        return web.json_response({"error": "Model name is required"}, status=400)
+
+    if not re.match(r"^[a-zA-Z0-9_\-./:]+$", model_name):
+        return web.json_response({"error": "Invalid characters in model name"}, status=400)
+
+    if app_state.get("model_action_busy"):
+        return web.json_response(
+            {"error": "Another model operation is already in progress. Please wait."},
+            status=409,
+        )
+
+    if not app_state["ollama_running"]:
+        await update_available_models()
+        if not app_state["ollama_running"]:
+            return web.json_response(
+                {"error": "Ollama server is not running and could not be started."},
+                status=400,
+            )
+
+    app_state["model_action_busy"] = True
+    log_to_dash(f"Starting download of Ollama model '{model_name}'...")
+
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: ollama.pull(model_name))
+        log_to_dash(f"Model '{model_name}' downloaded successfully.")
+        await fetch_available_models()
+        return web.json_response({
+            "success": True,
+            "message": f"Model '{model_name}' downloaded successfully.",
+            "models": app_state.get("models_info", []),
+            "available_models": list(app_state.get("available_models", [])),
+            "selected_model": app_config.get("model", DEFAULT_MODEL),
+        })
+    except Exception as error:
+        log_to_dash(f"Failed to download model '{model_name}': {error}")
+        return web.json_response(
+            {"error": f"Failed to download '{model_name}': {error}"},
+            status=500,
+        )
+    finally:
+        app_state["model_action_busy"] = False
+
+
+async def ollama_delete_model_handler(request):
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+    model_name = str(data.get("model", "")).strip()
+    if not model_name:
+        return web.json_response({"error": "Model name is required"}, status=400)
+
+    if app_state.get("model_action_busy"):
+        return web.json_response(
+            {"error": "Another model operation is already in progress. Please wait."},
+            status=409,
+        )
+
+    if not app_state["ollama_running"]:
+        return web.json_response(
+            {"error": "Ollama server is not running."},
+            status=400,
+        )
+
+    app_state["model_action_busy"] = True
+    log_to_dash(f"Deleting Ollama model '{model_name}'...")
+
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: ollama.delete(model_name))
+        log_to_dash(f"Model '{model_name}' deleted successfully.")
+        await fetch_available_models()
+
+        if app_config.get("model") == model_name:
+            remaining = [m for m in app_state.get("available_models", []) if m != model_name]
+            fallback = remaining[0] if remaining else DEFAULT_MODEL
+            app_config["model"] = fallback
+            app_state["selected_model"] = fallback
+            try:
+                write_app_config(app_config)
+                log_to_dash(f"Active model switched to '{fallback}'.")
+            except Exception as write_err:
+                log_to_dash(f"Could not update config.json after deleting model: {write_err}")
+
+        return web.json_response({
+            "success": True,
+            "message": f"Model '{model_name}' deleted successfully.",
+            "models": app_state.get("models_info", []),
+            "available_models": list(app_state.get("available_models", [])),
+            "selected_model": app_config.get("model", DEFAULT_MODEL),
+        })
+    except Exception as error:
+        log_to_dash(f"Failed to delete model '{model_name}': {error}")
+        return web.json_response(
+            {"error": f"Failed to delete '{model_name}': {error}"},
+            status=500,
+        )
+    finally:
+        app_state["model_action_busy"] = False
 
 
 async def config_handler(request):
@@ -2954,6 +3178,9 @@ def create_app():
     app.router.add_post("/api/restart", restart_dashboard_handler)
     app.router.add_post("/api/update", update_app_handler)
     app.router.add_post("/api/ollama/toggle", ollama_toggle_handler)
+    app.router.add_get("/api/ollama/models", ollama_models_handler)
+    app.router.add_post("/api/ollama/models/pull", ollama_pull_model_handler)
+    app.router.add_post("/api/ollama/models/delete", ollama_delete_model_handler)
     app.router.add_get("/api/peers", peers_handler)
     app.router.add_get("/api/peer-telemetry", peer_telemetry_handler)
     app.router.add_get("/api/scan/bluetooth", bluetooth_scan_handler)

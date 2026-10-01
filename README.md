@@ -103,7 +103,12 @@ ollama pull qwen2.5:0.5b
 ```
 
 - Confirm your virtual environment is active before running the dashboard.
-- The Settings page has an Ollama server toggle to stop/start it on demand, which lowers power draw when you don't need AI replies.
+- The Settings page has an Ollama tab where you can:
+  - Download new models (with quick presets for `qwen2.5:0.5b`, `llama3.2:1b`, `llama3.2:3b`, etc.)
+  - Delete unused models to free up disk/RAM space (especially useful on Live Kali Linux)
+  - Switch the active bot model
+  - Stop/start the Ollama server on demand to save power
+  - Set an automatic on/off schedule
 
 ## Stop the dashboard
 

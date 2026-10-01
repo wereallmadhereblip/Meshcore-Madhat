@@ -12,6 +12,12 @@
   },
   "bot": {
     "name": "MeshCore Assistant",
-    "personality": "helpful, friendly, and concise"
+    "personality": "helpful, friendly, and concise",
+    "response_length": "medium"
+  },
+  "ollama": {
+    "schedule_enabled": false,
+    "start_time": "07:00",
+    "end_time": "17:00"
   }
 }
