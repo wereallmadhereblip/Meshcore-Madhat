@@ -2057,6 +2057,7 @@ body[data-theme="tron"] .incoming-advert-row{min-height:12px}
 .incoming-advert-new{animation:advert-arrival .24s ease-out}
 @keyframes advert-arrival{from{opacity:0;transform:translateX(-5px)}to{opacity:1;transform:translateX(0)}}
 body[data-theme="tron"] .analyzer-stat-grid{display:none}
+body[data-theme="tron"] .analyzer-side>.analyzer-side-section:nth-child(2){display:none}
 body[data-theme="tron"] .analyzer-side>.analyzer-side-section:last-child{display:none}
 @media(max-width:1050px){body[data-theme="tron"] .dashboard-header{gap:4px 6px}body[data-theme="tron"] .header-meta{flex-basis:100%;order:1;justify-content:space-between}body[data-theme="tron"] .top-nav{order:2;flex:1 1 auto}body[data-theme="tron"] .tron-quick-tabs{order:3;margin-left:auto}body[data-theme="tron"] .console-toggle{order:4}}
 @media(max-width:720px){.incoming-adverts{width:100%;max-width:none;height:42px}}
