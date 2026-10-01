@@ -1,6 +1,6 @@
 {
   "model": "llama3.2:1b",
-  "theme": "midnight",
+  "theme": "tron",
   "connection": {
     "type": "bluetooth",
     "ble_mac": "",
@@ -19,5 +19,8 @@
     "schedule_enabled": false,
     "start_time": "07:00",
     "end_time": "17:00"
+  },
+  "auto_update": {
+    "enabled": true
   }
 }

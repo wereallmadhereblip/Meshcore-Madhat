@@ -10,15 +10,6 @@ mkdir -p "$DESKTOP_DIR"
 sudo apt update
 sudo apt install -y git python3 python3-venv python3-pip curl bluez fastfetch whiptail
 
-LOGO_SCRIPT="$SCRIPT_DIR/assets/fastfetch-logo.sh"
-if [[ -f "$LOGO_SCRIPT" ]]; then
-  # Explicit width/height keep fastfetch from mis-measuring the ANSI-colored
-  # logo (which otherwise makes the info text interleave with the art).
-  fastfetch --logo-type data-raw --logo "$(bash "$LOGO_SCRIPT")" --logo-width 70 --logo-height 50
-else
-  fastfetch
-fi
-
 if ! id -nG "$USER" | grep -qw "dialout"; then
   sudo usermod -aG dialout "$USER"
   echo "Added $USER to the dialout group. Log out and back in before using serial devices."
@@ -121,6 +112,15 @@ chmod +x "$DESKTOP_DIR/MeshCore AI Bot Dashboard.desktop"
 
 if command -v gio >/dev/null 2>&1; then
   gio set "$DESKTOP_DIR/MeshCore AI Bot Dashboard.desktop" metadata::trusted true || true
+fi
+
+LOGO_SCRIPT="$SCRIPT_DIR/assets/fastfetch-logo.sh"
+if [[ -f "$LOGO_SCRIPT" ]]; then
+  # Explicit width/height keep fastfetch from mis-measuring the ANSI-colored
+  # logo (which otherwise makes the info text interleave with the art).
+  fastfetch --logo-type data-raw --logo "$(bash "$LOGO_SCRIPT")" --logo-width 70 --logo-height 50
+else
+  fastfetch
 fi
 
 echo "Starting the MeshCore AI Bot Dashboard..."

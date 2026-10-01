@@ -80,6 +80,7 @@ def load_app_config():
         "weather": {"city": "", "state": ""},
         "bot": load_bot_settings(),
         "ollama": {"schedule_enabled": False, "start_time": "07:00", "end_time": "17:00"},
+        "auto_update": {"enabled": True},
     }
     try:
         saved_config = json.loads(CONFIG_FILE_PATH.read_text(encoding="utf-8"))
@@ -128,7 +129,10 @@ def load_app_config():
             value = saved_ollama.get(key)
             if isinstance(value, str) and TIME_OF_DAY_PATTERN.match(value):
                 config["ollama"][key] = value
-    if not {"model", "theme", "connection", "weather", "bot", "ollama"}.issubset(saved_config):
+    saved_auto_update = saved_config.get("auto_update")
+    if isinstance(saved_auto_update, dict) and isinstance(saved_auto_update.get("enabled"), bool):
+        config["auto_update"]["enabled"] = saved_auto_update["enabled"]
+    if not {"model", "theme", "connection", "weather", "bot", "ollama", "auto_update"}.issubset(saved_config):
         try:
             write_app_config(config)
         except OSError:
@@ -139,7 +143,7 @@ def load_app_config():
 def validate_app_config(value):
     if not isinstance(value, dict):
         raise ValueError("Configuration must be a JSON object")
-    unsupported = set(value) - {"model", "theme", "connection", "weather", "bot", "ollama"}
+    unsupported = set(value) - {"model", "theme", "connection", "weather", "bot", "ollama", "auto_update"}
     if unsupported:
         raise ValueError(f"Unsupported configuration keys: {', '.join(sorted(unsupported))}")
 
@@ -207,6 +211,13 @@ def validate_app_config(value):
             raise ValueError(f"Ollama {key} must be in HH:MM 24-hour format")
         ollama_values[key] = setting
 
+    auto_update = value.get("auto_update", app_config["auto_update"])
+    if not isinstance(auto_update, dict) or set(auto_update) - {"enabled"}:
+        raise ValueError("Auto-update settings must contain only enabled")
+    auto_update_enabled = auto_update.get("enabled", app_config["auto_update"]["enabled"])
+    if not isinstance(auto_update_enabled, bool):
+        raise ValueError("Auto-update enabled must be true or false")
+
     return {
         "model": model.strip(),
         "theme": theme,
@@ -214,6 +225,7 @@ def validate_app_config(value):
         "weather": weather_values,
         "bot": validated_bot,
         "ollama": ollama_values,
+        "auto_update": {"enabled": auto_update_enabled},
     }
 
 
@@ -2147,17 +2159,17 @@ let activeView='connection';
 let deviceSettingsLoaded=false;
 let loadedDeviceSettings=null;
 let favoriteNodeIds=new Set();
-let appConfig={model:'llama3.2:1b',theme:'midnight',connection:{type:'bluetooth',ble_mac:'',serial_port:''},bot:{name:'MeshCore Assistant',personality:'helpful, friendly, and concise',response_length:'medium'},ollama:{schedule_enabled:false,start_time:'07:00',end_time:'17:00'}};
+let appConfig={model:'llama3.2:1b',theme:'midnight',connection:{type:'bluetooth',ble_mac:'',serial_port:''},bot:{name:'MeshCore Assistant',personality:'helpful, friendly, and concise',response_length:'medium'},ollama:{schedule_enabled:false,start_time:'07:00',end_time:'17:00'},auto_update:{enabled:true}};
 let configEditorLoaded=false;
 const commonRadioProfiles={balanced:{radio_bw:125,radio_sf:7,radio_cr:5},long_range:{radio_bw:125,radio_sf:10,radio_cr:5},high_throughput:{radio_bw:250,radio_sf:7,radio_cr:5}};
 function applyTheme(theme,persist=true){let previousTheme=document.body.dataset.theme,wasOverview=document.body.classList.contains('tron-overview');document.body.dataset.theme=theme;document.getElementById('theme-select').value=theme;let sessionTitle=document.getElementById('analyzer-session-title');if(sessionTitle)sessionTitle.textContent=theme==='tron'?'MeshCore Live Statistics':'Session';if(theme==='tron'&&previousTheme!=='tron'||theme!=='tron'&&wasOverview)showView('connection');if(persist)saveAppConfig({...appConfig,theme})}
 function showSettingsTab(tab){document.querySelectorAll('.settings-tab').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.settingsTab===tab)));for(let panel of document.querySelectorAll('.settings-tab-panel'))panel.hidden=panel.id!=='settings-'+tab+'-panel';if(tab==='config'&&!configEditorLoaded)loadConfigEditor();if(tab==='ollama')loadOllamaModels()}
-function syncConfigControls(){document.getElementById('theme-select').value=appConfig.theme;let modelSelect=document.getElementById('model');if(![...modelSelect.options].some(option=>option.value===appConfig.model))modelSelect.add(new Option(appConfig.model,appConfig.model));modelSelect.value=appConfig.model;document.getElementById('weather-city').value=appConfig.weather.city;document.getElementById('weather-state').value=appConfig.weather.state;document.getElementById('bot-name').value=appConfig.bot.name;document.getElementById('bot-personality').value=appConfig.bot.personality;document.getElementById('bot-response-length').value=appConfig.bot.response_length;document.getElementById('ollama-schedule-enabled').checked=appConfig.ollama.schedule_enabled;document.getElementById('ollama-schedule-start').value=appConfig.ollama.start_time;document.getElementById('ollama-schedule-end').value=appConfig.ollama.end_time;applyTheme(appConfig.theme,false)}
+function syncConfigControls(){document.getElementById('theme-select').value=appConfig.theme;let modelSelect=document.getElementById('model');if(![...modelSelect.options].some(option=>option.value===appConfig.model))modelSelect.add(new Option(appConfig.model,appConfig.model));modelSelect.value=appConfig.model;document.getElementById('weather-city').value=appConfig.weather.city;document.getElementById('weather-state').value=appConfig.weather.state;document.getElementById('bot-name').value=appConfig.bot.name;document.getElementById('bot-personality').value=appConfig.bot.personality;document.getElementById('bot-response-length').value=appConfig.bot.response_length;document.getElementById('ollama-schedule-enabled').checked=appConfig.ollama.schedule_enabled;document.getElementById('ollama-schedule-start').value=appConfig.ollama.start_time;document.getElementById('ollama-schedule-end').value=appConfig.ollama.end_time;document.getElementById('auto-update-enabled').checked=appConfig.auto_update.enabled;applyTheme(appConfig.theme,false)}
 const weatherIcons={sun:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>',partly:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="16" cy="7" r="3"/><path d="M16 2v1m0 8v1m5-5h-1m-8 0h-1M5 19h12a3 3 0 0 0 .3-6A5 5 0 0 0 8 11.5 3.8 3.8 0 0 0 5 19Z"/></svg>',cloud:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19h13a4 4 0 0 0 .4-8A6 6 0 0 0 7 9.5 4.8 4.8 0 0 0 5 19Z"/></svg>',fog:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm-2 4h14m-10 3h14"/></svg>',rain:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 15h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 7 4 4 0 0 0 5 15Zm2 3-1 2m7-2-1 2m7-2-1 2"/></svg>',snow:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm2 4h.01M12 19h.01M18 18h.01"/></svg>',storm:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm8 1-3 4h3l-1 3 4-5h-3l1-2"/></svg>'};
 function weatherIconName(code){if(code===null||code===undefined||!Number.isFinite(Number(code)))return 'cloud';code=Number(code);if(code===0)return 'sun';if(code===1||code===2)return 'partly';if(code===45||code===48)return 'fog';if(code===51||code===53||code===55||code===56||code===57||code===61||code===63||code===65||code===66||code===67||code===80||code===81||code===82)return 'rain';if(code===71||code===73||code===75||code===77||code===85||code===86)return 'snow';if(code===95||code===96||code===99)return 'storm';return 'cloud'}
 function renderWeatherIcon(code,condition='Weather condition unavailable'){let icon=document.getElementById('weather-icon');icon.innerHTML=weatherIcons[weatherIconName(code)]||weatherIcons.cloud;icon.setAttribute('aria-label',condition);icon.title=condition}
 async function loadLocalWeather(){let temperature=document.getElementById('weather-temperature'),condition=document.getElementById('weather-condition'),location=document.getElementById('weather-location'),widget=document.getElementById('banner-item-weather');condition.textContent='Loading';try{let response=await fetch('/api/local-weather'),data=await response.json();if(!response.ok)throw new Error(data.error||'Weather unavailable');temperature.textContent=Math.round(data.temperature_f)+'°F';condition.textContent=data.condition;location.textContent=data.location;if(widget)widget.title=data.location;renderWeatherIcon(data.weather_code,data.condition)}catch(error){temperature.textContent='--°F';condition.textContent=error.message.includes('Enter a city')?'Set location':'Unavailable';location.textContent=appConfig.weather.city?(appConfig.weather.state?appConfig.weather.city+', '+appConfig.weather.state:appConfig.weather.city):'Location not set';if(widget)widget.title=location.textContent;renderWeatherIcon(null,condition.textContent)}}
-async function loadAppConfig(){try{let response=await fetch('/api/config'),data=await response.json();if(!response.ok)throw new Error(data.error||'Settings could not be loaded');appConfig=data;syncConfigControls();if(new URLSearchParams(window.location.search).get('preview')==='tron')applyTheme('tron',false);loadLocalWeather()}catch(error){let statusMessage=document.getElementById('preferences-status');statusMessage.dataset.state='error';statusMessage.textContent=error.message}}
+async function loadAppConfig(){try{let response=await fetch('/api/config'),data=await response.json();if(!response.ok)throw new Error(data.error||'Settings could not be loaded');appConfig=data;syncConfigControls();if(new URLSearchParams(window.location.search).get('preview')==='tron')applyTheme('tron',false);loadLocalWeather();maybeCheckForUpdates()}catch(error){let statusMessage=document.getElementById('preferences-status');statusMessage.dataset.state='error';statusMessage.textContent=error.message}}
 async function saveAppConfig(config,statusId='preferences-status'){let statusMessage=document.getElementById(statusId);statusMessage.dataset.state='';statusMessage.textContent='Saving config.json...';try{let response=await fetch('/api/config',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)}),data=await response.json();if(!response.ok)throw new Error(data.error||'Settings could not be saved');appConfig=data;syncConfigControls();if(statusId==='config-status'){document.getElementById('config-json-editor').value=JSON.stringify(appConfig,null,2);configEditorLoaded=true}statusMessage.textContent='Saved to config.json.';statusMessage.dataset.state='success'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
 async function savePreference(key,value){await saveAppConfig({...appConfig,[key]:value})}
 async function saveBotSettings(event){event.preventDefault();let name=document.getElementById('bot-name').value.trim(),personality=document.getElementById('bot-personality').value.trim(),responseLength=document.getElementById('bot-response-length').value,statusMessage=document.getElementById('bot-settings-status');if(!name||!personality){statusMessage.textContent='Enter a bot name and personality.';statusMessage.dataset.state='error';return}await saveAppConfig({...appConfig,bot:{name,personality,response_length:responseLength}},'bot-settings-status')}
@@ -2167,6 +2179,9 @@ async function loadConfigEditor(){let statusMessage=document.getElementById('con
 async function saveConfigFile(){let statusMessage=document.getElementById('config-status'),config;try{config=JSON.parse(document.getElementById('config-json-editor').value)}catch(error){statusMessage.textContent='Invalid JSON: '+error.message;statusMessage.dataset.state='error';return}await saveAppConfig(config,'config-status')}
 async function restartDashboard(){let button=document.getElementById('restart-dashboard-button'),statusMessage=document.getElementById('config-status');button.disabled=true;statusMessage.dataset.state='';statusMessage.textContent='Restarting dashboard...';try{await fetch('/api/restart',{method:'POST'})}catch(error){}let attempts=0;async function waitForDashboard(){try{let response=await fetch('/api/status',{cache:'no-store'});if(response.ok){window.location.reload();return}}catch(error){}attempts++;if(attempts>=40){statusMessage.textContent='Dashboard did not restart. Start it again from the terminal.';statusMessage.dataset.state='error';button.disabled=false;return}setTimeout(waitForDashboard,500)}setTimeout(waitForDashboard,500)}
 async function updateApp(){let button=document.getElementById('update-app-button'),statusMessage=document.getElementById('config-status');button.disabled=true;statusMessage.dataset.state='';statusMessage.textContent='Checking repository for updates...';try{let response=await fetch('/api/update',{method:'POST'}),data=await response.json();if(!response.ok)throw new Error(data.error||'App update failed');statusMessage.textContent=data.message||'Update complete.';if(!data.updated){button.disabled=false;return}let attempts=0;async function waitForUpdatedDashboard(){try{let health=await fetch('/api/status',{cache:'no-store'});if(health.ok){window.location.reload();return}}catch(error){}attempts++;if(attempts>=40){statusMessage.textContent='Update installed, but the dashboard did not restart. Start it again from the terminal.';statusMessage.dataset.state='error';button.disabled=false;return}setTimeout(waitForUpdatedDashboard,500)}setTimeout(waitForUpdatedDashboard,700)}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error';button.disabled=false}}
+async function saveAutoUpdateSetting(){await saveAppConfig({...appConfig,auto_update:{enabled:document.getElementById('auto-update-enabled').checked}},'config-status')}
+const AUTO_UPDATE_CHECK_INTERVAL_MS=24*60*60*1000;
+async function maybeCheckForUpdates(){if(!appConfig.auto_update||!appConfig.auto_update.enabled)return;let lastChecked=Number(localStorage.getItem('meshcore-last-update-check')||0);if(Date.now()-lastChecked<AUTO_UPDATE_CHECK_INTERVAL_MS)return;try{let response=await fetch('/api/update/check'),data=await response.json();if(!response.ok)return;localStorage.setItem('meshcore-last-update-check',String(Date.now()));if(data.update_available&&confirm('An update is available for the MeshCore AI Bot. Update now? The dashboard will restart.'))await updateApp()}catch(error){}}
 function loadFavoriteNodes(){try{let saved=JSON.parse(localStorage.getItem('meshcore-favorite-nodes')||'[]');if(Array.isArray(saved))favoriteNodeIds=new Set(saved.map(String))}catch(error){favoriteNodeIds=new Set()}}
 function toggleNodeFavorite(id){let normalized=String(id);if(favoriteNodeIds.has(normalized))favoriteNodeIds.delete(normalized);else favoriteNodeIds.add(normalized);localStorage.setItem('meshcore-favorite-nodes',JSON.stringify([...favoriteNodeIds]));renderConversationTargets('node');renderKnownPeers();renderMapMarkers()}
 function createNodeFavoriteButton(id){let favorite=document.createElement('button'),isFavorite=favoriteNodeIds.has(String(id));favorite.type='button';favorite.className='favorite-toggle';favorite.textContent=isFavorite?'★':'☆';favorite.title=isFavorite?'Remove from favorites':'Add to favorites';favorite.setAttribute('aria-label',favorite.title);favorite.setAttribute('aria-pressed',String(isFavorite));favorite.onclick=()=>toggleNodeFavorite(id);return favorite}
@@ -2361,6 +2376,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 </section>
 <section id="settings-config-panel" class="settings-tab-panel" hidden>
 <label for="config-json-editor">config.json contents</label><textarea id="config-json-editor" class="config-json-editor" rows="18" spellcheck="false" aria-label="Edit config.json"></textarea>
+<label class="settings-item-full"><input type="checkbox" id="auto-update-enabled" checked onchange="saveAutoUpdateSetting()"> Automatically check the repository for updates every 24 hours and prompt to install</label>
 <div class="config-actions"><button type="button" onclick="saveConfigFile()">Save config.json</button><button id="restart-dashboard-button" type="button" onclick="restartDashboard()">Restart Dashboard</button><button id="update-app-button" class="secondary" type="button" onclick="updateApp()">Update from repository</button><p id="config-status" class="config-status" aria-live="polite"></p></div>
 </section>
 <section id="settings-weather-panel" class="settings-tab-panel" hidden>
@@ -2818,6 +2834,50 @@ async def update_app_handler(request):
 
     asyncio.create_task(restart_after_update())
     return web.json_response({"updated": True, "message": "Update installed. Restarting dashboard."}, status=202)
+
+
+async def check_for_update_handler(request):
+    repo_dir = Path(__file__).resolve().parent
+    branch_result = subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    branch = branch_result.stdout.strip() or "main"
+    fetch = subprocess.run(
+        ["git", "fetch", "--quiet", "origin", branch],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if fetch.returncode != 0:
+        return web.json_response(
+            {"error": fetch.stderr.strip() or "Could not check the repository for updates"},
+            status=502,
+        )
+
+    local = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+    remote = subprocess.run(
+        ["git", "rev-parse", f"origin/{branch}"],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+
+    return web.json_response({
+        "update_available": bool(local) and bool(remote) and local != remote,
+        "branch": branch,
+    })
 
 
 async def peers_handler(request):
@@ -3434,6 +3494,7 @@ def create_app():
     app.router.add_get("/api/local-weather", local_weather_handler)
     app.router.add_post("/api/restart", restart_dashboard_handler)
     app.router.add_post("/api/update", update_app_handler)
+    app.router.add_get("/api/update/check", check_for_update_handler)
     app.router.add_post("/api/ollama/toggle", ollama_toggle_handler)
     app.router.add_get("/api/ollama/models", ollama_models_handler)
     app.router.add_post("/api/ollama/models/pull", ollama_pull_model_handler)
