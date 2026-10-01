@@ -39,7 +39,7 @@ CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
 BOT_SETTINGS_PATH = CONFIG_DIR / "meshcore-ollama-bot" / "bot_settings.json"
 CHAT_HISTORY_PATH = CONFIG_DIR / "meshcore-ollama-bot" / "chat_history.json"
 CONFIG_FILE_PATH = Path(__file__).resolve().with_name("config.json")
-AVAILABLE_THEMES = {"midnight", "light", "ocean", "amber", "linux", "macos", "cyberpunk"}
+AVAILABLE_THEMES = {"midnight", "light", "ocean", "amber", "linux", "macos", "cyberpunk", "tron"}
 TIME_OF_DAY_PATTERN = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
 
@@ -1281,7 +1281,7 @@ async def send_to_target(target, target_type, message):
     raise RuntimeError("This MeshCore version has no channel-send method")
 
 
-async def confirm_delivery(result):
+async def confirm_delivery(result, early_ack_codes=()):
     if result.type == EventType.ERROR or not isinstance(result.payload, dict):
         return False
 
@@ -1292,6 +1292,8 @@ async def confirm_delivery(result):
         return False
 
     ack_code = expected_ack.hex() if hasattr(expected_ack, "hex") else str(expected_ack)
+    if ack_code in early_ack_codes:
+        return True
     try:
         acknowledgement = await wait_for_event(
             ack_type,
@@ -1302,6 +1304,26 @@ async def confirm_delivery(result):
     except Exception as error:
         log_to_dash(f"Delivery confirmation unavailable: {error}")
         return False
+
+
+async def send_to_target_with_confirmation(target, target_type, message):
+    early_ack_codes = set()
+    ack_type = getattr(EventType, "ACK", None)
+    subscribe = getattr(meshcore_instance, "subscribe", None)
+    ack_subscription = None
+    if ack_type is not None and subscribe:
+        ack_subscription = subscribe(
+            ack_type,
+            lambda event: early_ack_codes.add(event.attributes.get("code")),
+        )
+
+    try:
+        result = await send_to_target(target, target_type, message)
+        delivered = await confirm_delivery(result, early_ack_codes)
+        return result, delivered
+    finally:
+        if ack_subscription is not None:
+            ack_subscription.unsubscribe()
 
 
 async def handle_incoming_message(event):
@@ -1336,7 +1358,9 @@ async def handle_incoming_message(event):
             for part_number, part in enumerate(reply_parts, start=1):
                 if part_number > 1:
                     await asyncio.sleep(HARDWARE_SEND_INTERVAL)
-                result = await meshcore_instance.commands.send_msg(recipient, part)
+                result, delivered = await send_to_target_with_confirmation(
+                    recipient, "node", part
+                )
                 if result.type == EventType.ERROR:
                     log_to_dash(
                         f"Hardware rejected reply part {part_number}/"
@@ -1346,7 +1370,7 @@ async def handle_incoming_message(event):
                 sent_message = add_chat_message("node", resolved_sender, "outgoing", part)
                 update_chat_message_status(
                     sent_message,
-                    "delivered" if await confirm_delivery(result) else "unconfirmed",
+                    "delivered" if delivered else "unconfirmed",
                 )
                 record_trace_event("direct", "outbound", resolved_sender)
             log_to_dash(
@@ -1413,7 +1437,9 @@ async def handle_incoming_channel_message(event):
             for part_number, part in enumerate(reply_parts, start=1):
                 if part_number > 1:
                     await asyncio.sleep(HARDWARE_SEND_INTERVAL)
-                result = await send_to_target(channel_target, "channel", part)
+                result, delivered = await send_to_target_with_confirmation(
+                    channel_target, "channel", part
+                )
                 if result.type == EventType.ERROR:
                     log_to_dash(
                         f"Hardware rejected channel reply part {part_number}/"
@@ -1425,7 +1451,7 @@ async def handle_incoming_channel_message(event):
                 )
                 update_chat_message_status(
                     sent_message,
-                    "delivered" if await confirm_delivery(result) else "unconfirmed",
+                    "delivered" if delivered else "unconfirmed",
                 )
                 record_trace_event("channel", "outbound", channel_target)
             log_to_dash(
@@ -1469,7 +1495,9 @@ async def handle_new_contact(event):
                     await asyncio.sleep(HARDWARE_SEND_INTERVAL)
                 first_send = False
                 try:
-                    result = await send_to_target(channel, "channel", part)
+                    result, delivered = await send_to_target_with_confirmation(
+                        channel, "channel", part
+                    )
                     if result.type == EventType.ERROR:
                         log_to_dash(f"Channel {channel} peer greeting rejected: {result.payload}")
                         break
@@ -1478,7 +1506,7 @@ async def handle_new_contact(event):
                     )
                     update_chat_message_status(
                         sent_message,
-                        "delivered" if await confirm_delivery(result) else "unconfirmed",
+                        "delivered" if delivered else "unconfirmed",
                     )
                 except Exception as error:
                     log_to_dash(f"Channel {channel} peer greeting failed: {error}")
@@ -1658,6 +1686,7 @@ body[data-theme="amber"]{--page-bg:#21180d;--panel-bg:#342311;--panel-raised:#44
 body[data-theme="linux"]{--page-bg:#020702;--panel-bg:#081008;--panel-raised:#0d190d;--accent:#39ff14;--accent-dim:#10260d;--border:#245b24;--input-bg:#050b05;--input-border:#245b24;--button-text:#020502;--log-bg:#000}
 body[data-theme="macos"]{color-scheme:light;--page-bg:#e7ebf0;--panel-bg:#fff;--panel-raised:#f3f5f8;--text:#1d1d1f;--muted:#6e6e73;--accent:#007aff;--accent-dim:#e5f1ff;--border:#c7c7cc;--input-bg:#f5f5f7;--input-border:#c7c7cc;--button-text:#fff;--log-bg:#1d1d1f}
 body[data-theme="cyberpunk"]{--page-bg:#090511;--panel-bg:#160b24;--panel-raised:#211033;--accent:#ff2bd6;--accent-dim:#351040;--border:#74358c;--input-bg:#10081a;--input-border:#74358c;--button-text:#090511;--log-bg:#050208}
+body[data-theme="tron"]{color-scheme:dark;--page-bg:#040b12;--panel-bg:#071521;--panel-raised:#0c2030;--text:#d4f4fa;--muted:#78a7bb;--accent:#00d8ff;--accent-dim:#082d40;--border:#14506b;--input-bg:#050f19;--input-border:#176486;--button-text:#031018;--log-bg:#030a11;--danger:#ff6d63}
 .dashboard-header,.grid{width:min(100%,1800px);margin-right:auto;margin-left:auto}
 .dashboard-header{min-height:58px;margin-bottom:12px;padding:8px 12px;display:flex;align-items:center;justify-content:space-between;gap:18px;background:var(--panel-bg);border:1px solid var(--border);border-radius:8px}
 .brand-lockup{display:flex;align-items:center;gap:10px;min-width:max-content}
@@ -1665,17 +1694,16 @@ body[data-theme="cyberpunk"]{--page-bg:#090511;--panel-bg:#160b24;--panel-raised
 .brand-copy h1{margin:0;color:var(--text);font-size:16px;font-weight:600;line-height:1.2}
 .brand-copy h1 span{color:var(--accent);font-weight:500}
 .header-label,.eyebrow{display:block;margin-bottom:3px;color:var(--muted);font-size:9px;font-weight:700;letter-spacing:.8px;text-transform:uppercase}
-.header-meta{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-items:stretch;gap:0;width:560px;max-width:100%;min-width:0;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--panel-raised)}
-.header-meta-item{display:flex;flex-direction:column;justify-content:center;gap:3px;min-width:0;padding:7px 14px;border-right:1px solid var(--border)}
-.header-meta-item:last-child{border-right:0}
-.header-meta-item.weather-widget{min-width:0}
+.header-meta{display:flex;align-items:center;gap:16px;min-width:0}
+.header-meta-item{display:flex;flex-direction:column;justify-content:center;gap:3px;min-width:0;padding:0;border:0;background:transparent}
+.header-meta-item.weather-widget{min-width:170px}
 .weather-current{display:flex;align-items:center;gap:8px;white-space:nowrap}
 .weather-icon{flex:none;width:40px;height:40px;display:grid;place-items:center;color:var(--accent)}
 .weather-icon svg{width:36px;height:36px;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round;stroke-width:1.7}
 .weather-current strong{color:var(--text);font-size:14px;font-weight:700;font-variant-numeric:tabular-nums}
 .weather-current span,.weather-location{color:var(--muted);font-size:10px}
 .weather-current .weather-icon{color:var(--accent)}
-.weather-location{display:none}
+.weather-location{display:block;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .header-metric{color:var(--text);font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
 .header-status,.live-tag{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border:1px solid var(--border);border-radius:5px;background:var(--panel-raised);color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.5px;white-space:nowrap}
 .header-status::before,.live-tag::before{width:6px;height:6px;border-radius:50%;background:var(--danger);content:""}
@@ -1691,6 +1719,7 @@ body[data-theme="cyberpunk"]{--page-bg:#090511;--panel-bg:#160b24;--panel-raised
 .view-panel[hidden]{display:none!important}
 .page-view{width:min(100%,1800px);flex:1;margin:0 auto;padding-bottom:10px;display:flex;flex-direction:column;min-height:0}
 .page-view>*:last-child{flex:1;min-height:0}
+body:has(#nodes-view:not([hidden])){height:100vh;overflow:hidden}
 .connection-layout{width:min(100%,520px);display:grid;grid-template-columns:minmax(0,1fr);gap:12px;align-items:stretch}
 .settings-layout{width:min(100%,760px);display:grid;grid-template-columns:minmax(0,1fr);gap:12px;align-items:stretch}
 .settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
@@ -1710,6 +1739,7 @@ body[data-theme="cyberpunk"]{--page-bg:#090511;--panel-bg:#160b24;--panel-raised
 .config-status[data-state="success"],.preferences-status[data-state="success"]{color:var(--accent)}
 .settings-item{min-width:0;padding:12px;border:1px solid var(--border);border-radius:6px;background:var(--panel-raised)}
 .settings-item select{margin-top:4px}
+.theme-control-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;margin-top:4px}.theme-control-row select{margin:0}.tron-mode-button{border-color:#47d9c4;background:#0c2928;color:#a1fff0;white-space:nowrap}
 .settings-item-full{grid-column:1/-1}
 .model-manager-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
 .model-manager-header label{margin:0}
@@ -1751,6 +1781,8 @@ button:hover{transform:translateY(-1px);border-color:var(--accent);background:va
 .chat-panel{min-height:360px;display:flex;flex-direction:column}
 .messages-layout{display:grid;grid-template-columns:minmax(210px,280px) minmax(0,1fr);align-items:stretch;gap:12px}
 .conversation-rail{min-height:360px;margin:0;display:flex;flex-direction:column}
+#nodes-view .messages-layout,#channels-view .messages-layout{height:100%;min-height:0;overflow:hidden}
+#nodes-view .conversation-rail,#nodes-view .chat-panel,#channels-view .conversation-rail,#channels-view .chat-panel{min-height:0;overflow:hidden}
 .conversation-target-list{display:grid;align-content:start;gap:6px;min-height:0;overflow:auto}
 .conversation-filters{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:8px}
 .conversation-filters label{min-width:0;margin:0;font-size:10px}
@@ -1780,6 +1812,7 @@ button:hover{transform:translateY(-1px);border-color:var(--accent);background:va
 .peer-inline-detail dt{color:var(--muted);font-size:9px}
 .peer-inline-detail dd{margin:1px 0 0;color:var(--text);font-size:10px;overflow-wrap:anywhere}
 #node-chat-history,#channel-chat-history{flex:1;min-height:220px;overflow-y:auto;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--log-bg);white-space:pre-wrap;overflow-wrap:anywhere}
+#nodes-view #node-chat-history,#channels-view #channel-chat-history{min-height:0}
 #node-chat-history:empty::before,#channel-chat-history:empty::before{display:block;padding:8px;color:var(--muted);font-size:11px;content:"No messages in this view yet"}
 .chat-message{max-width:92%;width:fit-content;margin:6px 0;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--panel-raised);color:var(--text);text-align:left;white-space:pre-wrap;overflow-wrap:anywhere}
 .chat-message.incoming{margin-right:auto}
@@ -1812,7 +1845,7 @@ button:hover{transform:translateY(-1px);border-color:var(--accent);background:va
 .console-dock{position:fixed;top:88px;right:16px;bottom:16px;z-index:900;width:320px;min-width:240px;min-height:160px;max-width:calc(100vw - 60px);margin:0;padding:0;background:none;resize:both;overflow:hidden;transition:opacity .2s ease,transform .2s ease}
 .console-dock.collapsed{opacity:0;pointer-events:none;transform:scale(.96)}
 .console-dock.dragging{opacity:.85}
-.console-toggle{position:fixed;top:50%;right:0;z-index:901;transform:translateY(-50%);padding:10px 8px;border:1px solid var(--border);border-right:0;border-radius:6px 0 0 6px;background:var(--panel-bg);color:var(--text);writing-mode:vertical-rl;text-transform:uppercase;letter-spacing:.05em;font:10px ui-monospace,"SFMono-Regular",monospace;cursor:pointer}
+.console-toggle{position:static;order:2;flex:none;align-self:center;padding:6px 10px;border:1px solid var(--border);border-radius:4px;background:var(--panel-bg);color:var(--text);text-transform:uppercase;letter-spacing:.05em;font:10px ui-monospace,"SFMono-Regular",monospace;cursor:pointer}
 .console-card{height:100%;margin:0;padding:10px;display:flex;flex-direction:column}
 .console-card .panel-heading{cursor:move;user-select:none}
 .console-card .panel-heading{margin-bottom:6px}
@@ -1882,10 +1915,12 @@ button:hover{transform:translateY(-1px);border-color:var(--accent);background:va
 .trace-pulse-marker{animation:trace-pulse-ring 1.1s ease-out 2}
 @keyframes trace-pulse-ring{0%{filter:drop-shadow(0 0 0 var(--accent))}50%{filter:drop-shadow(0 0 8px var(--accent))}100%{filter:drop-shadow(0 0 0 transparent)}}
 .trace-pulse-dot{filter:drop-shadow(0 0 6px var(--accent))}
+.analyzer-radio-status{display:grid;gap:10px;margin-top:12px}.analyzer-radio-group h4{margin:0 0 5px;color:var(--accent);font-size:9px;font-weight:700;text-transform:uppercase}.analyzer-radio-list{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 8px;margin:0}.analyzer-radio-list dt{color:var(--muted);font-size:10px}.analyzer-radio-list dd{margin:0;color:var(--text);font:10px ui-monospace,monospace;text-align:right}.analyzer-radio-updated{margin:0;color:var(--muted);font-size:9px}
 .header-metric,.header-status,.weather-current{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-@media(max-width:1050px){.header-meta{gap:0}}
+@media(max-width:1050px){.header-meta{gap:10px}}
 @media(max-width:1050px){.dashboard-header{flex-wrap:wrap}.top-nav{order:3;flex-basis:100%}.map-layout{grid-template-columns:minmax(210px,260px) minmax(0,1fr)}}
-@media(max-width:720px){body{padding:8px}.dashboard-header{align-items:flex-start;flex-direction:column;gap:12px}.top-nav{order:0;max-width:100%;overflow-x:auto}.nav-tab{flex:none}.header-meta{width:100%;grid-template-columns:repeat(2,minmax(0,1fr))}.settings-grid,.device-settings-layout form{grid-template-columns:minmax(0,1fr)}.messages-layout{grid-template-columns:minmax(0,1fr)}.conversation-rail{min-height:0;max-height:190px}.device-settings-layout .settings-description,.device-settings-layout .settings-actions{grid-column:1}.map-layout{grid-template-columns:minmax(0,1fr)}.map-rail{min-height:180px;max-height:230px}.map-surface{min-height:48vh}#map-canvas{height:50vh;min-height:320px}.map-toolbar{align-items:flex-start;flex-direction:column}.console-dock{top:auto!important;right:8px;bottom:8px;left:8px!important;width:auto!important;max-width:none;height:38vh!important}.console-toggle{right:0}.messages-layout{grid-template-rows:auto minmax(0,1fr)}.chat-panel{min-height:340px}.page-view{padding-bottom:8px}}
+@media(max-width:720px){body{padding:8px}.dashboard-header{align-items:flex-start;flex-direction:column;gap:12px}.top-nav{order:0;max-width:100%;overflow-x:auto}.nav-tab{flex:none}.header-meta{width:100%;flex-wrap:wrap;justify-content:space-between}.settings-grid,.device-settings-layout form{grid-template-columns:minmax(0,1fr)}.messages-layout{grid-template-columns:minmax(0,1fr)}.conversation-rail{min-height:0;max-height:190px}.device-settings-layout .settings-description,.device-settings-layout .settings-actions{grid-column:1}.map-layout{grid-template-columns:minmax(0,1fr)}.map-rail{min-height:180px;max-height:230px}.map-surface{min-height:48vh}#map-canvas{height:50vh;min-height:320px}.map-toolbar{align-items:flex-start;flex-direction:column}.console-dock{top:auto!important;right:8px;bottom:8px;left:8px!important;width:auto!important;max-width:none;height:38vh!important}.console-toggle{right:0}.messages-layout{grid-template-rows:auto minmax(0,1fr)}.chat-panel{min-height:340px}.page-view{padding-bottom:8px}}
+@media(max-width:720px){#nodes-view .messages-layout,#channels-view .messages-layout{grid-template-rows:minmax(0,min(24vh,190px)) minmax(0,1fr)}}
 body[data-theme="midnight"],body[data-theme="ocean"]{--page-bg:#091117;--panel-bg:#0f1b22;--panel-raised:#14252d;--text:#d7e4e8;--muted:#78919a;--accent:#42d9c3;--accent-dim:#103c3d;--border:#23404a;--input-bg:#0a151b;--input-border:#315562;--log-bg:#071016}
 body{padding:0;background-image:linear-gradient(rgba(66,217,195,.018) 1px,transparent 1px),linear-gradient(90deg,rgba(66,217,195,.018) 1px,transparent 1px);background-size:24px 24px;font-family:ui-monospace,"SFMono-Regular",monospace}
 .dashboard-header{width:100%;max-width:none;margin:0 0 10px;padding:10px 16px;border-width:0 0 1px;border-radius:0;background:#0b151b;box-shadow:0 4px 20px rgba(0,0,0,.22)}
@@ -1894,6 +1929,127 @@ body{padding:0;background-image:linear-gradient(rgba(66,217,195,.018) 1px,transp
 .reference-device-settings{width:min(100%,1700px);column-width:340px;column-gap:12px;overflow-x:auto;margin-bottom:16px}.device-settings-card{padding:0;overflow:hidden;break-inside:avoid}.device-settings-card>.panel-heading{margin:0;padding:13px 16px}.device-settings-card>.panel-heading h2{font-size:14px}.device-setting-row{width:100%;min-height:56px;padding:11px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;border:0;border-bottom:1px solid var(--border);border-radius:0;background:transparent;color:var(--text);text-align:left}.device-setting-row:hover{background:var(--panel-raised);transform:none}.device-setting-row strong,.device-toggle-row strong{display:block;font-size:12px}.device-setting-row small,.device-toggle-row small{display:block;margin-top:3px;color:var(--muted);font-size:10px}.device-info-grid{margin:0;padding:8px 16px 14px;display:grid;grid-template-columns:minmax(100px,.35fr) minmax(0,1fr);gap:6px 12px;border-top:1px solid var(--border);font-size:10px}.device-info-grid[hidden]{display:none}.device-info-grid dt{color:var(--muted)}.device-info-grid dd{margin:0;overflow-wrap:anywhere;color:var(--text);font-family:ui-monospace,monospace}.device-settings-grid{padding:12px 16px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 14px}.device-settings-grid>label{margin:0;min-width:0}.device-settings-grid>label>span{display:block;margin-bottom:5px;color:var(--muted);font-size:10px}.device-settings-grid .device-toggle-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0}.device-toggle-row input{width:18px;min-width:18px;height:18px;margin:0;accent-color:var(--accent)}.device-action-grid{padding:12px 16px;display:flex;flex-wrap:wrap;gap:8px}.device-action-grid button{flex:1 1 145px}.danger-action{color:var(--danger)!important;border-color:color-mix(in srgb,var(--danger) 45%,var(--border))!important}.device-debug-output{max-height:300px;margin:0 16px 12px;padding:10px;overflow:auto;border:1px solid var(--border);background:var(--log-bg);color:var(--muted);font:10px/1.5 ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
 .local-region-list{padding:0 16px 12px}.local-region-item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--border);font:11px ui-monospace,monospace}.local-region-item button{padding:4px 8px;color:var(--danger)}
 @media(max-width:640px){.device-settings-grid{grid-template-columns:minmax(0,1fr)}.reference-device-settings{width:calc(100% - 12px);column-width:auto;column-count:1}}
+body[data-theme="tron"]{padding:0;background-color:var(--page-bg);background-image:linear-gradient(rgba(76,232,207,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(76,232,207,.045) 1px,transparent 1px),repeating-linear-gradient(0deg,rgba(255,255,255,.012) 0,rgba(255,255,255,.012) 1px,transparent 1px,transparent 4px);background-size:32px 32px,32px 32px,100% 4px;font:12px/1.45 "IBM Plex Mono","Cascadia Code",ui-monospace,monospace}
+body[data-theme="tron"] .dashboard-header{display:grid;grid-template-columns:minmax(160px,210px) minmax(0,1fr) auto;grid-template-areas:"brand nav console" "brand meta meta";align-items:center;gap:8px 18px;min-height:0;margin:0 0 12px;padding:10px 16px;border:0;border-bottom:1px solid var(--border);border-radius:0;background:linear-gradient(100deg,#091319,#0c171d 68%,#11221f);box-shadow:0 10px 28px rgba(0,0,0,.32)}
+body[data-theme="tron"] .brand-lockup{grid-area:brand;min-width:0}
+body[data-theme="tron"] .dashboard-logo{width:48px;height:48px;object-fit:contain;filter:drop-shadow(0 0 8px rgba(76,232,207,.45))}
+body[data-theme="tron"] .brand-copy h1{font:600 18px/1.1 "IBM Plex Mono","Cascadia Code",ui-monospace,monospace;color:var(--text)}
+body[data-theme="tron"] .brand-copy .header-label{color:var(--accent)}
+body[data-theme="tron"] .top-nav{grid-area:nav;min-width:0;flex-wrap:wrap;gap:3px}
+body[data-theme="tron"] .nav-tab{min-height:30px;padding:6px 8px;border:1px solid transparent;border-radius:2px;color:var(--muted);font:10px "IBM Plex Mono","Cascadia Code",ui-monospace,monospace;text-transform:uppercase}
+body[data-theme="tron"] .nav-tab:hover,body[data-theme="tron"] .nav-tab[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-dim);color:var(--accent);box-shadow:0 0 12px rgba(76,232,207,.12);transform:none}
+body[data-theme="tron"] .header-meta{grid-area:meta;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;width:100%;max-width:none}
+body[data-theme="tron"] .header-meta-item{min-height:48px;padding:6px 9px;border:1px solid var(--border);border-left:2px solid var(--accent);background:rgba(5,13,18,.76)}
+body[data-theme="tron"] .header-label,body[data-theme="tron"] .eyebrow{margin-bottom:3px;color:var(--muted);font:700 9px/1.2 "IBM Plex Mono","Cascadia Code",ui-monospace,monospace;letter-spacing:0}
+body[data-theme="tron"] .weather-current strong{font-size:13px}
+body[data-theme="tron"] .weather-location{max-width:100%;font-size:9px}
+body[data-theme="tron"] .console-toggle{grid-area:console;justify-self:end;align-self:start;border-color:var(--accent);border-radius:2px;background:var(--accent-dim);color:var(--accent);font:10px "IBM Plex Mono","Cascadia Code",ui-monospace,monospace}
+body[data-theme="tron"] .page-view{width:min(100% - 32px,1840px);padding-bottom:16px}
+body[data-theme="tron"] .card,body[data-theme="tron"] .analyzer-main,body[data-theme="tron"] .analyzer-side,body[data-theme="tron"] .map-workspace,body[data-theme="tron"] .live-trace-workspace{border:1px solid var(--border);border-radius:3px;background:linear-gradient(145deg,rgba(15,29,35,.98),rgba(8,17,22,.98));box-shadow:0 12px 30px rgba(0,0,0,.28),inset 0 1px rgba(255,255,255,.025)}
+body[data-theme="tron"] .panel-heading{padding-bottom:9px;border-bottom:1px solid rgba(76,232,207,.2)}
+body[data-theme="tron"] h2,body[data-theme="tron"] h3{font-family:"IBM Plex Mono","Cascadia Code",ui-monospace,monospace;color:var(--text)}
+body[data-theme="tron"] button{min-height:32px;border-radius:2px;font:10px "IBM Plex Mono","Cascadia Code",ui-monospace,monospace;text-transform:uppercase;letter-spacing:0}
+body[data-theme="tron"] button:hover{border-color:var(--accent);background:var(--accent-dim);color:var(--accent);box-shadow:0 0 14px rgba(76,232,207,.12);transform:none}
+body[data-theme="tron"] input,body[data-theme="tron"] select,body[data-theme="tron"] textarea{border-radius:2px;background-color:var(--input-bg);font:11px "IBM Plex Mono","Cascadia Code",ui-monospace,monospace}
+body[data-theme="tron"] input:focus,body[data-theme="tron"] select:focus,body[data-theme="tron"] textarea:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(76,232,207,.12)}
+body[data-theme="tron"] .connection-layout{width:min(100%,900px)}
+body[data-theme="tron"] .connection-card{padding:18px;border-top:2px solid var(--accent)}
+body[data-theme="tron"] .messages-layout{gap:10px}
+body[data-theme="tron"] .conversation-rail,body[data-theme="tron"] .chat-panel{border-radius:3px}
+body[data-theme="tron"] .conversation-target{border-radius:2px;background:#0b171d}
+body[data-theme="tron"] .conversation-target.active{border-color:var(--accent);background:var(--accent-dim);box-shadow:inset 2px 0 var(--accent)}
+body[data-theme="tron"] .chat-header{border-color:rgba(76,232,207,.25)}
+body[data-theme="tron"] #node-chat-history,body[data-theme="tron"] #channel-chat-history{border-color:var(--border);border-radius:2px;background:var(--log-bg)}
+body[data-theme="tron"] .chat-message{border-radius:2px;background:#101f25}
+body[data-theme="tron"] .chat-message.outgoing{border-color:#28695f;background:#10312d}
+body[data-theme="tron"] .chat-message.incoming{border-left:2px solid #e8b968}
+body[data-theme="tron"] .analyzer-toolbar{border-color:var(--border);background:linear-gradient(90deg,#10221f,#0b151b)}
+body[data-theme="tron"] .analyzer-table th{background:#10211f;color:var(--accent)}
+body[data-theme="tron"] .analyzer-table td{border-color:rgba(76,232,207,.12)}
+body[data-theme="tron"] .analyzer-table tr:hover td{background:var(--accent-dim)}
+body[data-theme="tron"] .analyzer-stat{background:#0b171d}
+body[data-theme="tron"] .analyzer-stat strong{color:var(--accent)}
+body[data-theme="tron"] .settings-tabs{border-color:var(--border)}
+body[data-theme="tron"] .settings-tab[aria-pressed="true"]{border-bottom-color:var(--accent);color:var(--accent)}
+body[data-theme="tron"] .settings-item{border-radius:2px;background:rgba(14,29,35,.88)}
+body[data-theme="tron"] .tron-mode-button{border-color:#47d9c4;background:#0c2928;color:#a1fff0}
+body[data-theme="tron"] .console-dock .card{border-color:var(--accent);background:#081217}
+body[data-theme="tron"] .header-status.connected{border-color:var(--accent);background:#123a35;color:var(--accent)}
+body[data-theme="tron"] .packet-channel{color:#f0bd69}
+@media(max-width:1050px){body[data-theme="tron"] .dashboard-header{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"brand console" "nav nav" "meta meta"}.dashboard-logo{width:40px;height:40px}}
+@media(max-width:640px){body[data-theme="tron"] .dashboard-header{gap:10px;padding:10px}.dashboard-logo{width:36px;height:36px}body[data-theme="tron"] .header-meta{grid-template-columns:repeat(2,minmax(0,1fr))}body[data-theme="tron"] .page-view{width:calc(100% - 16px)}body[data-theme="tron"] .theme-control-row{grid-template-columns:minmax(0,1fr)}}
+body[data-theme="tron"].tron-overview{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:auto minmax(300px,1.15fr) minmax(220px,.8fr);grid-template-areas:"header header header header header header header header header header header header" "connection connection connection nodes nodes nodes nodes nodes channels channels channels channels" "map map map map map map map map analyzer analyzer analyzer analyzer";gap:10px;width:100%;height:100vh;min-height:100vh;padding:10px;overflow:hidden}
+body[data-theme="tron"].tron-overview .dashboard-header{grid-area:header;width:100%;margin:0}
+body[data-theme="tron"].tron-overview #connection-view{grid-area:connection}
+body[data-theme="tron"].tron-overview #nodes-view{grid-area:nodes}
+body[data-theme="tron"].tron-overview #channels-view{grid-area:channels}
+body[data-theme="tron"].tron-overview #map-view{grid-area:map}
+body[data-theme="tron"].tron-overview #analyzer-view{grid-area:analyzer}
+body[data-theme="tron"].tron-overview #connection-view,body[data-theme="tron"].tron-overview #nodes-view,body[data-theme="tron"].tron-overview #channels-view,body[data-theme="tron"].tron-overview #map-view,body[data-theme="tron"].tron-overview #analyzer-view{display:flex!important;width:auto;min-width:0;min-height:0;height:auto;margin:0;padding:0;overflow:hidden}
+body[data-theme="tron"].tron-overview #connection-view .connection-layout{width:100%;min-height:0}
+body[data-theme="tron"].tron-overview #connection-view .connection-card{width:100%;min-height:0;margin:0;overflow-y:auto}
+body[data-theme="tron"].tron-overview #nodes-view .messages-layout,body[data-theme="tron"].tron-overview #channels-view .messages-layout{grid-template-columns:minmax(130px,38%) minmax(0,1fr);width:100%;height:100%;min-height:0;gap:8px}
+body[data-theme="tron"].tron-overview #nodes-view .conversation-rail,body[data-theme="tron"].tron-overview #channels-view .conversation-rail,body[data-theme="tron"].tron-overview #nodes-view .chat-panel,body[data-theme="tron"].tron-overview #channels-view .chat-panel{min-width:0;min-height:0;height:100%;margin:0;overflow:hidden}
+body[data-theme="tron"].tron-overview #node-chat-history,body[data-theme="tron"].tron-overview #channel-chat-history{min-height:0}
+body[data-theme="tron"].tron-overview #map-view .map-layout{flex:1;min-height:0;grid-template-columns:minmax(150px,220px) minmax(0,1fr)}
+body[data-theme="tron"].tron-overview #map-view .map-surface{min-height:0}
+body[data-theme="tron"].tron-overview #map-view #map-canvas{min-height:0}
+body[data-theme="tron"].tron-overview .analyzer-shell{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) minmax(0,1fr);height:100%;min-height:0;gap:8px}
+body[data-theme="tron"].tron-overview .analyzer-main,body[data-theme="tron"].tron-overview .analyzer-side{min-width:0;min-height:0;overflow:auto}
+body[data-theme="tron"].tron-overview .view-panel[hidden]{display:none!important}
+body[data-theme="tron"].tron-overview .view-panel:not([hidden]){animation:tron-panel-arrive .32s ease-out both}
+@keyframes tron-panel-arrive{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+@media(max-width:1050px){body[data-theme="tron"].tron-overview{height:auto;min-height:100vh;overflow:auto;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:auto repeat(4,minmax(320px,auto));grid-template-areas:"header header" "connection nodes" "channels channels" "map map" "analyzer analyzer"}body[data-theme="tron"].tron-overview:has(#nodes-view:not([hidden])){height:auto;overflow:auto}body[data-theme="tron"].tron-overview #channels-view .messages-layout{grid-template-columns:minmax(150px,38%) minmax(0,1fr)}}
+@media(max-width:640px){body[data-theme="tron"].tron-overview{grid-template-columns:minmax(0,1fr);grid-template-rows:auto repeat(5,minmax(300px,auto));grid-template-areas:"header" "connection" "nodes" "channels" "map" "analyzer";padding:8px}body[data-theme="tron"].tron-overview #nodes-view .messages-layout,body[data-theme="tron"].tron-overview #channels-view .messages-layout{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(110px,.38fr) minmax(0,1fr)}body[data-theme="tron"].tron-overview #nodes-view .conversation-rail,body[data-theme="tron"].tron-overview #channels-view .conversation-rail{max-height:none}}
+.tron-quick-tabs{display:none}
+body[data-theme="tron"]{--page-bg:#000;--panel-bg:rgba(0,0,0,.62);--panel-raised:rgba(0,10,16,.58);--accent:#00d8ff;--accent-dim:rgba(0,92,122,.24);--border:rgba(0,190,235,.45);--input-bg:rgba(0,0,0,.76);--input-border:rgba(0,190,235,.55);--log-bg:rgba(0,0,0,.75);background-color:#000;background-image:linear-gradient(rgba(0,190,235,.018) 1px,transparent 1px),linear-gradient(90deg,rgba(0,190,235,.018) 1px,transparent 1px);background-size:32px 32px}
+body[data-theme="tron"] .dashboard-header{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-start;gap:3px 8px;min-height:0;margin:0 0 8px;padding:4px 10px;border:0;border-bottom:1px solid rgba(0,190,235,.45);border-radius:0;background:rgba(0,0,0,.82);box-shadow:none;backdrop-filter:blur(5px)}
+body[data-theme="tron"] .brand-lockup{display:none}
+body[data-theme="tron"] .top-nav{display:none;order:2;flex:0 1 auto;min-width:0;flex-wrap:nowrap;gap:1px;overflow-x:auto}
+body[data-theme="tron"] .nav-tab{flex:none;min-height:25px;padding:3px 6px;border-radius:1px;font-size:9px}
+body[data-theme="tron"] .nav-tab[data-view="settings"],body[data-theme="tron"] .nav-tab[data-view="device-settings"]{display:none}
+body[data-theme="tron"] .nav-tab:hover,body[data-theme="tron"] .nav-tab[aria-pressed="true"]{border-color:#00d8ff;background:rgba(0,105,140,.2);color:#4be7ff;box-shadow:none}
+body[data-theme="tron"] .header-meta{order:1;flex:1 1 440px;display:flex;align-items:center;justify-content:flex-end;gap:0;width:auto;max-width:none;min-width:0;border:0;background:transparent;overflow:visible}
+body[data-theme="tron"] .header-meta-item{display:flex;flex:0 1 auto;flex-direction:row;align-items:center;gap:5px;min-width:0;min-height:24px;padding:2px 8px;border:0;border-left:1px solid rgba(0,190,235,.3);background:transparent}
+body[data-theme="tron"] .header-meta-item.weather-widget{min-width:0}
+body[data-theme="tron"] .header-label{display:inline;margin:0;color:#70a8bc;font-size:8px;font-weight:600;letter-spacing:0}
+body[data-theme="tron"] .header-metric{font-size:10px;color:#d4f4fa}
+body[data-theme="tron"] .header-status{padding:2px 5px;border:0;background:transparent;color:#d4f4fa;font-size:9px}
+body[data-theme="tron"] .header-status.connected{color:#72ffcb}
+body[data-theme="tron"] .weather-current{gap:4px}
+body[data-theme="tron"] .weather-icon{width:18px;height:18px}
+body[data-theme="tron"] .weather-icon svg{width:16px;height:16px}
+body[data-theme="tron"] .weather-current strong{font-size:10px}
+body[data-theme="tron"] .weather-current span:not(.weather-icon){font-size:9px}
+body[data-theme="tron"] .weather-location{display:none}
+body[data-theme="tron"] .tron-quick-tabs{order:3;display:flex;flex:none;align-items:center;gap:3px}
+body[data-theme="tron"] .tron-quick-tabs button,body[data-theme="tron"] .console-toggle{position:static;min-height:25px;padding:3px 7px;border:1px solid rgba(0,190,235,.42);border-radius:1px;background:rgba(0,45,62,.28);color:#78ddf4;font:9px "IBM Plex Mono","Cascadia Code",ui-monospace,monospace}
+body[data-theme="tron"] .console-toggle{order:4;align-self:center;border-color:rgba(0,216,255,.62);color:#4be7ff}
+body[data-theme="tron"] .console-toggle:hover,body[data-theme="tron"] .tron-quick-tabs button:hover{border-color:#00d8ff;background:rgba(0,105,140,.2);color:#fff;box-shadow:none}
+body[data-theme="tron"] .card,body[data-theme="tron"] .analyzer-main,body[data-theme="tron"] .analyzer-side,body[data-theme="tron"] .map-workspace,body[data-theme="tron"] .live-trace-workspace,body[data-theme="tron"] .settings-item{border-color:rgba(0,170,215,.35);border-radius:2px;background:rgba(0,5,9,.58);box-shadow:none;backdrop-filter:blur(3px)}
+body[data-theme="tron"] .panel-heading,body[data-theme="tron"] .chat-header{border-color:rgba(0,190,235,.25)}
+body[data-theme="tron"] .conversation-target,body[data-theme="tron"] .analyzer-stat,body[data-theme="tron"] .analyzer-table th{background:rgba(0,18,26,.56)}
+body[data-theme="tron"] .chat-message,body[data-theme="tron"] .chat-message.outgoing{background:rgba(0,35,48,.48)}
+body[data-theme="tron"] .chat-message.incoming{border-left-color:#f1bc69}
+body[data-theme="tron"] .analyzer-toolbar{background:rgba(0,15,22,.5)}
+body[data-theme="tron"] .analyzer-table tr:hover td{background:rgba(0,90,120,.18)}
+body[data-theme="tron"] .settings-tabs{background:transparent}
+body[data-theme="tron"] .tron-mode-button{background:rgba(0,80,100,.28)}
+body[data-theme="tron"].tron-overview{background-color:#000}
+body[data-theme="tron"].tron-overview #connection-view .connection-card{display:flex;flex-direction:column;overflow:hidden}
+body[data-theme="tron"].tron-overview .tron-incoming-adverts{display:flex;flex:1;flex-direction:column;min-height:0;margin-top:12px;padding-top:9px;border-top:1px solid rgba(0,190,235,.28)}
+body[data-theme="tron"] .tron-incoming-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+body[data-theme="tron"] .tron-incoming-heading h3{margin:0;color:#58dff7;font:600 9px "IBM Plex Mono","Cascadia Code",ui-monospace,monospace;text-transform:uppercase}
+body[data-theme="tron"] .tron-incoming-count{color:var(--muted);font:9px ui-monospace,monospace}
+body[data-theme="tron"] .tron-incoming-list{display:grid;align-content:start;gap:4px;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:rgba(0,190,235,.55) transparent}
+body[data-theme="tron"] .tron-incoming-empty{margin:0;padding:8px 0;color:var(--muted);font:9px/1.5 ui-monospace,monospace}
+body[data-theme="tron"] .tron-incoming-row{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0;padding:5px 7px;border-left:2px solid rgba(0,190,235,.52);background:rgba(0,30,42,.36)}
+body[data-theme="tron"] .tron-incoming-name{min-width:0;overflow:hidden;color:var(--text);font:10px ui-monospace,monospace;text-overflow:ellipsis;white-space:nowrap}
+body[data-theme="tron"] .tron-incoming-meta{flex:none;color:#75b4c8;font:9px ui-monospace,monospace;white-space:nowrap}
+body[data-theme="tron"] .analyzer-stat-grid{display:none}
+body[data-theme="tron"] .analyzer-side>.analyzer-side-section:last-child{display:none}
+@media(max-width:1050px){body[data-theme="tron"] .dashboard-header{gap:4px 6px}body[data-theme="tron"] .header-meta{flex-basis:100%;order:1;justify-content:space-between}body[data-theme="tron"] .top-nav{order:2;flex:1 1 auto}body[data-theme="tron"] .tron-quick-tabs{order:3;margin-left:auto}body[data-theme="tron"] .console-toggle{order:4}}
+@media(max-width:640px){body[data-theme="tron"] .dashboard-header{gap:4px;padding:4px 6px}body[data-theme="tron"] .header-meta{flex-wrap:wrap;justify-content:flex-start;gap:0}body[data-theme="tron"] .header-meta-item{padding:2px 5px}body[data-theme="tron"] .top-nav{flex-basis:100%;order:2}body[data-theme="tron"] .tron-quick-tabs{order:3;margin-left:0}body[data-theme="tron"] .console-toggle{order:4}}
 </style>
 <script>
 let gatewayTelemetry={};
@@ -1907,14 +2063,14 @@ let favoriteNodeIds=new Set();
 let appConfig={model:'llama3.2:1b',theme:'midnight',connection:{type:'bluetooth',ble_mac:'',serial_port:''},bot:{name:'MeshCore Assistant',personality:'helpful, friendly, and concise',response_length:'medium'},ollama:{schedule_enabled:false,start_time:'07:00',end_time:'17:00'}};
 let configEditorLoaded=false;
 const commonRadioProfiles={balanced:{radio_bw:125,radio_sf:7,radio_cr:5},long_range:{radio_bw:125,radio_sf:10,radio_cr:5},high_throughput:{radio_bw:250,radio_sf:7,radio_cr:5}};
-function applyTheme(theme,persist=true){document.body.dataset.theme=theme;document.getElementById('theme-select').value=theme;if(persist)saveAppConfig({...appConfig,theme})}
+function applyTheme(theme,persist=true){let previousTheme=document.body.dataset.theme,wasOverview=document.body.classList.contains('tron-overview');document.body.dataset.theme=theme;document.getElementById('theme-select').value=theme;let sessionTitle=document.getElementById('analyzer-session-title');if(sessionTitle)sessionTitle.textContent=theme==='tron'?'MeshCore Live Statistics':'Session';if(theme==='tron'&&previousTheme!=='tron'||theme!=='tron'&&wasOverview)showView('connection');if(persist)saveAppConfig({...appConfig,theme})}
 function showSettingsTab(tab){document.querySelectorAll('.settings-tab').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.settingsTab===tab)));for(let panel of document.querySelectorAll('.settings-tab-panel'))panel.hidden=panel.id!=='settings-'+tab+'-panel';if(tab==='config'&&!configEditorLoaded)loadConfigEditor();if(tab==='ollama')loadOllamaModels()}
 function syncConfigControls(){document.getElementById('theme-select').value=appConfig.theme;let modelSelect=document.getElementById('model');if(![...modelSelect.options].some(option=>option.value===appConfig.model))modelSelect.add(new Option(appConfig.model,appConfig.model));modelSelect.value=appConfig.model;document.getElementById('weather-city').value=appConfig.weather.city;document.getElementById('weather-state').value=appConfig.weather.state;document.getElementById('bot-name').value=appConfig.bot.name;document.getElementById('bot-personality').value=appConfig.bot.personality;document.getElementById('bot-response-length').value=appConfig.bot.response_length;document.getElementById('ollama-schedule-enabled').checked=appConfig.ollama.schedule_enabled;document.getElementById('ollama-schedule-start').value=appConfig.ollama.start_time;document.getElementById('ollama-schedule-end').value=appConfig.ollama.end_time;applyTheme(appConfig.theme,false)}
 const weatherIcons={sun:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>',partly:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="16" cy="7" r="3"/><path d="M16 2v1m0 8v1m5-5h-1m-8 0h-1M5 19h12a3 3 0 0 0 .3-6A5 5 0 0 0 8 11.5 3.8 3.8 0 0 0 5 19Z"/></svg>',cloud:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19h13a4 4 0 0 0 .4-8A6 6 0 0 0 7 9.5 4.8 4.8 0 0 0 5 19Z"/></svg>',fog:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm-2 4h14m-10 3h14"/></svg>',rain:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 15h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 7 4 4 0 0 0 5 15Zm2 3-1 2m7-2-1 2m7-2-1 2"/></svg>',snow:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm2 4h.01M12 19h.01M18 18h.01"/></svg>',storm:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm8 1-3 4h3l-1 3 4-5h-3l1-2"/></svg>'};
 function weatherIconName(code){if(code===null||code===undefined||!Number.isFinite(Number(code)))return 'cloud';code=Number(code);if(code===0)return 'sun';if(code===1||code===2)return 'partly';if(code===45||code===48)return 'fog';if(code===51||code===53||code===55||code===56||code===57||code===61||code===63||code===65||code===66||code===67||code===80||code===81||code===82)return 'rain';if(code===71||code===73||code===75||code===77||code===85||code===86)return 'snow';if(code===95||code===96||code===99)return 'storm';return 'cloud'}
 function renderWeatherIcon(code,condition='Weather condition unavailable'){let icon=document.getElementById('weather-icon');icon.innerHTML=weatherIcons[weatherIconName(code)]||weatherIcons.cloud;icon.setAttribute('aria-label',condition);icon.title=condition}
 async function loadLocalWeather(){let temperature=document.getElementById('weather-temperature'),condition=document.getElementById('weather-condition'),location=document.getElementById('weather-location'),widget=document.getElementById('banner-item-weather');condition.textContent='Loading';try{let response=await fetch('/api/local-weather'),data=await response.json();if(!response.ok)throw new Error(data.error||'Weather unavailable');temperature.textContent=Math.round(data.temperature_f)+'°F';condition.textContent=data.condition;location.textContent=data.location;if(widget)widget.title=data.location;renderWeatherIcon(data.weather_code,data.condition)}catch(error){temperature.textContent='--°F';condition.textContent=error.message.includes('Enter a city')?'Set location':'Unavailable';location.textContent=appConfig.weather.city?(appConfig.weather.state?appConfig.weather.city+', '+appConfig.weather.state:appConfig.weather.city):'Location not set';if(widget)widget.title=location.textContent;renderWeatherIcon(null,condition.textContent)}}
-async function loadAppConfig(){try{let response=await fetch('/api/config'),data=await response.json();if(!response.ok)throw new Error(data.error||'Settings could not be loaded');appConfig=data;syncConfigControls();loadLocalWeather()}catch(error){let statusMessage=document.getElementById('preferences-status');statusMessage.dataset.state='error';statusMessage.textContent=error.message}}
+async function loadAppConfig(){try{let response=await fetch('/api/config'),data=await response.json();if(!response.ok)throw new Error(data.error||'Settings could not be loaded');appConfig=data;syncConfigControls();if(new URLSearchParams(window.location.search).get('preview')==='tron')applyTheme('tron',false);loadLocalWeather()}catch(error){let statusMessage=document.getElementById('preferences-status');statusMessage.dataset.state='error';statusMessage.textContent=error.message}}
 async function saveAppConfig(config,statusId='preferences-status'){let statusMessage=document.getElementById(statusId);statusMessage.dataset.state='';statusMessage.textContent='Saving config.json...';try{let response=await fetch('/api/config',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)}),data=await response.json();if(!response.ok)throw new Error(data.error||'Settings could not be saved');appConfig=data;syncConfigControls();if(statusId==='config-status'){document.getElementById('config-json-editor').value=JSON.stringify(appConfig,null,2);configEditorLoaded=true}statusMessage.textContent='Saved to config.json.';statusMessage.dataset.state='success'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
 async function savePreference(key,value){await saveAppConfig({...appConfig,[key]:value})}
 async function saveBotSettings(event){event.preventDefault();let name=document.getElementById('bot-name').value.trim(),personality=document.getElementById('bot-personality').value.trim(),responseLength=document.getElementById('bot-response-length').value,statusMessage=document.getElementById('bot-settings-status');if(!name||!personality){statusMessage.textContent='Enter a bot name and personality.';statusMessage.dataset.state='error';return}await saveAppConfig({...appConfig,bot:{name,personality,response_length:responseLength}},'bot-settings-status')}
@@ -1957,7 +2113,7 @@ let liveTraceMarkerById=new Map();
 let lastSeenTraceEventId=0;
 let traceEventsInitialized=false;
 function hashColor(id){let str=String(id),hash=0;for(let i=0;i<str.length;i++){hash=(hash*31+str.charCodeAt(i))|0}return 'hsl('+(Math.abs(hash)%360)+',65%,50%)'}
-function showView(view){let target=document.getElementById(view+'-view');if(!target)return;activeView=view;document.querySelectorAll('.view-panel').forEach(panel=>panel.hidden=panel!==target);document.querySelectorAll('.nav-tab').forEach(tab=>tab.setAttribute('aria-pressed',String(tab.dataset.view===view)));if(view==='map')openMap();if(view==='live-trace')openLiveTrace();if(view==='analyzer')renderAnalyzerStats();if(view==='device-settings'&&!deviceSettingsLoaded)loadDeviceSettings()}
+function showView(view){let target=document.getElementById(view+'-view');if(!target)return;let overviewViews=['connection','nodes','channels','map','analyzer'];if(document.body.dataset.theme==='tron'&&overviewViews.includes(view)){activeView='tron-overview';document.body.classList.add('tron-overview');document.querySelectorAll('.view-panel').forEach(panel=>panel.hidden=!overviewViews.includes(panel.id.replace(/-view$/,'')));document.querySelectorAll('.nav-tab').forEach(tab=>tab.setAttribute('aria-pressed',String(tab.dataset.view===view)));openMap();renderAnalyzerStats();loadAnalyzerRadioStatus();return}document.body.classList.remove('tron-overview');activeView=view;document.querySelectorAll('.view-panel').forEach(panel=>panel.hidden=panel!==target);document.querySelectorAll('.nav-tab').forEach(tab=>tab.setAttribute('aria-pressed',String(tab.dataset.view===view)));if(view==='map')openMap();if(view==='live-trace')openLiveTrace();if(view==='analyzer'){renderAnalyzerStats();loadAnalyzerRadioStatus()}if(view==='device-settings'&&!deviceSettingsLoaded)loadDeviceSettings()}
 function openMap(){if(!window.L){document.getElementById('map-message').textContent='Map library unavailable. Check your internet connection and reload.';return}if(!dashboardMap){dashboardMap=L.map('map-canvas',{zoomControl:true}).setView([20,0],2);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(dashboardMap);mapMarkers=L.layerGroup().addTo(dashboardMap)}setTimeout(()=>dashboardMap.invalidateSize(),80);renderMapMarkers()}
 function openLiveTrace(){if(!window.L)return;if(!liveTraceMap){liveTraceMap=L.map('live-trace-canvas',{zoomControl:true}).setView([20,0],2);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(liveTraceMap);liveTraceMarkers=L.layerGroup().addTo(liveTraceMap)}setTimeout(()=>liveTraceMap.invalidateSize(),80);renderLiveTraceMarkers()}
 function renderLiveTraceMarkers(){if(!liveTraceMap||!liveTraceMarkers)return;liveTraceMarkers.clearLayers();liveTraceMarkerById=new Map();let bounds=[],located=0;for(let peer of mapNodes){if(!Number.isFinite(peer.latitude)||!Number.isFinite(peer.longitude))continue;let point=[peer.latitude,peer.longitude],marker=L.marker(point,{icon:peerMarkerIcon(peer),title:peer.name}).bindPopup(peerPopupContent(peer)).addTo(liveTraceMarkers);liveTraceMarkerById.set(String(peer.id),{marker,point});bounds.push(point);located++}if(Number.isFinite(gatewayTelemetry.latitude)&&Number.isFinite(gatewayTelemetry.longitude)){let point=[gatewayTelemetry.latitude,gatewayTelemetry.longitude];L.circleMarker(point,{radius:9,color:'#0d1117',weight:2,fillColor:'#36d1dc',fillOpacity:1}).bindPopup(popupContent('This gateway','Current radio location')).addTo(liveTraceMarkers);liveTraceMarkerById.set('gateway',{marker:null,point});bounds.push(point);located++}if(bounds.length)liveTraceMap.fitBounds(bounds,{padding:[36,36],maxZoom:12});let countLabel=document.getElementById('live-trace-count');if(countLabel)countLabel.textContent=String(located)}
@@ -1982,14 +2138,22 @@ function renderKnownPeers(){let list=document.getElementById('map-node-list');if
 function updateConversationMenu(type,metadata={}){let prefix=type==='node'?'node':'channel',clear=document.getElementById(prefix+'-clear-action'),archive=document.getElementById(prefix+'-archive-action'),pin=document.getElementById(prefix+'-pin-action'),enabled=Boolean(type==='node'?selectedNodeId:selectedChannelId);clear.disabled=!enabled;archive.disabled=!enabled;pin.disabled=!enabled;archive.textContent=metadata.archived?'Unarchive chat':'Archive chat';pin.textContent=metadata.pinned?'Unpin chat':'Pin chat'}
 function renderConversationTargets(type){let isNode=type==='node',filter=document.getElementById(isNode?'node-chat-filter':'channel-chat-filter').value,items=[...(isNode?sortedFilteredNodes():meshChannels)].filter(item=>filter==='all'||(filter==='archived'?Boolean(item.archived):!item.archived)),list=document.getElementById(isNode?'node-target-list':'channel-target-list'),selected=isNode?selectedNodeId:selectedChannelId;items.sort((left,right)=>Number(Boolean(left.archived))-Number(Boolean(right.archived))||Number(Boolean(right.pinned))-Number(Boolean(left.pinned)));list.replaceChildren();if(!items.length){let empty=document.createElement('p');empty.className='map-empty';empty.textContent=filter==='archived'?'No archived chats.':(isNode?(mapNodes.length?'No nodes match this filter.':'No nodes found. Connect to a MeshCore radio to load contacts.'):'No channels found on this device.');list.appendChild(empty);return}for(let item of items){let button=document.createElement('button');button.type='button';button.className='conversation-target'+(selected===String(item.id)?' active':'');button.onclick=()=>selectConversation(type,item.id);let avatar=document.createElement('span');avatar.className='conversation-avatar';avatar.style.background=hashColor(item.id);avatar.textContent=String(item.name||'?').trim().charAt(0)||'?';let title=document.createElement('strong');title.textContent=item.name;let detail=document.createElement('small');detail.textContent=[item.pinned?'Pinned':'',item.archived?'Archived':''].filter(Boolean).join(' · ');button.append(avatar,title);if(detail.textContent)button.append(detail);if(isNode){let entry=document.createElement('div');entry.className='conversation-entry';entry.append(button,createNodeFavoriteButton(item.id));list.appendChild(entry)}else list.appendChild(button)}}
 function selectConversation(type,id){let normalized=String(id);if(type==='node'){let peer=mapNodes.find(item=>String(item.id)===normalized)||{id:normalized};selectedNodeId=normalized;document.getElementById('node-chat-title').textContent=peer.name||normalized;document.getElementById('node-chat-detail').textContent=peerSummary(peer);document.getElementById('node-send').disabled=false;updateConversationMenu('node',peer);renderConversationTargets('node');history('node',normalized,'node-chat-history');renderPeerDetails(normalized,document.getElementById('node-peer-details'))}else{let channel=meshChannels.find(item=>String(item.id)===normalized)||{id:normalized};selectedChannelId=normalized;document.getElementById('channel-chat-title').textContent=channel.name||'Channel '+normalized;document.getElementById('channel-chat-detail').textContent='Channel '+normalized;document.getElementById('channel-send').disabled=false;updateConversationMenu('channel',channel);renderConversationTargets('channel');history('channel',normalized,'channel-chat-history')}}
+let incomingAdvertEvents=[];
+let incomingAdvertSnapshot=new Map();
+let incomingAdvertsInitialized=false;
 function renderAnalyzerStats(){let located=mapNodes.filter(peer=>Number.isFinite(peer.latitude)&&Number.isFinite(peer.longitude)).length;document.getElementById('analyzer-nodes').textContent=String(mapNodes.length);document.getElementById('analyzer-channels').textContent=String(meshChannels.length);document.getElementById('analyzer-located').textContent=String(located)}
-async function peers(){let r=await fetch('/api/peers'),d=await r.json();gatewayTelemetry=d.gateway_telemetry||{};mapNodes=d.nodes||[];meshChannels=d.channels||[];gateway_battery.textContent=gatewayTelemetry.battery!=null?gatewayTelemetry.battery+'%':'Unavailable';if(!mapNodes.some(item=>String(item.id)===selectedNodeId))selectedNodeId='';if(!meshChannels.some(item=>String(item.id)===selectedChannelId))selectedChannelId='';renderConversationTargets('node');renderConversationTargets('channel');renderMapNodes();renderKnownPeers();renderAnalyzerStats();if(liveTraceMap)renderLiveTraceMarkers()}
+function advertAgeLabel(timestamp){let advertTime=Number(timestamp);if(!Number.isFinite(advertTime)||advertTime<=0)return 'Time unavailable';let elapsed=Math.max(0,Math.floor(Date.now()/1000-advertTime));if(elapsed<60)return elapsed+'s ago';if(elapsed<3600)return Math.floor(elapsed/60)+'m ago';if(elapsed<86400)return Math.floor(elapsed/3600)+'h ago';return Math.floor(elapsed/86400)+'d ago'}
+function renderIncomingAdverts(){let list=document.getElementById('tron-incoming-adverts-list'),count=document.getElementById('tron-incoming-adverts-count');if(!list)return;let receivedNewAdvert=false;for(let peer of mapNodes){let timestamp=Number(peer.last_heard);if(!Number.isFinite(timestamp)||timestamp<=0)continue;let id=String(peer.id),previous=incomingAdvertSnapshot.get(id);if(previous===undefined||timestamp>previous){if(incomingAdvertsInitialized)receivedNewAdvert=true;incomingAdvertSnapshot.set(id,timestamp);incomingAdvertEvents.unshift({id,name:peer.name||'Unknown node',last_heard:timestamp,hops:peer.hops})}else{let existing=incomingAdvertEvents.find(event=>event.id===id&&event.last_heard===timestamp);if(existing){existing.name=peer.name||existing.name;existing.hops=peer.hops}}}incomingAdvertsInitialized=true;incomingAdvertEvents.sort((left,right)=>right.last_heard-left.last_heard);incomingAdvertEvents=incomingAdvertEvents.slice(0,60);if(count)count.textContent=String(incomingAdvertEvents.length);let previousScrollTop=list.scrollTop;list.replaceChildren();if(!incomingAdvertEvents.length){let empty=document.createElement('p');empty.className='tron-incoming-empty';empty.textContent=document.getElementById('status')?.classList.contains('connected')?'Waiting for incoming adverts...':'Connect to a radio to receive adverts.';list.appendChild(empty);return}for(let advert of incomingAdvertEvents){let row=document.createElement('div'),name=document.createElement('span'),meta=document.createElement('span'),hopCount=advert.hops===null||advert.hops===undefined?null:Number(advert.hops),route=hopCount===-1?'Flood route':(Number.isInteger(hopCount)&&hopCount>=0?hopCount+' hop'+(hopCount===1?'':'s'):'Hops unavailable');row.className='tron-incoming-row';name.className='tron-incoming-name';name.textContent=advert.name;meta.className='tron-incoming-meta';meta.textContent=advertAgeLabel(advert.last_heard)+' · '+route;row.append(name,meta);list.appendChild(row)}list.scrollTop=receivedNewAdvert?0:previousScrollTop}
+let analyzerRadioStatusLoading=false;
+async function loadAnalyzerRadioStatus(){let panel=document.getElementById('analyzer-radio-status');if(!panel||!['analyzer','tron-overview'].includes(activeView)||analyzerRadioStatusLoading)return;analyzerRadioStatusLoading=true;panel.textContent='Reading live radio status...';let groups=[['Radio','radio'],['Core','core'],['Packets','packets']],labels={noise_floor:['Noise floor','dBm'],last_rssi:['Last RSSI','dBm'],last_snr:['Last SNR','dB'],tx_air_secs:['TX airtime','s'],rx_air_secs:['RX airtime','s'],battery_mv:['Battery voltage','mV'],uptime_secs:['Uptime','s'],errors:['Errors',''],queue_len:['Transmit queue',''],recv:['Received packets',''],sent:['Sent packets',''],flood_tx:['Flood TX',''],direct_tx:['Direct TX',''],flood_rx:['Flood RX',''],direct_rx:['Direct RX',''],recv_errors:['Receive errors','']};let content=document.createDocumentFragment();try{for(let [title,statsType] of groups){let response;try{response=await fetch('/api/device-settings/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'stats',stats_type:statsType})});let data=await response.json();if(!response.ok){if(response.status===503){panel.textContent='Connect to a MeshCore radio to view live statistics.';return}throw new Error(data.error||'Statistics unavailable')}let values=data.result&&typeof data.result==='object'&&!Array.isArray(data.result)?data.result:{};let section=document.createElement('section'),heading=document.createElement('h4'),list=document.createElement('dl');section.className='analyzer-radio-group';heading.textContent=title;list.className='analyzer-radio-list';for(let [key,value] of Object.entries(values)){let [label,unit]=labels[key]||[key.replaceAll('_',' ').replace(/\b\w/g,char=>char.toUpperCase()),''];let term=document.createElement('dt'),detail=document.createElement('dd');term.textContent=label;detail.textContent=value===null||value===undefined?'Unavailable':String(value)+(unit?' '+unit:'');list.append(term,detail)}if(!list.children.length){let term=document.createElement('dt'),detail=document.createElement('dd');term.textContent='Status';detail.textContent='No fields reported';list.append(term,detail)}section.append(heading,list);content.append(section)}catch(error){let section=document.createElement('section'),heading=document.createElement('h4'),detail=document.createElement('p');section.className='analyzer-radio-group';heading.textContent=title;detail.className='analyzer-detail';detail.textContent=error.message||'Statistics unavailable';section.append(heading,detail);content.append(section)}}let updated=document.createElement('p');updated.className='analyzer-radio-updated';updated.textContent='Updated '+new Date().toLocaleTimeString();content.append(updated);panel.replaceChildren(content)}finally{analyzerRadioStatusLoading=false}}
+setInterval(()=>{if(['analyzer','tron-overview'].includes(activeView))loadAnalyzerRadioStatus()},15000);
+async function peers(){let r=await fetch('/api/peers'),d=await r.json();gatewayTelemetry=d.gateway_telemetry||{};mapNodes=d.nodes||[];meshChannels=d.channels||[];gateway_battery.textContent=gatewayTelemetry.battery!=null?gatewayTelemetry.battery+'%':'Unavailable';if(!mapNodes.some(item=>String(item.id)===selectedNodeId))selectedNodeId='';if(!meshChannels.some(item=>String(item.id)===selectedChannelId))selectedChannelId='';renderConversationTargets('node');renderConversationTargets('channel');renderMapNodes();renderKnownPeers();renderAnalyzerStats();renderIncomingAdverts();if(liveTraceMap)renderLiveTraceMarkers()}
 function parseChannelSender(text){let bracket=text.match(/^\[([^\]]{1,24})\]\s*/);if(bracket)return bracket[1];let colon=text.match(/^([A-Za-z0-9 _-]{1,24}):\s/);if(colon)return colon[1];return null}
 async function history(type,id,boxId){let box=document.getElementById(boxId);if(!id){box.replaceChildren();updateConversationMenu(type);return}try{let response=await fetch('/api/chat-history?target_type='+encodeURIComponent(type)+'&target='+encodeURIComponent(id)),data=await response.json();if(!response.ok)throw new Error(data.error||'Message history could not be loaded');updateConversationMenu(type,data.metadata||{});box.replaceChildren();let peerName=type==='node'?(mapNodes.find(item=>String(item.id)===id)?.name||id):(meshChannels.find(item=>String(item.id)===id)?.name||('Channel '+id));for(let message of data.messages||[]){let outgoing=message.direction==='outgoing';let item=document.createElement('div');item.className='chat-message '+(outgoing?'outgoing':'incoming');let sender=outgoing?'You':(type==='channel'?(parseChannelSender(message.text)||peerName):peerName);let meta=document.createElement('div');meta.className='chat-message-meta';let avatar=document.createElement('span');avatar.className='chat-avatar';avatar.style.background=hashColor(outgoing?'you':id);avatar.textContent=sender.charAt(0)||'?';let senderLabel=document.createElement('span');senderLabel.className='chat-sender';senderLabel.textContent=sender;let time=document.createElement('span');time.className='chat-time';time.textContent=message.timestamp;let status=document.createElement('span');status.className='chat-status';let statusLabels={sent:'Sent',delivered:'Delivered',unconfirmed:'Sent (not confirmed)',received:'Received'};status.textContent=statusLabels[message.status]||statusLabels[outgoing?'sent':'received'];meta.append(avatar,senderLabel,time,status);let body=document.createElement('div');body.className='chat-message-body';body.textContent=message.text;item.append(meta,body);box.appendChild(item)}box.scrollTop=box.scrollHeight}catch(error){box.textContent=error.message}}
 async function manageConversation(type,action){let selected=type==='node'?selectedNodeId:selectedChannelId;if(!selected)return;if(action==='clear'&&!confirm('Clear this conversation history? This cannot be undone.'))return;let response=await fetch('/api/chat-management',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_type:type,target:selected,action})}),data=await response.json();if(!response.ok){alert(data.error||'Conversation could not be updated');return}let menu=document.querySelector('#'+(type==='node'?'node':'channel')+'-chat-options');if(menu)menu.open=false;await history(type,selected,type==='node'?'node-chat-history':'channel-chat-history');await peers()}
 function selectNode(id){selectConversation('node',id)}
 function selectChannel(id){selectConversation('channel',id)}
-function refreshActiveHistory(){if(activeView==='nodes'&&selectedNodeId)history('node',selectedNodeId,'node-chat-history');if(activeView==='channels'&&selectedChannelId)history('channel',selectedChannelId,'channel-chat-history')}
+function refreshActiveHistory(){if(['nodes','tron-overview'].includes(activeView)&&selectedNodeId)history('node',selectedNodeId,'node-chat-history');if(['channels','tron-overview'].includes(activeView)&&selectedChannelId)history('channel',selectedChannelId,'channel-chat-history')}
 function setCustomRadioMode(){let custom=document.getElementById('custom-radio-fields'),enabled=document.getElementById('radio-profile').value==='custom';custom.hidden=!enabled;custom.querySelectorAll('input,select').forEach(input=>input.disabled=!enabled)}
 function setCustomPowerMode(){let custom=document.getElementById('custom-power-field'),enabled=document.getElementById('tx-power-mode').value==='custom';custom.hidden=!enabled;custom.querySelector('input').disabled=!enabled}
 function populatePowerOptions(maximum,current){let select=document.getElementById('tx-power-mode'),common=[10,14,17,20];select.replaceChildren();for(let value of common){if(value<=maximum)select.add(new Option(value+' dBm',String(value)))}if(!common.includes(Number(current))&&Number(current)<=maximum)select.add(new Option(current+' dBm (current)',String(current)));let currentIsCommon=[...select.options].some(option=>Number(option.value)===Number(current));select.add(new Option('Custom...','custom'));select.value=currentIsCommon?String(current):'custom';document.getElementById('custom-tx-power').value=current??'';document.getElementById('custom-tx-power').max=maximum;setCustomPowerMode()}
@@ -2001,13 +2165,13 @@ async function disconnect(){await fetch('/api/disconnect',{method:'POST'});await
 async function sendMessage(event,type,messageId,historyId){event.preventDefault();let selected=type==='node'?selectedNodeId:selectedChannelId,input=document.getElementById(messageId);if(!selected)return;let message=input.value.trim();if(!message)return;let response=await fetch('/api/transmit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:selected,target_type:type,text:message})}),data=await response.json();if(!response.ok){alert(data.error||'Message could not be sent');return}input.value='';await history(type,selected,historyId)}
 let consoleDrag=null;
 function clampConsolePosition(dock){if(!dock||dock.classList.contains('collapsed'))return;let header=document.querySelector('.dashboard-header');if(!header)return;let minTop=header.getBoundingClientRect().bottom+12;let rect=dock.getBoundingClientRect();if(rect.top<minTop){dock.style.top=minTop+'px';dock.style.bottom='auto'}}
-function toggleConsoleDock(){let dock=document.getElementById('console-dock'),toggle=document.getElementById('console-toggle');if(!dock||!toggle)return;let collapsed=dock.classList.toggle('collapsed');toggle.setAttribute('aria-expanded',String(!collapsed));if(!collapsed)clampConsolePosition(dock);try{localStorage.setItem('meshcore-console-collapsed',collapsed?'1':'0')}catch(error){}}
+function toggleConsoleDock(){let dock=document.getElementById('console-dock'),toggle=document.getElementById('console-toggle');if(!dock||!toggle)return;let collapsed=dock.classList.toggle('collapsed');toggle.setAttribute('aria-expanded',String(!collapsed));if(!collapsed)clampConsolePosition(dock)}
 function saveConsoleLayout(){let dock=document.getElementById('console-dock');if(!dock)return;try{localStorage.setItem('meshcore-console-layout',JSON.stringify({left:dock.style.left,top:dock.style.top,width:dock.offsetWidth+'px',height:dock.offsetHeight+'px'}))}catch(error){}}
 function restoreConsoleLayout(){let dock=document.getElementById('console-dock');if(!dock)return;try{let saved=JSON.parse(localStorage.getItem('meshcore-console-layout')||'null');if(saved){if(saved.left){dock.style.left=saved.left;dock.style.right='auto'}if(saved.top){dock.style.top=saved.top;dock.style.bottom='auto'}if(saved.width)dock.style.width=saved.width;if(saved.height)dock.style.height=saved.height}}catch(error){}clampConsolePosition(dock)}
 function startConsoleDrag(event){if(event.target.closest('.chat-actions')||event.button!==undefined&&event.button!==0)return;let dock=document.getElementById('console-dock');if(!dock||dock.classList.contains('collapsed'))return;event.preventDefault();let rect=dock.getBoundingClientRect();consoleDrag={offsetX:event.clientX-rect.left,offsetY:event.clientY-rect.top};dock.classList.add('dragging');document.addEventListener('pointermove',onConsoleDrag);document.addEventListener('pointerup',stopConsoleDrag)}
 function onConsoleDrag(event){if(!consoleDrag)return;let dock=document.getElementById('console-dock');if(!dock)return;let header=document.querySelector('.dashboard-header');let minTop=(header?header.getBoundingClientRect().bottom:0)+12;let width=dock.offsetWidth,height=dock.offsetHeight;let left=Math.min(Math.max(event.clientX-consoleDrag.offsetX,8),window.innerWidth-width-8);let top=Math.min(Math.max(event.clientY-consoleDrag.offsetY,minTop),window.innerHeight-height-8);dock.style.left=left+'px';dock.style.top=top+'px';dock.style.right='auto';dock.style.bottom='auto'}
 function stopConsoleDrag(){consoleDrag=null;let dock=document.getElementById('console-dock');if(dock){dock.classList.remove('dragging');saveConsoleLayout()}document.removeEventListener('pointermove',onConsoleDrag);document.removeEventListener('pointerup',stopConsoleDrag)}
-function initConsoleDock(){let dock=document.getElementById('console-dock'),toggle=document.getElementById('console-toggle');if(!dock||!toggle)return;let collapsed=false;try{collapsed=localStorage.getItem('meshcore-console-collapsed')==='1'}catch(error){}dock.classList.toggle('collapsed',collapsed);toggle.setAttribute('aria-expanded',String(!collapsed));restoreConsoleLayout();if(window.ResizeObserver)new ResizeObserver(()=>{if(!consoleDrag)saveConsoleLayout()}).observe(dock);window.addEventListener('resize',()=>clampConsolePosition(dock))}
+function initConsoleDock(){let dock=document.getElementById('console-dock'),toggle=document.getElementById('console-toggle');if(!dock||!toggle)return;let collapsed=true;dock.classList.toggle('collapsed',collapsed);toggle.setAttribute('aria-expanded',String(!collapsed));restoreConsoleLayout();if(window.ResizeObserver)new ResizeObserver(()=>{if(!consoleDrag)saveConsoleLayout()}).observe(dock);window.addEventListener('resize',()=>clampConsolePosition(dock))}
 function applyBannerVisibility(){let prefs={link:true,battery:true,weather:true,time:true};try{prefs={...prefs,...JSON.parse(localStorage.getItem('meshcore-banner-visibility')||'{}')}}catch(error){}let map={link:'banner-item-link',battery:'banner-item-battery',weather:'banner-item-weather',time:'banner-item-time'};for(let key of Object.keys(map)){let item=document.getElementById(map[key]);if(item)item.hidden=!prefs[key];let checkbox=document.getElementById('banner-toggle-'+key);if(checkbox)checkbox.checked=prefs[key]}}
 function saveBannerVisibility(){let prefs={link:document.getElementById('banner-toggle-link').checked,battery:document.getElementById('banner-toggle-battery').checked,weather:document.getElementById('banner-toggle-weather').checked,time:document.getElementById('banner-toggle-time').checked};try{localStorage.setItem('meshcore-banner-visibility',JSON.stringify(prefs))}catch(error){}applyBannerVisibility()}
 window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();status();peers();loadAppConfig();loadOllamaModels();updateClock();initConsoleDock();applyBannerVisibility();setInterval(updateClock,1000);setInterval(refreshActiveHistory,3000);setInterval(loadLocalWeather,30*60*1000)});setInterval(status,2000);setInterval(peers,10000);
@@ -2021,6 +2185,8 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <div id="banner-item-weather" class="header-meta-item weather-widget" aria-live="polite"><span class="header-label">LOCAL WEATHER</span><div class="weather-current"><span id="weather-icon" class="weather-icon" role="img" aria-label="Weather condition unavailable" title="Weather condition unavailable"></span><strong id="weather-temperature">--°F</strong><span id="weather-condition">Set location</span></div><span id="weather-location" class="weather-location">Location not set</span></div>
 <div id="banner-item-time" class="header-meta-item"><span class="header-label">LOCAL TIME</span><span id="current-datetime" class="header-metric">--</span></div>
 </div>
+<div class="tron-quick-tabs" aria-label="TRON settings"><button type="button" onclick="showView('settings')">App Settings</button><button type="button" onclick="showView('device-settings')">Device Settings</button></div>
+<button type="button" id="console-toggle" class="console-toggle" onclick="toggleConsoleDock()" aria-expanded="false" aria-controls="console-dock">Console</button>
 </header>
 <main id="connection-view" class="view-panel page-view">
 <div class="connection-layout">
@@ -2030,6 +2196,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <div id="ble-field"><label for="ble_mac">Bluetooth device</label><div class="scan-control"><select id="ble_mac"><option value="">Scan for Bluetooth devices</option></select><button id="ble-scan" type="button" onclick="scanBluetooth()">Scan</button></div><p id="ble-scan-status" class="scan-status" aria-live="polite"></p></div>
 <div id="serial-field" style="display:none"><label for="serial_port">Serial port</label><div class="scan-control"><select id="serial_port"><option value="">Scan for serial ports</option></select><button id="serial-scan" type="button" onclick="scanSerial()">Scan</button></div><p id="serial-scan-status" class="scan-status" aria-live="polite"></p></div>
 <div class="connection-actions"><button id="connect-btn" onclick="connect()">Connect</button><button onclick="disconnect()">Disconnect</button></div>
+<section class="tron-incoming-adverts" aria-label="Incoming radio adverts"><div class="tron-incoming-heading"><h3>Incoming Adverts</h3><span id="tron-incoming-adverts-count" class="tron-incoming-count">0</span></div><div id="tron-incoming-adverts-list" class="tron-incoming-list" aria-live="polite"><p class="tron-incoming-empty">Waiting for incoming adverts...</p></div></section>
 </section>
 </div>
 </main>
@@ -2042,13 +2209,13 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <main id="channels-view" class="view-panel page-view" hidden>
 <div class="messages-layout">
 <aside class="card conversation-rail"><div class="panel-heading"><div><span class="eyebrow">SHARED FREQUENCY</span><h2>Channels</h2></div><span class="panel-index">03</span></div><div class="conversation-filters"><label for="channel-chat-filter">Chats<select id="channel-chat-filter" onchange="renderConversationTargets('channel')"><option value="active">Active</option><option value="archived">Archived</option><option value="all">All</option></select></label></div><div class="conversation-target-list" id="channel-target-list"><p class="map-empty">Waiting for channels...</p></div></aside>
-<section class="card chat-panel"><div class="chat-header"><div class="chat-header-main"><div class="chat-header-copy"><strong id="channel-chat-title">Select a channel</strong><span id="channel-chat-detail">Choose a channel to view its conversation.</span></div><details class="chat-actions" id="channel-chat-options"><summary aria-label="Channel chat options">Options</summary><div class="chat-action-menu"><button id="channel-clear-action" type="button" disabled onclick="manageConversation('channel','clear')">Clear chat</button><button id="channel-archive-action" type="button" disabled onclick="manageConversation('channel','archive')">Archive chat</button><button id="channel-pin-action" type="button" disabled onclick="manageConversation('channel','pin')">Pin chat</button></div></details></div><div id="channel-chat-history"></div><form onsubmit="sendMessage(event,'channel','channel-message','channel-chat-history')"><input id="channel-message" maxlength="100" placeholder="Message selected channel" required><button id="channel-send" disabled>Send</button></form></section>
+<section class="card chat-panel"><div class="chat-header"><div class="chat-header-main"><div class="chat-header-copy"><strong id="channel-chat-title">Select a channel</strong><span id="channel-chat-detail">Choose a channel to view its conversation.</span></div><details class="chat-actions" id="channel-chat-options"><summary aria-label="Channel chat options">Options</summary><div class="chat-action-menu"><button id="channel-clear-action" type="button" disabled onclick="manageConversation('channel','clear')">Clear chat</button><button id="channel-archive-action" type="button" disabled onclick="manageConversation('channel','archive')">Archive chat</button><button id="channel-pin-action" type="button" disabled onclick="manageConversation('channel','pin')">Pin chat</button></div></details></div></div><div id="channel-chat-history"></div><form onsubmit="sendMessage(event,'channel','channel-message','channel-chat-history')"><input id="channel-message" maxlength="100" placeholder="Message selected channel" required><button id="channel-send" disabled>Send</button></form></section>
 </div>
 </main>
 <main id="analyzer-view" class="view-panel page-view" hidden>
 <div class="analyzer-shell">
 <section class="analyzer-main"><header class="analyzer-toolbar"><div><span class="eyebrow">LOCAL RADIO STREAM</span><h2>Packet Analyzer</h2><p>Message activity from this gateway. Network-wide packet capture requires an observer feed.</p></div><span class="live-tag">LIVE</span></header><div class="analyzer-table-wrap"><table class="analyzer-table"><thead><tr><th>Time</th><th>Direction</th><th>Transport</th><th>Target</th><th>Status</th></tr></thead><tbody id="analyzer-packet-list"><tr><td class="packet-empty" colspan="5">Waiting for radio activity...</td></tr></tbody></table></div></section>
-<aside class="analyzer-side"><section class="analyzer-side-section"><h3>Session</h3><div class="analyzer-stat-grid"><div class="analyzer-stat"><strong id="analyzer-total">0</strong><span>Events</span></div><div class="analyzer-stat"><strong id="analyzer-nodes">0</strong><span>Peers</span></div><div class="analyzer-stat"><strong id="analyzer-channels">0</strong><span>Channels</span></div><div class="analyzer-stat"><strong id="analyzer-located">0</strong><span>Located</span></div></div></section><section class="analyzer-side-section"><h3>Selected event</h3><div id="analyzer-event-detail" class="analyzer-detail">Select a packet row to inspect its local event metadata.</div></section><section class="analyzer-side-section"><h3>Scope</h3><div class="analyzer-detail"><strong>Source</strong><br>Connected MeshCore gateway<br><br><strong>Retention</strong><br>Last 60 local activity events</div></section></aside>
+<aside class="analyzer-side"><section class="analyzer-side-section"><h3 id="analyzer-session-title">Session</h3><div class="analyzer-stat-grid"><div class="analyzer-stat"><strong id="analyzer-total">0</strong><span>Events</span></div><div class="analyzer-stat"><strong id="analyzer-nodes">0</strong><span>Peers</span></div><div class="analyzer-stat"><strong id="analyzer-channels">0</strong><span>Channels</span></div><div class="analyzer-stat"><strong id="analyzer-located">0</strong><span>Located</span></div></div><div id="analyzer-radio-status" class="analyzer-radio-status" aria-live="polite"><div class="analyzer-detail">Connect to a MeshCore radio to view live statistics.</div></div></section><section class="analyzer-side-section"><h3>Selected event</h3><div id="analyzer-event-detail" class="analyzer-detail">Select a packet row to inspect its local event metadata.</div></section><section class="analyzer-side-section"><h3>Scope</h3><div class="analyzer-detail"><strong>Source</strong><br>Connected MeshCore gateway<br><br><strong>Retention</strong><br>Last 60 local activity events</div></section></aside>
 </div>
 </main>
 <main id="settings-view" class="view-panel page-view" hidden>
@@ -2057,7 +2224,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <div class="settings-tabs" role="tablist" aria-label="Settings sections"><button type="button" class="settings-tab" role="tab" data-settings-tab="preferences" aria-pressed="true" onclick="showSettingsTab('preferences')">Themes</button><button type="button" class="settings-tab" role="tab" data-settings-tab="ollama" aria-pressed="false" onclick="showSettingsTab('ollama')">Ollama</button><button type="button" class="settings-tab" role="tab" data-settings-tab="bot" aria-pressed="false" onclick="showSettingsTab('bot')">Bot</button><button type="button" class="settings-tab" role="tab" data-settings-tab="weather" aria-pressed="false" onclick="showSettingsTab('weather')">Weather</button><button type="button" class="settings-tab" role="tab" data-settings-tab="config" aria-pressed="false" onclick="showSettingsTab('config')">config.json</button><button type="button" class="settings-tab" role="tab" data-settings-tab="banner" aria-pressed="false" onclick="showSettingsTab('banner')">Banner</button></div>
 <section id="settings-preferences-panel" class="settings-tab-panel">
 <div class="settings-grid">
-<div class="settings-item"><label for="theme-select">Color theme</label><select id="theme-select" onchange="applyTheme(this.value)"><option value="midnight">Midnight</option><option value="light">Light</option><option value="ocean">Ocean</option><option value="amber">Amber</option><option value="linux">Linux Console</option><option value="macos">macOS</option><option value="cyberpunk">Hacker Cyberpunk</option></select><p class="settings-description">Saved in config.json and applied to this dashboard.</p></div>
+<div class="settings-item"><label for="theme-select">Color theme</label><div class="theme-control-row"><select id="theme-select" onchange="applyTheme(this.value)"><option value="midnight">Midnight</option><option value="light">Light</option><option value="ocean">Ocean</option><option value="amber">Amber</option><option value="linux">Linux Console</option><option value="macos">macOS</option><option value="cyberpunk">Hacker Cyberpunk</option><option value="tron">TRON mode</option></select><button type="button" class="tron-mode-button" onclick="applyTheme('tron')">TRON mode</button></div><p class="settings-description">Choose a theme or switch to TRON mode for the full radio-operations layout.</p></div>
 </div>
 <p id="preferences-status" class="preferences-status" aria-live="polite"></p>
 </section>
@@ -2149,8 +2316,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <section class="card map-surface" aria-label="Mesh node map"><div id="map-canvas"></div><div class="map-message" id="map-message">Waiting for map data...</div></section>
 </div>
 </main>
-<button type="button" id="console-toggle" class="console-toggle" onclick="toggleConsoleDock()" aria-expanded="true" aria-controls="console-dock">Console</button>
-<footer id="console-dock" class="console-dock"><section class="card console-card"><div class="panel-heading" onpointerdown="startConsoleDrag(event)"><div><span class="eyebrow">SYSTEM ACTIVITY</span><h2>Console</h2></div><span class="live-tag">LIVE</span></div><pre id="console"></pre></section></footer>
+<footer id="console-dock" class="console-dock collapsed"><section class="card console-card"><div class="panel-heading" onpointerdown="startConsoleDrag(event)"><div><span class="eyebrow">SYSTEM ACTIVITY</span><h2>Console</h2></div><span class="live-tag">LIVE</span></div><pre id="console"></pre></section></footer>
 <script>
 const referenceRadioPresets=[
 ['Australia',915.8,250,10,5,20],['Australia (Narrow)',916.575,62.5,7,5,20],['Australia (Mid)',915.075,125,9,5,20],['Australia SA, WA, QLD',923.125,62.5,8,5,20],['Czech Republic',869.432,62.5,7,5,14],['EU 433MHz',433.65,250,11,5,20],['EU/UK (Long Range)',869.525,250,11,5,14],['EU/UK (Medium Range)',869.525,250,10,5,14],['EU/UK (Narrow)',869.618,62.5,8,5,14],['New Zealand',917.375,250,11,5,20],['New Zealand (Narrow)',917.375,62.5,7,5,20],['Portugal 433',433.375,62.5,9,5,20],['Portugal 869',869.618,62.5,7,5,14],['Russia Artyom (VVO)',864.281,62.5,8,6,20],['Russia Biysk (BSK)',869,62.5,8,5,20],['Russia Chelyabinsk (CEK)',868.731,62.5,8,6,20],['Russia Cherepovets (CEE)',868.57,62.5,7,8,20],['Russia Irkutsk (IKT)',868.731,62.5,7,7,20],['Russia Ivanovo (IWA)',868.731,62.5,8,8,20],['Russia Izhevsk (IJK)',868.732,62.5,8,8,20],['Russia Kaluga (KLF)',868.731,62.5,7,7,20],['Russia Kazan (KZN)',868.731,62.5,8,6,20],['Russia Khabarovsk (KHV)',864.281,62.5,8,6,20],['Russia Kirov (KVX)',868.731,62.5,8,8,20],['Russia Lipetsk (LPK)',868.95,62.5,9,7,20],['Russia Moscow (MOW)',868.731,62.5,7,7,20],['Russia Nizhny Novgorod (GOJ)',868.731,62.5,8,6,20],['Russia Novosibirsk (OVB)',869,62.5,9,8,20],['Russia Rostov-on-Don (ROV)',868.731,62.5,9,7,20],['Russia Ryazan (RZN)',868.88,62.5,9,5,20],['Russia Samara (KUF)',864.281,62.5,8,7,20],['Russia Saratov (GSV)',864.281,62.5,8,7,20],['Russia St. Petersburg (LED)',868.856,62.5,7,7,20],['Russia Tambov (TBW)',868.95,62.5,10,5,20],['Russia Tula (TYA)',868.731,62.5,8,7,20],['Russia Tver (KLD)',869.169,62.5,8,8,20],['Russia Ufa (UFA)',868.732,62.5,8,8,20],['Russia Volgograd (VOG)',869.525,62.5,7,7,20],['Russia Voronezh (VOZ)',868.731,62.5,8,6,20],['Russia Yekaterinburg (SVX)',869.046,62.5,7,7,20],['Switzerland',869.618,62.5,8,5,14],['USA Arizona',908.205,62.5,9,8,22],['USA Philly',902.25,500,11,5,22],['USA/Canada',910.525,62.5,7,5,22],['Vietnam',920.25,250,11,5,20],['Off-Grid 433',433,250,11,8,20],['Off-Grid 869',869.495,250,11,8,14],['Off-Grid 918',918,250,11,8,20]
@@ -2584,6 +2750,7 @@ async def peers_handler(request):
             "public_key": contact.get("public_key", str(node_id)),
             "type": contact.get("type", entry.get("type") if isinstance(entry, dict) else None),
             "last_heard": contact.get("last_advert", contact.get("last_heard", 0)),
+            "hops": contact.get("out_path_len"),
             "last_message_at": latest_message.get("sort_timestamp", 0),
             "latitude": coordinates[0] if coordinates else None,
             "longitude": coordinates[1] if coordinates else None,
@@ -3130,13 +3297,15 @@ async def transmit_handler(request):
 
     try:
         async with paced_hardware_lock():
-            result = await send_to_target(target, target_type, message)
+            result, delivered = await send_to_target_with_confirmation(
+                target, target_type, message
+            )
         if result.type == EventType.ERROR:
             return web.json_response({"error": str(result.payload)}, status=500)
         sent_message = add_chat_message(target_type, target, "outgoing", message)
         update_chat_message_status(
             sent_message,
-            "delivered" if await confirm_delivery(result) else "unconfirmed",
+            "delivered" if delivered else "unconfirmed",
         )
         record_trace_event(
             "direct" if target_type == "node" else "channel",
