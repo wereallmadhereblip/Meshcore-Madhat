@@ -1994,7 +1994,7 @@ body[data-theme="tron"].tron-overview #node-chat-history,body[data-theme="tron"]
 body[data-theme="tron"].tron-overview #map-view .map-layout{flex:1;min-height:0;grid-template-columns:minmax(150px,220px) minmax(0,1fr)}
 body[data-theme="tron"].tron-overview #map-view .map-surface{min-height:0}
 body[data-theme="tron"].tron-overview #map-view #map-canvas{min-height:0}
-body[data-theme="tron"].tron-overview .analyzer-shell{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,.38fr) minmax(0,.62fr);height:100%;min-height:0;gap:8px}
+body[data-theme="tron"].tron-overview .analyzer-shell{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,.32fr) minmax(0,.68fr);height:100%;min-height:0;gap:8px}
 body[data-theme="tron"].tron-overview .analyzer-main,body[data-theme="tron"].tron-overview .analyzer-side{min-width:0;min-height:0;overflow:auto}
 body[data-theme="tron"].tron-overview .view-panel[hidden]{display:none!important}
 body[data-theme="tron"].tron-overview .view-panel:not([hidden]){animation:tron-panel-arrive .32s ease-out both}
