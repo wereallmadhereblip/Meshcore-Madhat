@@ -1306,7 +1306,29 @@ async def confirm_delivery(result, early_ack_codes=()):
         return False
 
 
-async def send_to_target_with_confirmation(target, target_type, message):
+def target_hop_count(target, target_type):
+    if target_type != "node":
+        return None
+
+    if isinstance(target, dict):
+        entry = target
+    else:
+        contact_id = resolve_contact_id(str(target))
+        entry = app_state["contacts"].get(contact_id)
+    if not isinstance(entry, dict):
+        return None
+
+    contact = entry.get("contact", entry)
+    if not isinstance(contact, dict):
+        contact = entry
+    try:
+        hops = int(contact.get("out_path_len", entry.get("out_path_len")))
+    except (TypeError, ValueError):
+        return None
+    return hops if hops >= 0 else None
+
+
+async def send_to_target_with_pending_confirmation(target, target_type, message):
     early_ack_codes = set()
     ack_type = getattr(EventType, "ACK", None)
     subscribe = getattr(meshcore_instance, "subscribe", None)
@@ -1319,11 +1341,42 @@ async def send_to_target_with_confirmation(target, target_type, message):
 
     try:
         result = await send_to_target(target, target_type, message)
-        delivered = await confirm_delivery(result, early_ack_codes)
-        return result, delivered
-    finally:
+    except Exception:
         if ack_subscription is not None:
             ack_subscription.unsubscribe()
+        raise
+
+    if result.type == EventType.ERROR:
+        if ack_subscription is not None:
+            ack_subscription.unsubscribe()
+        return result, None, None
+
+    hops = target_hop_count(target, target_type)
+
+    async def wait_for_confirmation():
+        try:
+            return await confirm_delivery(result, early_ack_codes)
+        finally:
+            if ack_subscription is not None:
+                ack_subscription.unsubscribe()
+
+    return result, wait_for_confirmation(), hops
+
+
+def schedule_delivery_status_update(message, pending_confirmation, hops):
+    if pending_confirmation is None:
+        return
+
+    async def update_after_confirmation():
+        try:
+            if await pending_confirmation:
+                if hops is not None:
+                    message["hops"] = hops
+                update_chat_message_status(message, "delivered")
+        except Exception as error:
+            log_to_dash(f"Delivery confirmation unavailable: {error}")
+
+    return asyncio.create_task(update_after_confirmation())
 
 
 async def handle_incoming_message(event):
@@ -1358,7 +1411,7 @@ async def handle_incoming_message(event):
             for part_number, part in enumerate(reply_parts, start=1):
                 if part_number > 1:
                     await asyncio.sleep(HARDWARE_SEND_INTERVAL)
-                result, delivered = await send_to_target_with_confirmation(
+                result, pending_delivery, hops = await send_to_target_with_pending_confirmation(
                     recipient, "node", part
                 )
                 if result.type == EventType.ERROR:
@@ -1368,10 +1421,8 @@ async def handle_incoming_message(event):
                     )
                     return
                 sent_message = add_chat_message("node", resolved_sender, "outgoing", part)
-                update_chat_message_status(
-                    sent_message,
-                    "delivered" if delivered else "unconfirmed",
-                )
+                update_chat_message_status(sent_message, "unconfirmed")
+                schedule_delivery_status_update(sent_message, pending_delivery, hops)
                 record_trace_event("direct", "outbound", resolved_sender)
             log_to_dash(
                 f"Direct message reply sent in {len(reply_parts)} message(s)."
@@ -1437,7 +1488,7 @@ async def handle_incoming_channel_message(event):
             for part_number, part in enumerate(reply_parts, start=1):
                 if part_number > 1:
                     await asyncio.sleep(HARDWARE_SEND_INTERVAL)
-                result, delivered = await send_to_target_with_confirmation(
+                result, pending_delivery, hops = await send_to_target_with_pending_confirmation(
                     channel_target, "channel", part
                 )
                 if result.type == EventType.ERROR:
@@ -1449,10 +1500,8 @@ async def handle_incoming_channel_message(event):
                 sent_message = add_chat_message(
                     "channel", channel_target, "outgoing", part
                 )
-                update_chat_message_status(
-                    sent_message,
-                    "delivered" if delivered else "unconfirmed",
-                )
+                update_chat_message_status(sent_message, "unconfirmed")
+                schedule_delivery_status_update(sent_message, pending_delivery, hops)
                 record_trace_event("channel", "outbound", channel_target)
             log_to_dash(
                 f"Channel reply sent in {len(reply_parts)} message(s)."
@@ -1495,7 +1544,7 @@ async def handle_new_contact(event):
                     await asyncio.sleep(HARDWARE_SEND_INTERVAL)
                 first_send = False
                 try:
-                    result, delivered = await send_to_target_with_confirmation(
+                    result, pending_delivery, hops = await send_to_target_with_pending_confirmation(
                         channel, "channel", part
                     )
                     if result.type == EventType.ERROR:
@@ -1504,10 +1553,8 @@ async def handle_new_contact(event):
                     sent_message = add_chat_message(
                         "channel", channel, "outgoing", part
                     )
-                    update_chat_message_status(
-                        sent_message,
-                        "delivered" if delivered else "unconfirmed",
-                    )
+                    update_chat_message_status(sent_message, "unconfirmed")
+                    schedule_delivery_status_update(sent_message, pending_delivery, hops)
                 except Exception as error:
                     log_to_dash(f"Channel {channel} peer greeting failed: {error}")
                     break
@@ -2183,7 +2230,7 @@ async function loadTronAnalyzerRadioStatus(){let panel=document.getElementById('
 setInterval(()=>{if(activeView==='analyzer')loadAnalyzerRadioStatus();else if(activeView==='tron-overview')loadTronAnalyzerRadioStatus()},15000);
 async function peers(){let r=await fetch('/api/peers'),d=await r.json();gatewayTelemetry=d.gateway_telemetry||{};mapNodes=d.nodes||[];meshChannels=d.channels||[];gateway_battery.textContent=gatewayTelemetry.battery!=null?gatewayTelemetry.battery+'%':'Unavailable';if(!mapNodes.some(item=>String(item.id)===selectedNodeId))selectedNodeId='';if(!meshChannels.some(item=>String(item.id)===selectedChannelId))selectedChannelId='';renderConversationTargets('node');renderConversationTargets('channel');renderMapNodes();renderKnownPeers();renderAnalyzerStats();renderIncomingAdverts();if(liveTraceMap)renderLiveTraceMarkers()}
 function parseChannelSender(text){let bracket=text.match(/^\[([^\]]{1,24})\]\s*/);if(bracket)return bracket[1];let colon=text.match(/^([A-Za-z0-9 _-]{1,24}):\s/);if(colon)return colon[1];return null}
-async function history(type,id,boxId){let box=document.getElementById(boxId);if(!id){box.replaceChildren();updateConversationMenu(type);return}try{let response=await fetch('/api/chat-history?target_type='+encodeURIComponent(type)+'&target='+encodeURIComponent(id)),data=await response.json();if(!response.ok)throw new Error(data.error||'Message history could not be loaded');updateConversationMenu(type,data.metadata||{});box.replaceChildren();let peerName=type==='node'?(mapNodes.find(item=>String(item.id)===id)?.name||id):(meshChannels.find(item=>String(item.id)===id)?.name||('Channel '+id));for(let message of data.messages||[]){let outgoing=message.direction==='outgoing';let item=document.createElement('div');item.className='chat-message '+(outgoing?'outgoing':'incoming');let sender=outgoing?'You':(type==='channel'?(parseChannelSender(message.text)||peerName):peerName);let meta=document.createElement('div');meta.className='chat-message-meta';let avatar=document.createElement('span');avatar.className='chat-avatar';avatar.style.background=hashColor(outgoing?'you':id);avatar.textContent=sender.charAt(0)||'?';let senderLabel=document.createElement('span');senderLabel.className='chat-sender';senderLabel.textContent=sender;let time=document.createElement('span');time.className='chat-time';time.textContent=message.timestamp;let status=document.createElement('span');status.className='chat-status';let statusLabels={sent:'Sent',delivered:'Delivered',unconfirmed:'Sent (not confirmed)',received:'Received'};status.textContent=statusLabels[message.status]||statusLabels[outgoing?'sent':'received'];meta.append(avatar,senderLabel,time,status);let body=document.createElement('div');body.className='chat-message-body';body.textContent=message.text;item.append(meta,body);box.appendChild(item)}box.scrollTop=box.scrollHeight}catch(error){box.textContent=error.message}}
+async function history(type,id,boxId){let box=document.getElementById(boxId);if(!id){box.replaceChildren();updateConversationMenu(type);return}try{let response=await fetch('/api/chat-history?target_type='+encodeURIComponent(type)+'&target='+encodeURIComponent(id)),data=await response.json();if(!response.ok)throw new Error(data.error||'Message history could not be loaded');updateConversationMenu(type,data.metadata||{});box.replaceChildren();let peerName=type==='node'?(mapNodes.find(item=>String(item.id)===id)?.name||id):(meshChannels.find(item=>String(item.id)===id)?.name||('Channel '+id));for(let message of data.messages||[]){let outgoing=message.direction==='outgoing';let item=document.createElement('div');item.className='chat-message '+(outgoing?'outgoing':'incoming');let sender=outgoing?'You':(type==='channel'?(parseChannelSender(message.text)||peerName):peerName);let meta=document.createElement('div');meta.className='chat-message-meta';let avatar=document.createElement('span');avatar.className='chat-avatar';avatar.style.background=hashColor(outgoing?'you':id);avatar.textContent=sender.charAt(0)||'?';let senderLabel=document.createElement('span');senderLabel.className='chat-sender';senderLabel.textContent=sender;let time=document.createElement('span');time.className='chat-time';time.textContent=message.timestamp;let status=document.createElement('span');status.className='chat-status';let statusLabels={sent:'Sent',delivered:'Delivered',unconfirmed:'Sent (not confirmed)',received:'Received'},hopCount=Number(message.hops);status.textContent=message.status==='delivered'&&Number.isInteger(hopCount)&&hopCount>=0?'Delivered · '+hopCount+' hop'+(hopCount===1?'':'s'):statusLabels[message.status]||statusLabels[outgoing?'sent':'received'];meta.append(avatar,senderLabel,time,status);let body=document.createElement('div');body.className='chat-message-body';body.textContent=message.text;item.append(meta,body);box.appendChild(item)}box.scrollTop=box.scrollHeight}catch(error){box.textContent=error.message}}
 async function manageConversation(type,action){let selected=type==='node'?selectedNodeId:selectedChannelId;if(!selected)return;if(action==='clear'&&!confirm('Clear this conversation history? This cannot be undone.'))return;let response=await fetch('/api/chat-management',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_type:type,target:selected,action})}),data=await response.json();if(!response.ok){alert(data.error||'Conversation could not be updated');return}let menu=document.querySelector('#'+(type==='node'?'node':'channel')+'-chat-options');if(menu)menu.open=false;await history(type,selected,type==='node'?'node-chat-history':'channel-chat-history');await peers()}
 function selectNode(id){selectConversation('node',id)}
 function selectChannel(id){selectConversation('channel',id)}
@@ -3331,16 +3378,14 @@ async def transmit_handler(request):
 
     try:
         async with paced_hardware_lock():
-            result, delivered = await send_to_target_with_confirmation(
+            result, pending_delivery, hops = await send_to_target_with_pending_confirmation(
                 target, target_type, message
             )
         if result.type == EventType.ERROR:
             return web.json_response({"error": str(result.payload)}, status=500)
         sent_message = add_chat_message(target_type, target, "outgoing", message)
-        update_chat_message_status(
-            sent_message,
-            "delivered" if delivered else "unconfirmed",
-        )
+        update_chat_message_status(sent_message, "unconfirmed")
+        schedule_delivery_status_update(sent_message, pending_delivery, hops)
         record_trace_event(
             "direct" if target_type == "node" else "channel",
             "outbound",
