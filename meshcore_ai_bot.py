@@ -2037,16 +2037,16 @@ body[data-theme="tron"] .settings-tabs{background:transparent}
 body[data-theme="tron"] .tron-mode-button{background:rgba(0,80,100,.28)}
 body[data-theme="tron"].tron-overview{background-color:#000}
 body[data-theme="tron"].tron-overview #connection-view .connection-card{display:flex;flex-direction:column;overflow:hidden}
-.incoming-adverts{display:flex;flex:0 1 260px;flex-direction:column;min-width:180px;max-width:320px;height:82px;overflow:hidden;padding:5px 8px;border-left:2px solid var(--accent);background:var(--panel-raised)}
+.incoming-adverts{display:flex;flex:0 1 260px;flex-direction:column;min-width:180px;max-width:320px;height:42px;overflow:hidden;padding:3px 6px;border-left:2px solid var(--accent);background:var(--panel-raised)}
 .incoming-adverts-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:2px}
 .incoming-adverts-heading h3{margin:0;color:var(--muted);font-size:8px;font-weight:700;text-transform:uppercase}
 .incoming-adverts-count{color:var(--muted);font:8px ui-monospace,monospace}
-.incoming-adverts-list{display:flex;flex:1;flex-direction:column;gap:2px;min-height:0;overflow:hidden}
+.incoming-adverts-list{display:flex;flex:1;flex-direction:column;gap:2px;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
 .incoming-advert-empty{margin:0;color:var(--muted);font-size:8px;line-height:1.3}
 .incoming-advert-row{display:flex;align-items:center;justify-content:space-between;gap:6px;min-width:0;min-height:11px;padding:1px 4px;border-left:1px solid var(--border);background:color-mix(in srgb,var(--panel-bg) 72%,transparent)}
 .incoming-advert-name{min-width:0;overflow:hidden;color:var(--text);font:9px ui-monospace,monospace;text-overflow:ellipsis;white-space:nowrap}
 .incoming-advert-meta{flex:none;color:var(--muted);font:8px ui-monospace,monospace;white-space:nowrap}
-body[data-theme="tron"] .incoming-adverts{flex-basis:320px;max-width:360px;height:82px;border-left-color:#00d8ff;background:rgba(0,0,0,.45)}
+body[data-theme="tron"] .incoming-adverts{flex-basis:320px;max-width:360px;height:42px;border-left-color:#00d8ff;background:rgba(0,0,0,.45)}
 body[data-theme="tron"] .incoming-adverts-heading h3{color:#58dff7;font:600 9px "IBM Plex Mono","Cascadia Code",ui-monospace,monospace}
 body[data-theme="tron"] .incoming-adverts-count{font-size:9px}
 body[data-theme="tron"] .incoming-advert-empty{font:9px/1.3 ui-monospace,monospace}
@@ -2059,8 +2059,8 @@ body[data-theme="tron"] .incoming-advert-row{min-height:12px}
 body[data-theme="tron"] .analyzer-stat-grid{display:none}
 body[data-theme="tron"] .analyzer-side>.analyzer-side-section:last-child{display:none}
 @media(max-width:1050px){body[data-theme="tron"] .dashboard-header{gap:4px 6px}body[data-theme="tron"] .header-meta{flex-basis:100%;order:1;justify-content:space-between}body[data-theme="tron"] .top-nav{order:2;flex:1 1 auto}body[data-theme="tron"] .tron-quick-tabs{order:3;margin-left:auto}body[data-theme="tron"] .console-toggle{order:4}}
-@media(max-width:720px){.incoming-adverts{width:100%;max-width:none;height:74px}}
-@media(max-width:640px){body[data-theme="tron"] .dashboard-header{gap:4px;padding:4px 6px}body[data-theme="tron"] .incoming-adverts{order:0;flex-basis:100%;max-width:none;height:74px}body[data-theme="tron"] .header-meta{flex-wrap:wrap;justify-content:flex-start;gap:0}body[data-theme="tron"] .header-meta-item{padding:2px 5px}body[data-theme="tron"] .top-nav{flex-basis:100%;order:2}body[data-theme="tron"] .tron-quick-tabs{order:3;margin-left:0}body[data-theme="tron"] .console-toggle{order:4}}
+@media(max-width:720px){.incoming-adverts{width:100%;max-width:none;height:42px}}
+@media(max-width:640px){body[data-theme="tron"] .dashboard-header{gap:4px;padding:4px 6px}body[data-theme="tron"] .incoming-adverts{order:0;flex-basis:100%;max-width:none;height:42px}body[data-theme="tron"] .header-meta{flex-wrap:wrap;justify-content:flex-start;gap:0}body[data-theme="tron"] .header-meta-item{padding:2px 5px}body[data-theme="tron"] .top-nav{flex-basis:100%;order:2}body[data-theme="tron"] .tron-quick-tabs{order:3;margin-left:0}body[data-theme="tron"] .console-toggle{order:4}}
 </style>
 <script>
 let gatewayTelemetry={};
