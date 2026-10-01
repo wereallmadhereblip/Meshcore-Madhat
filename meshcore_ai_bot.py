@@ -2056,14 +2056,14 @@ body[data-theme="tron"].tron-overview #connection-view .connection-card{display:
 .incoming-advert-name{min-width:0;overflow:hidden;color:var(--text);font:9px ui-monospace,monospace;text-overflow:ellipsis;white-space:nowrap}
 .incoming-advert-meta{flex:none;color:var(--muted);font:8px ui-monospace,monospace;white-space:nowrap}
 body[data-theme="tron"] .incoming-adverts{flex:1 1 320px;min-width:0;max-width:none;height:42px;border-left-color:#00d8ff;background:rgba(0,0,0,.45)}
-body[data-theme="tron"] .incoming-adverts-list{flex-direction:row;align-items:stretch;gap:4px;overflow-x:auto;overflow-y:hidden;scroll-behavior:smooth}
+body[data-theme="tron"] .incoming-adverts-list{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));align-items:stretch;gap:3px;overflow:hidden}
 body[data-theme="tron"] .incoming-adverts-heading h3{color:#58dff7;font:600 9px "IBM Plex Mono","Cascadia Code",ui-monospace,monospace}
 body[data-theme="tron"] .incoming-adverts-count{font-size:9px}
 body[data-theme="tron"] .incoming-advert-empty{font:9px/1.3 ui-monospace,monospace}
 body[data-theme="tron"] .incoming-advert-row{border-left:2px solid rgba(0,190,235,.52);background:rgba(0,30,42,.36)}
 body[data-theme="tron"] .incoming-advert-name{font-size:10px}
 body[data-theme="tron"] .incoming-advert-meta{color:#75b4c8;font-size:9px}
-body[data-theme="tron"] .incoming-advert-row{flex:0 0 190px;min-height:12px}
+body[data-theme="tron"] .incoming-advert-row{flex-direction:column;align-items:flex-start;justify-content:center;gap:1px;min-width:0;min-height:12px;overflow:hidden}
 .incoming-advert-new{animation:advert-arrival .24s ease-out}
 @keyframes advert-arrival{from{opacity:0;transform:translateX(-5px)}to{opacity:1;transform:translateX(0)}}
 body[data-theme="tron"] .analyzer-stat-grid{display:none}
