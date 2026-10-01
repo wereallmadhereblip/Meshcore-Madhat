@@ -2038,7 +2038,14 @@ body[data-theme="tron"].tron-overview #connection-view .connection-card{width:10
 body[data-theme="tron"].tron-overview #nodes-view .messages-layout,body[data-theme="tron"].tron-overview #channels-view .messages-layout{grid-template-columns:minmax(130px,38%) minmax(0,1fr);width:100%;height:100%;min-height:0;gap:8px}
 body[data-theme="tron"].tron-overview #nodes-view .conversation-rail,body[data-theme="tron"].tron-overview #channels-view .conversation-rail,body[data-theme="tron"].tron-overview #nodes-view .chat-panel,body[data-theme="tron"].tron-overview #channels-view .chat-panel{min-width:0;min-height:0;height:100%;margin:0;overflow:hidden}
 body[data-theme="tron"].tron-overview #node-chat-history,body[data-theme="tron"].tron-overview #channel-chat-history{min-height:0}
-body[data-theme="tron"].tron-overview #map-view .map-layout{flex:1;min-height:0;grid-template-columns:minmax(150px,220px) minmax(0,1fr)}
+body[data-theme="tron"].tron-overview #map-view .map-layout{flex:1;min-height:0;grid-template-columns:minmax(260px,300px) minmax(0,1fr);gap:8px}
+body[data-theme="tron"].tron-overview #map-view .map-rail{min-width:0;min-height:0;overflow:hidden;padding:8px}
+body[data-theme="tron"].tron-overview #map-view .map-rail-summary{display:none}
+body[data-theme="tron"].tron-overview #map-view .map-peer-filters{gap:5px;margin-bottom:6px}
+body[data-theme="tron"].tron-overview #map-view .map-peer-filters label{font-size:9px}
+body[data-theme="tron"].tron-overview #map-view .map-peer-filters select,body[data-theme="tron"].tron-overview #map-view .map-peer-filters input{min-height:28px;padding:4px 16px 4px 6px;font-size:9px}
+body[data-theme="tron"].tron-overview #map-view #map-node-list{flex:1;min-height:0;overflow:auto}
+body[data-theme="tron"].tron-overview #map-view .map-peer-target{min-height:32px;padding:5px 7px;font-size:10px}
 body[data-theme="tron"].tron-overview #map-view .map-surface{min-height:0}
 body[data-theme="tron"].tron-overview #map-view #map-canvas{min-height:0}
 body[data-theme="tron"].tron-overview .analyzer-shell{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,.42fr) minmax(0,.58fr);height:100%;min-height:0;gap:8px}
@@ -2056,6 +2063,7 @@ body[data-theme="tron"].tron-overview .view-panel[hidden]{display:none!important
 body[data-theme="tron"].tron-overview .view-panel:not([hidden]){animation:tron-panel-arrive .32s ease-out both}
 @keyframes tron-panel-arrive{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
 @media(max-width:1050px){body[data-theme="tron"].tron-overview{height:auto;min-height:100vh;overflow:auto;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:auto repeat(4,minmax(320px,auto));grid-template-areas:"header header" "connection nodes" "channels channels" "map map" "analyzer analyzer"}body[data-theme="tron"].tron-overview:has(#nodes-view:not([hidden])){height:auto;overflow:auto}body[data-theme="tron"].tron-overview #channels-view .messages-layout{grid-template-columns:minmax(150px,38%) minmax(0,1fr)}}
+@media(max-width:900px){body[data-theme="tron"].tron-overview #map-view .map-layout{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(150px,.72fr) minmax(180px,1.28fr)}}
 @media(max-width:640px){body[data-theme="tron"].tron-overview{grid-template-columns:minmax(0,1fr);grid-template-rows:auto repeat(5,minmax(300px,auto));grid-template-areas:"header" "connection" "nodes" "channels" "map" "analyzer";padding:8px}body[data-theme="tron"].tron-overview .analyzer-shell{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(130px,.75fr) minmax(170px,1.25fr);height:100%}body[data-theme="tron"].tron-overview #nodes-view .messages-layout,body[data-theme="tron"].tron-overview #channels-view .messages-layout{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(110px,.38fr) minmax(0,1fr)}body[data-theme="tron"].tron-overview #nodes-view .conversation-rail,body[data-theme="tron"].tron-overview #channels-view .conversation-rail{max-height:none}}
 .tron-quick-tabs{display:none}
 body[data-theme="tron"]{--page-bg:#000;--panel-bg:rgba(0,0,0,.62);--panel-raised:rgba(0,10,16,.58);--accent:#00d8ff;--accent-dim:rgba(0,92,122,.24);--border:rgba(0,190,235,.45);--input-bg:rgba(0,0,0,.76);--input-border:rgba(0,190,235,.55);--log-bg:rgba(0,0,0,.75);background-color:#000;background-image:linear-gradient(rgba(0,190,235,.018) 1px,transparent 1px),linear-gradient(90deg,rgba(0,190,235,.018) 1px,transparent 1px);background-size:32px 32px}
