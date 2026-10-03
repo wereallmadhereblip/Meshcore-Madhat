@@ -2093,12 +2093,12 @@ body[data-theme="tron"].tron-overview #channels-view .messages-layout{grid-templ
 body[data-theme="tron"].tron-overview #nodes-view .conversation-rail,body[data-theme="tron"].tron-overview #channels-view .conversation-rail,body[data-theme="tron"].tron-overview #nodes-view .chat-panel,body[data-theme="tron"].tron-overview #channels-view .chat-panel{min-width:0;min-height:0;height:100%;margin:0;overflow:hidden}
 body[data-theme="tron"].tron-overview #node-chat-history,body[data-theme="tron"].tron-overview #channel-chat-history{min-height:0}
 body[data-theme="tron"].tron-overview #map-view .map-layout{flex:1;min-height:0;grid-template-columns:minmax(260px,300px) minmax(0,1fr);gap:8px}
-body[data-theme="tron"].tron-overview #map-view .map-rail{min-width:0;min-height:0;overflow:hidden;padding:8px}
+body[data-theme="tron"].tron-overview #map-view .map-rail{height:100%;min-width:0;min-height:0;overflow:hidden;padding:8px;box-sizing:border-box}
 body[data-theme="tron"].tron-overview #map-view .map-rail-summary{display:none}
 body[data-theme="tron"].tron-overview #map-view .map-peer-filters{gap:5px;margin-bottom:6px}
 body[data-theme="tron"].tron-overview #map-view .map-peer-filters label{font-size:9px}
 body[data-theme="tron"].tron-overview #map-view .map-peer-filters select,body[data-theme="tron"].tron-overview #map-view .map-peer-filters input{min-height:28px;padding:4px 16px 4px 6px;font-size:9px}
-body[data-theme="tron"].tron-overview #map-view #map-node-list{flex:1;min-height:0;overflow:auto}
+body[data-theme="tron"].tron-overview #map-view #map-node-list{flex:1;min-height:0;overflow:auto;border:0;border-radius:0;background:transparent}
 body[data-theme="tron"].tron-overview #map-view .map-peer-target{min-height:32px;padding:5px 7px;font-size:10px}
 body[data-theme="tron"].tron-overview #map-view .map-surface{min-height:0}
 body[data-theme="tron"] #map-view #map-node-list{display:flex;flex-direction:column;gap:6px;padding:6px;box-sizing:border-box}
