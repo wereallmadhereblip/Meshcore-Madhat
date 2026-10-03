@@ -80,7 +80,7 @@ def load_app_config():
         "connection": {"type": "bluetooth", "ble_mac": "", "serial_port": ""},
         "weather": {"city": "", "state": ""},
         "bot": load_bot_settings(),
-        "ollama": {"schedule_enabled": False, "start_time": "07:00", "end_time": "17:00"},
+        "ollama": {"schedule_enabled": False, "start_time": "07:00", "end_time": "17:00", "greet_new_users": False},
         "auto_update": {"enabled": True},
     }
     try:
@@ -126,6 +126,8 @@ def load_app_config():
     if isinstance(saved_ollama, dict):
         if isinstance(saved_ollama.get("schedule_enabled"), bool):
             config["ollama"]["schedule_enabled"] = saved_ollama["schedule_enabled"]
+        if isinstance(saved_ollama.get("greet_new_users"), bool):
+            config["ollama"]["greet_new_users"] = saved_ollama["greet_new_users"]
         for key in ("start_time", "end_time"):
             value = saved_ollama.get(key)
             if isinstance(value, str) and TIME_OF_DAY_PATTERN.match(value):
@@ -199,13 +201,19 @@ def validate_app_config(value):
 
     ollama_schedule = value.get("ollama", app_config["ollama"])
     if not isinstance(ollama_schedule, dict) or set(ollama_schedule) - {
-        "schedule_enabled", "start_time", "end_time",
+        "schedule_enabled", "start_time", "end_time", "greet_new_users",
     }:
-        raise ValueError("Ollama schedule must contain only schedule_enabled, start_time, and end_time")
+        raise ValueError("Ollama settings contain an unsupported option")
     schedule_enabled = ollama_schedule.get("schedule_enabled", app_config["ollama"]["schedule_enabled"])
     if not isinstance(schedule_enabled, bool):
         raise ValueError("Ollama schedule_enabled must be true or false")
-    ollama_values = {"schedule_enabled": schedule_enabled}
+    greet_new_users = ollama_schedule.get("greet_new_users", app_config["ollama"]["greet_new_users"])
+    if not isinstance(greet_new_users, bool):
+        raise ValueError("Ollama greet_new_users must be true or false")
+    ollama_values = {
+        "schedule_enabled": schedule_enabled,
+        "greet_new_users": greet_new_users,
+    }
     for key in ("start_time", "end_time"):
         setting = ollama_schedule.get(key, app_config["ollama"][key])
         if not isinstance(setting, str) or not TIME_OF_DAY_PATTERN.match(setting):
@@ -1253,8 +1261,40 @@ def clear_chat_memory_reply(sender_id, prompt):
     return "Done. I've cleared our chat memory."
 
 
+def update_greeting_setting_from_message(prompt):
+    global app_config
+
+    match = re.fullmatch(
+        r"\s*(?:\[[^\]]+\]\s*|[^:\r\n]{1,40}:\s*)?/greet\s+(on|off)\s*",
+        prompt,
+        re.IGNORECASE,
+    )
+    if match is None:
+        return None
+
+    enabled = match.group(1).lower() == "on"
+    updated_config = {
+        **app_config,
+        "ollama": {**app_config["ollama"], "greet_new_users": enabled},
+    }
+    try:
+        write_app_config(updated_config)
+    except OSError as error:
+        log_to_dash(f"Failed to save greeting setting: {error}")
+        return "I couldn't save the greeting setting to config.json. Check the file permissions."
+
+    app_config = updated_config
+    if enabled:
+        return "New-user greetings are on. I'll greet contacts in all configured channels."
+    return "New-user greetings are off."
+
+
 async def generate_ai_response(sender_id, prompt, allow_settings_update=True):
     if allow_settings_update:
+        greeting_reply = update_greeting_setting_from_message(prompt)
+        if greeting_reply is not None:
+            return greeting_reply
+
         settings_reply = update_bot_settings_from_prompt(prompt)
         if settings_reply is not None:
             return settings_reply
@@ -1510,18 +1550,20 @@ async def handle_incoming_channel_message(event):
     # (e.g. "[Alice] /bot ..." or "Alice: /bot ...") before it reaches us,
     # so look for /bot anywhere after a word boundary rather than only at
     # the very start of the message.
-    bot_command = re.search(r"(?:^|\s)/bot(?:\s+|$)", message_text, re.IGNORECASE)
-    if bot_command is None:
-        return
-    prompt = message_text[bot_command.end():].strip()
-    if not prompt:
-        return
+    reply = update_greeting_setting_from_message(message_text)
+    if reply is None:
+        bot_command = re.search(r"(?:^|\s)/bot(?:\s+|$)", message_text, re.IGNORECASE)
+        if bot_command is None:
+            return
+        prompt = message_text[bot_command.end():].strip()
+        if not prompt:
+            return
 
-    reply = await generate_ai_response(
-        f"channel:{channel_target}",
-        prompt,
-        allow_settings_update=False,
-    )
+        reply = await generate_ai_response(
+            f"channel:{channel_target}",
+            prompt,
+            allow_settings_update=False,
+        )
     log_to_dash(f"AI channel reply: {reply}")
     reply_parts = split_reply_into_messages(
         reply,
@@ -1559,6 +1601,8 @@ async def handle_incoming_channel_message(event):
 async def handle_new_contact(event):
     if not meshcore_instance or not app_state["is_connected"]:
         return
+    if not app_config["ollama"]["greet_new_users"]:
+        return
 
     contact = event.payload or {}
     public_key = contact.get("public_key")
@@ -1568,11 +1612,7 @@ async def handle_new_contact(event):
     if announced_contact_adverts.get(str(public_key)) == advert_timestamp:
         return
 
-    channels = [
-        channel_index
-        for channel_index, channel in app_state["channels"].items()
-        if isinstance(channel, dict) and channel.get("is_private") is True
-    ]
+    channels = list(app_state["channels"])
     if not channels:
         return
 
@@ -2088,20 +2128,22 @@ body[data-theme="tron"].tron-overview #analyzer-view{grid-area:analyzer}
 body[data-theme="tron"].tron-overview #connection-view,body[data-theme="tron"].tron-overview #nodes-view,body[data-theme="tron"].tron-overview #channels-view,body[data-theme="tron"].tron-overview #map-view,body[data-theme="tron"].tron-overview #analyzer-view{display:flex!important;width:auto;min-width:0;min-height:0;height:auto;margin:0;padding:0;overflow:hidden}
 body[data-theme="tron"].tron-overview #connection-view .connection-layout{width:100%;min-height:0}
 body[data-theme="tron"].tron-overview #connection-view .connection-card{width:100%;min-height:0;margin:0;overflow-y:auto}
-body[data-theme="tron"].tron-overview #nodes-view .messages-layout{grid-template-columns:minmax(260px,300px) minmax(0,1fr);width:100%;height:100%;min-height:0;gap:8px}
-body[data-theme="tron"].tron-overview #channels-view .messages-layout{grid-template-columns:minmax(130px,38%) minmax(0,1fr);width:100%;height:100%;min-height:0;gap:8px}
+body[data-theme="tron"].tron-overview #nodes-view .messages-layout{grid-template-columns:minmax(260px,360px) minmax(0,1fr);width:100%;height:100%;min-height:0;gap:8px}
+body[data-theme="tron"].tron-overview #channels-view .messages-layout{grid-template-columns:minmax(260px,360px) minmax(0,1fr);width:100%;height:100%;min-height:0;gap:8px}
 body[data-theme="tron"].tron-overview #nodes-view .conversation-rail,body[data-theme="tron"].tron-overview #channels-view .conversation-rail,body[data-theme="tron"].tron-overview #nodes-view .chat-panel,body[data-theme="tron"].tron-overview #channels-view .chat-panel{min-width:0;min-height:0;height:100%;margin:0;overflow:hidden}
 body[data-theme="tron"].tron-overview #node-chat-history,body[data-theme="tron"].tron-overview #channel-chat-history{min-height:0}
-body[data-theme="tron"].tron-overview #map-view .map-layout{flex:1;min-height:0;grid-template-columns:minmax(260px,300px) minmax(0,1fr);gap:8px}
-body[data-theme="tron"].tron-overview #map-view .map-rail{height:100%;min-width:0;min-height:0;overflow:hidden;padding:8px;box-sizing:border-box}
+body[data-theme="tron"].tron-overview #map-view .map-layout{flex:1;min-height:0;grid-template-columns:minmax(260px,360px) minmax(0,1fr);gap:8px}
+body[data-theme="tron"].tron-overview #map-view .map-rail{min-width:0;min-height:0;overflow:hidden;padding:12px}
 body[data-theme="tron"].tron-overview #map-view .map-rail-summary{display:none}
 body[data-theme="tron"].tron-overview #map-view .map-peer-filters{gap:5px;margin-bottom:6px}
 body[data-theme="tron"].tron-overview #map-view .map-peer-filters label{font-size:9px}
 body[data-theme="tron"].tron-overview #map-view .map-peer-filters select,body[data-theme="tron"].tron-overview #map-view .map-peer-filters input{min-height:28px;padding:4px 16px 4px 6px;font-size:9px}
-body[data-theme="tron"].tron-overview #map-view #map-node-list{flex:1;min-height:0;overflow:auto;border:0;border-radius:0;background:transparent}
+body[data-theme="tron"].tron-overview #map-view #map-node-list{width:100%;flex:1;min-height:0;overflow:auto;border:0;border-radius:0;background:transparent;box-sizing:border-box}
+body[data-theme="tron"].tron-overview #map-view #map-node-list>*{width:100%;box-sizing:border-box}
+body[data-theme="tron"].tron-overview #map-view #map-node-list>.map-empty{width:100%;min-width:0;max-width:none;box-sizing:border-box}
 body[data-theme="tron"].tron-overview #map-view .map-peer-target{min-height:32px;padding:5px 7px;font-size:10px}
 body[data-theme="tron"].tron-overview #map-view .map-surface{min-height:0}
-body[data-theme="tron"] #map-view #map-node-list{display:flex;flex-direction:column;gap:6px;padding:6px;box-sizing:border-box}
+body[data-theme="tron"] #map-view #map-node-list{display:grid;grid-template-columns:minmax(0,1fr);align-content:start;gap:6px;padding:6px;box-sizing:border-box}
 body[data-theme="tron"] #map-view .map-node-row{padding:0;border:0;gap:0}
 body[data-theme="tron"] #map-view .map-node-row-main{width:100%;gap:0;align-items:stretch;border:1px solid var(--border);border-radius:2px;background:#0b171d;box-sizing:border-box}
 body[data-theme="tron"] #map-view .map-node-row-main:hover{border-color:var(--accent);background:var(--accent-dim)}
@@ -2290,7 +2332,7 @@ function sortedFilteredNodes(sortId='node-sort',typeId='node-type-filter',search
 return nodes}
 function updateMapPeerFilters(){renderKnownPeers();renderMapMarkers()}
 function expandKnownPeerRow(peerId){let row=document.querySelector('#map-node-list .map-node-row[data-peer-id="'+String(peerId).replace(/"/g,'')+'"]');if(!row)return;let target=row.querySelector('.map-peer-target');if(target)target.click()}
-function renderKnownPeers(){let list=document.getElementById('map-node-list');if(!list)return;let peers=sortedFilteredNodes('map-node-sort','map-node-type-filter','map-node-search');list.replaceChildren();if(!peers.length){let empty=document.createElement('div');empty.className='map-empty';empty.textContent=mapNodes.length?'No peers match this filter.':'No peers are available yet. Connect to a MeshCore radio to load contacts.';list.appendChild(empty);return}for(let peer of peers){let row=document.createElement('div');row.className='map-node-row';row.dataset.peerId=String(peer.id);let main=document.createElement('div');main.className='map-node-row-main';let target=document.createElement('button');target.type='button';target.className='map-peer-target';target.title=Number.isFinite(peer.latitude)&&Number.isFinite(peer.longitude)?'Center map and view peer details':'View peer details';let details=document.createElement('div');let name=document.createElement('strong');name.textContent=peer.name;let detailBox=document.createElement('dl');detailBox.className='peer-inline-detail';detailBox.hidden=true;details.append(name,detailBox);target.appendChild(details);target.onclick=()=>{if(Number.isFinite(peer.latitude)&&Number.isFinite(peer.longitude))focusMapPoint(peer.latitude,peer.longitude);let willOpen=detailBox.hidden;document.querySelectorAll('#map-node-list .peer-inline-detail').forEach(el=>{if(el!==detailBox)el.hidden=true});if(willOpen)renderPeerDetails(peer.id,detailBox);else detailBox.hidden=true};main.append(target,createNodeFavoriteButton(peer.id));row.appendChild(main);list.appendChild(row)}}
+function renderKnownPeers(){let list=document.getElementById('map-node-list');if(!list)return;let peers=sortedFilteredNodes('map-node-sort','map-node-type-filter','map-node-search');list.replaceChildren();if(!peers.length){let empty=document.createElement('p');empty.className='map-empty';empty.textContent=mapNodes.length?'No peers match this filter.':'No nodes found. Connect to a MeshCore radio to load contacts.';list.appendChild(empty);return}for(let peer of peers){let row=document.createElement('div');row.className='map-node-row';row.dataset.peerId=String(peer.id);let main=document.createElement('div');main.className='map-node-row-main';let target=document.createElement('button');target.type='button';target.className='map-peer-target';target.title=Number.isFinite(peer.latitude)&&Number.isFinite(peer.longitude)?'Center map and view peer details':'View peer details';let details=document.createElement('div');let name=document.createElement('strong');name.textContent=peer.name;let detailBox=document.createElement('dl');detailBox.className='peer-inline-detail';detailBox.hidden=true;details.append(name,detailBox);target.appendChild(details);target.onclick=()=>{if(Number.isFinite(peer.latitude)&&Number.isFinite(peer.longitude))focusMapPoint(peer.latitude,peer.longitude);let willOpen=detailBox.hidden;document.querySelectorAll('#map-node-list .peer-inline-detail').forEach(el=>{if(el!==detailBox)el.hidden=true});if(willOpen)renderPeerDetails(peer.id,detailBox);else detailBox.hidden=true};main.append(target,createNodeFavoriteButton(peer.id));row.appendChild(main);list.appendChild(row)}}
 function updateConversationMenu(type,metadata={}){let prefix=type==='node'?'node':'channel',clear=document.getElementById(prefix+'-clear-action'),archive=document.getElementById(prefix+'-archive-action'),pin=document.getElementById(prefix+'-pin-action'),enabled=Boolean(type==='node'?selectedNodeId:selectedChannelId);clear.disabled=!enabled;archive.disabled=!enabled;pin.disabled=!enabled;document.getElementById(prefix+'-delete-action').disabled=!enabled;archive.textContent=metadata.archived?'Unarchive chat':'Archive chat';pin.textContent=metadata.pinned?'Unpin chat':'Pin chat'}
 function renderConversationTargets(type){let isNode=type==='node',filter=document.getElementById(isNode?'node-chat-filter':'channel-chat-filter').value,query=isNode?'':document.getElementById('channel-search').value.trim().toLowerCase(),items=[...(isNode?sortedFilteredNodes():meshChannels)].filter(item=>(!query||String(item.name||'').toLowerCase().includes(query)||String(item.id).toLowerCase().includes(query))&&(filter==='all'||(filter==='archived'?Boolean(item.archived):!item.archived))),list=document.getElementById(isNode?'node-target-list':'channel-target-list'),selected=isNode?selectedNodeId:selectedChannelId;items.sort((left,right)=>Number(Boolean(left.archived))-Number(Boolean(right.archived))||Number(Boolean(right.pinned))-Number(Boolean(left.pinned)));list.replaceChildren();if(!items.length){let empty=document.createElement('p');empty.className='map-empty';empty.textContent=filter==='archived'?'No archived chats.':(isNode?(mapNodes.length?'No nodes match this filter.':'No nodes found. Connect to a MeshCore radio to load contacts.'):(query?'No channels match this search.':'No channels found on this device.'));list.appendChild(empty);return}for(let item of items){let button=document.createElement('button');button.type='button';button.className='conversation-target'+(selected===String(item.id)?' active':'');button.onclick=()=>selectConversation(type,item.id);let avatar=document.createElement('span');avatar.className='conversation-avatar';avatar.style.background=hashColor(item.id);avatar.textContent=String(item.name||'?').trim().charAt(0)||'?';let title=document.createElement('strong');title.textContent=item.name;let detail=document.createElement('small');detail.textContent=[item.pinned?'Pinned':'',item.archived?'Archived':''].filter(Boolean).join(' · ');button.append(avatar,title);if(detail.textContent)button.append(detail);if(isNode){let entry=document.createElement('div');entry.className='conversation-entry';entry.append(button,createNodeFavoriteButton(item.id));list.appendChild(entry)}else list.appendChild(button)}}
 function selectConversation(type,id){let normalized=String(id);if(type==='node'){let peer=mapNodes.find(item=>String(item.id)===normalized)||{id:normalized};selectedNodeId=normalized;document.getElementById('node-chat-title').textContent=peer.name||normalized;document.getElementById('node-chat-detail').textContent=peerSummary(peer);document.getElementById('node-send').disabled=false;updateConversationMenu('node',peer);renderConversationTargets('node');history('node',normalized,'node-chat-history');renderPeerDetails(normalized,document.getElementById('node-peer-details'))}else{let channel=meshChannels.find(item=>String(item.id)===normalized)||{id:normalized};selectedChannelId=normalized;document.getElementById('channel-chat-title').textContent=channel.name||'Channel '+normalized;document.getElementById('channel-chat-detail').textContent='Channel '+normalized;document.getElementById('channel-send').disabled=false;updateConversationMenu('channel',channel);renderConversationTargets('channel');history('channel',normalized,'channel-chat-history')}}
@@ -2418,6 +2460,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 </div>
 <form class="settings-grid" style="margin-top:16px" onsubmit="saveOllamaSettings(event)">
 <div class="settings-item"><label><input type="checkbox" id="ollama-schedule-enabled"> Schedule on/off automatically</label><p class="settings-description">Turns Ollama on at the start time and off at the end time every day, to lower power use.</p></div>
+<div class="settings-item"><label><input type="checkbox" id="ollama-greet-new-users" onchange="saveAppConfig({...appConfig,ollama:{...appConfig.ollama,greet_new_users:this.checked}},'ollama-settings-status')"> Greet new users</label><p class="settings-description">When enabled, greet newly discovered contacts in all configured channels. Off by default.</p></div>
 <div class="settings-item"><label for="ollama-schedule-start">Turn on at</label><input type="time" id="ollama-schedule-start" value="07:00"></div>
 <div class="settings-item"><label for="ollama-schedule-end">Turn off at</label><input type="time" id="ollama-schedule-end" value="17:00"></div>
 <div class="settings-actions"><button type="submit">Save schedule</button><p id="ollama-settings-status" class="preferences-status" aria-live="polite"></p></div>
@@ -2501,6 +2544,8 @@ function renderLocalRegions(){let settings=readLocalRegions(),select=document.ge
 function saveDefaultRegion(){let settings=readLocalRegions();settings.defaultRegion=document.getElementById('default-region').value;writeLocalRegions(settings)}
 function addLocalRegion(){let input=document.getElementById('new-region-name'),region=input.value.trim().toLowerCase(),status=document.getElementById('region-status');if(!/^[a-z0-9-]{1,30}$/.test(region)){status.textContent='Use 1-30 lowercase letters, numbers, or hyphens.';status.dataset.state='error';return}let settings=readLocalRegions();if(settings.regions.includes(region)){status.textContent='That region is already in the list.';status.dataset.state='error';return}settings.regions.push(region);settings.regions.sort();writeLocalRegions(settings);input.value='';status.textContent='Region added to this browser.';status.dataset.state='success';renderLocalRegions()}
 function removeLocalRegion(region){let settings=readLocalRegions();settings.regions=settings.regions.filter(item=>item!==region);if(settings.defaultRegion===region)settings.defaultRegion='';writeLocalRegions(settings);renderLocalRegions()}
+const syncConfigControlsWithGreeting=syncConfigControls;
+syncConfigControls=function(){syncConfigControlsWithGreeting();let greetingToggle=document.getElementById('ollama-greet-new-users');if(greetingToggle)greetingToggle.checked=Boolean(appConfig.ollama.greet_new_users)}
 const loadDeviceSettingsWithLimits=loadDeviceSettings;
 loadDeviceSettings=async function(){await loadDeviceSettingsWithLimits();if(!loadedDeviceSettings)return;let maxPower=String(loadedDeviceSettings.max_tx_power??30),txPower=document.getElementById('custom-tx-power');txPower.max=maxPower;let pathHash=document.getElementById('path-hash-mode'),pathHashSupported=loadedDeviceSettings.device_info?.path_hash_mode!==undefined&&loadedDeviceSettings.device_info?.path_hash_mode!==null;pathHash.disabled=!pathHashSupported;pathHash.title=pathHashSupported?'':'Requires companion firmware v1.14 or newer'}
 const saveDeviceSettingsWithLimits=saveDeviceSettings;
