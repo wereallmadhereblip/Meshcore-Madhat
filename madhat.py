@@ -2074,6 +2074,13 @@ body[data-theme="tron"].tron-overview #map-view .map-peer-filters select,body[da
 body[data-theme="tron"].tron-overview #map-view #map-node-list{flex:1;min-height:0;overflow:auto}
 body[data-theme="tron"].tron-overview #map-view .map-peer-target{min-height:32px;padding:5px 7px;font-size:10px}
 body[data-theme="tron"].tron-overview #map-view .map-surface{min-height:0}
+body[data-theme="tron"] #map-view #map-node-list{display:flex;flex-direction:column;gap:6px;padding:6px;box-sizing:border-box}
+body[data-theme="tron"] #map-view .map-node-row{padding:0;border:0;gap:0}
+body[data-theme="tron"] #map-view .map-node-row-main{width:100%;gap:0;align-items:stretch;border:1px solid var(--border);border-radius:2px;background:#0b171d;box-sizing:border-box}
+body[data-theme="tron"] #map-view .map-node-row-main:hover{border-color:var(--accent);background:var(--accent-dim)}
+body[data-theme="tron"] #map-view .map-peer-target{width:100%;min-width:0;padding:9px}
+body[data-theme="tron"] #map-view .map-node-row .favorite-toggle{align-self:center;margin-right:6px}
+body[data-theme="tron"] #map-view .peer-inline-detail{margin:6px 0 0}
 body[data-theme="tron"].tron-overview #map-view #map-canvas{min-height:0}
 body[data-theme="tron"].tron-overview .analyzer-shell{grid-template-columns:minmax(0,1fr);grid-template-rows:repeat(2,minmax(0,1fr));height:100%;min-height:0;gap:8px}
 body[data-theme="tron"].tron-overview .analyzer-main,body[data-theme="tron"].tron-overview .analyzer-side{min-width:0;min-height:0;overflow:hidden}
