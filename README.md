@@ -1,4 +1,4 @@
-# MeshCore AI Bot Dashboard
+# MeshCore Ollama chatbot
 
 This project includes a local dashboard for a MeshCore device and an Ollama-powered mesh assistant. It can connect over Bluetooth or a serial port.
 
