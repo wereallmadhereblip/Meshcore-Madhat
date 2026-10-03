@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import html
 import inspect
 import json
@@ -868,6 +869,15 @@ async def refresh_contacts():
         log_to_dash(f"Failed to fetch nodes: {error}")
 
 
+def is_private_mesh_channel(channel_name, channel_secret):
+    if not isinstance(channel_name, str) or not isinstance(channel_secret, (bytes, bytearray)):
+        return False
+    if len(channel_secret) != 16:
+        return False
+    public_secret = hashlib.sha256(channel_name.encode("utf-8")).digest()[:16]
+    return bytes(channel_secret) != public_secret
+
+
 async def refresh_channels():
     if not meshcore_instance or not app_state["is_connected"]:
         return
@@ -879,7 +889,7 @@ async def refresh_channels():
         return
 
     channels = {}
-    seen_names = set()
+    seen_channels = set()
     try:
         for channel_index in range(MAX_CHANNELS):
             try:
@@ -900,15 +910,27 @@ async def refresh_channels():
             if result.type == EventType.ERROR or not result.payload:
                 continue
 
-            channel_name = result.payload.get("channel_name", "").strip()
+            raw_channel_name = result.payload.get("channel_name", "")
+            if not isinstance(raw_channel_name, str):
+                continue
+            channel_name = raw_channel_name.strip()
+            channel_secret = result.payload.get("channel_secret")
+            if not isinstance(channel_secret, (bytes, bytearray)):
+                channel_secret = None
+            else:
+                channel_secret = bytes(channel_secret)
+            channel_key = (channel_name.casefold(), channel_secret)
 
             # Some devices report the same channel (e.g. "Public") at more
             # than one index; keep only the first one so it isn't listed twice.
-            if channel_name and channel_name.casefold() not in seen_names:
-                seen_names.add(channel_name.casefold())
+            if channel_name and channel_key not in seen_channels:
+                seen_channels.add(channel_key)
                 channels[str(channel_index)] = {
                     "name": channel_name,
                     "channel_idx": channel_index,
+                    "is_private": is_private_mesh_channel(
+                        raw_channel_name, channel_secret
+                    ),
                 }
 
         if not channels and app_state["channels"]:
@@ -1546,7 +1568,11 @@ async def handle_new_contact(event):
     if announced_contact_adverts.get(str(public_key)) == advert_timestamp:
         return
 
-    channels = list(app_state["channels"])
+    channels = [
+        channel_index
+        for channel_index, channel in app_state["channels"].items()
+        if isinstance(channel, dict) and channel.get("is_private") is True
+    ]
     if not channels:
         return
 
@@ -2062,7 +2088,8 @@ body[data-theme="tron"].tron-overview #analyzer-view{grid-area:analyzer}
 body[data-theme="tron"].tron-overview #connection-view,body[data-theme="tron"].tron-overview #nodes-view,body[data-theme="tron"].tron-overview #channels-view,body[data-theme="tron"].tron-overview #map-view,body[data-theme="tron"].tron-overview #analyzer-view{display:flex!important;width:auto;min-width:0;min-height:0;height:auto;margin:0;padding:0;overflow:hidden}
 body[data-theme="tron"].tron-overview #connection-view .connection-layout{width:100%;min-height:0}
 body[data-theme="tron"].tron-overview #connection-view .connection-card{width:100%;min-height:0;margin:0;overflow-y:auto}
-body[data-theme="tron"].tron-overview #nodes-view .messages-layout,body[data-theme="tron"].tron-overview #channels-view .messages-layout{grid-template-columns:minmax(130px,38%) minmax(0,1fr);width:100%;height:100%;min-height:0;gap:8px}
+body[data-theme="tron"].tron-overview #nodes-view .messages-layout{grid-template-columns:minmax(260px,300px) minmax(0,1fr);width:100%;height:100%;min-height:0;gap:8px}
+body[data-theme="tron"].tron-overview #channels-view .messages-layout{grid-template-columns:minmax(130px,38%) minmax(0,1fr);width:100%;height:100%;min-height:0;gap:8px}
 body[data-theme="tron"].tron-overview #nodes-view .conversation-rail,body[data-theme="tron"].tron-overview #channels-view .conversation-rail,body[data-theme="tron"].tron-overview #nodes-view .chat-panel,body[data-theme="tron"].tron-overview #channels-view .chat-panel{min-width:0;min-height:0;height:100%;margin:0;overflow:hidden}
 body[data-theme="tron"].tron-overview #node-chat-history,body[data-theme="tron"].tron-overview #channel-chat-history{min-height:0}
 body[data-theme="tron"].tron-overview #map-view .map-layout{flex:1;min-height:0;grid-template-columns:minmax(260px,300px) minmax(0,1fr);gap:8px}
@@ -3115,8 +3142,8 @@ def validate_device_settings(current, values):
     updated.update(values)
 
     name = updated.get("name")
-    if not isinstance(name, str) or not name.strip() or len(name.encode("utf-8")) > 32:
-        raise ValueError("Device name must contain 1 to 32 UTF-8 bytes")
+    if not isinstance(name, str) or not name.strip() or len(name.strip().encode("utf-8")) > 31:
+        raise ValueError("Device name must contain 1 to 31 UTF-8 bytes")
     updated["name"] = name.strip()
 
     for key, minimum, maximum in (("adv_lat", -90, 90), ("adv_lon", -180, 180)):
@@ -3428,7 +3455,7 @@ async def device_action_handler(request):
                     count += 1
                 return web.json_response({"message": f"Reset paths for {count} contacts."})
             elif action == "refresh_contacts":
-                result = await commands.get_contacts()
+                result = await commands.get_contacts(timeout=20)
                 if result.type != EventType.ERROR:
                     app_state["contacts"] = normalize_entries(result.payload)
                     return web.json_response({"message": f"Loaded {len(app_state['contacts'])} contacts."})
