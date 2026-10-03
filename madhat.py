@@ -79,8 +79,8 @@ def load_app_config():
         "theme": "midnight",
         "connection": {"type": "bluetooth", "ble_mac": "", "serial_port": ""},
         "weather": {"city": "", "state": ""},
-        "bot": load_bot_settings(),
-        "ollama": {"schedule_enabled": False, "start_time": "07:00", "end_time": "17:00", "greet_new_users": False},
+        "bot": {**load_bot_settings(), "greet_new_users": False, "greet_channel": ""},
+        "ollama": {"schedule_enabled": False, "start_time": "07:00", "end_time": "17:00"},
         "auto_update": {"enabled": True},
     }
     try:
@@ -122,20 +122,40 @@ def load_app_config():
         response_length = saved_bot.get("response_length")
         if response_length in RESPONSE_LENGTH_PACKET_LIMITS:
             config["bot"]["response_length"] = response_length
+        if isinstance(saved_bot.get("greet_new_users"), bool):
+            config["bot"]["greet_new_users"] = saved_bot["greet_new_users"]
+        greet_channel = saved_bot.get("greet_channel")
+        if isinstance(greet_channel, str) and greet_channel.isdigit() and int(greet_channel) < MAX_CHANNELS:
+            config["bot"]["greet_channel"] = greet_channel
     saved_ollama = saved_config.get("ollama")
     if isinstance(saved_ollama, dict):
         if isinstance(saved_ollama.get("schedule_enabled"), bool):
             config["ollama"]["schedule_enabled"] = saved_ollama["schedule_enabled"]
-        if isinstance(saved_ollama.get("greet_new_users"), bool):
-            config["ollama"]["greet_new_users"] = saved_ollama["greet_new_users"]
+        if (
+            isinstance(saved_ollama.get("greet_new_users"), bool)
+            and not (
+                isinstance(saved_bot, dict)
+                and isinstance(saved_bot.get("greet_new_users"), bool)
+            )
+        ):
+            config["bot"]["greet_new_users"] = saved_ollama["greet_new_users"]
         for key in ("start_time", "end_time"):
             value = saved_ollama.get(key)
             if isinstance(value, str) and TIME_OF_DAY_PATTERN.match(value):
                 config["ollama"][key] = value
+    greeting_disabled_without_channel = (
+        config["bot"]["greet_new_users"] and not config["bot"]["greet_channel"]
+    )
+    if greeting_disabled_without_channel:
+        config["bot"]["greet_new_users"] = False
     saved_auto_update = saved_config.get("auto_update")
     if isinstance(saved_auto_update, dict) and isinstance(saved_auto_update.get("enabled"), bool):
         config["auto_update"]["enabled"] = saved_auto_update["enabled"]
-    if not {"model", "theme", "connection", "weather", "bot", "ollama", "auto_update"}.issubset(saved_config):
+    if (
+        not {"model", "theme", "connection", "weather", "bot", "ollama", "auto_update"}.issubset(saved_config)
+        or isinstance(saved_ollama, dict) and "greet_new_users" in saved_ollama
+        or greeting_disabled_without_channel
+    ):
         try:
             write_app_config(config)
         except OSError:
@@ -183,8 +203,10 @@ def validate_app_config(value):
         raise ValueError("Enter a city when specifying a state")
 
     bot = value.get("bot", app_config["bot"])
-    if not isinstance(bot, dict) or set(bot) - {"name", "personality", "response_length"}:
-        raise ValueError("Bot settings must contain only name, personality, and response_length")
+    if not isinstance(bot, dict) or set(bot) - {
+        "name", "personality", "response_length", "greet_new_users", "greet_channel",
+    }:
+        raise ValueError("Bot settings contain an unsupported option")
     validated_bot = {}
     for key, limit in (("name", 40), ("personality", 120)):
         setting = bot.get(key, app_config["bot"][key])
@@ -198,22 +220,28 @@ def validate_app_config(value):
     if response_length not in RESPONSE_LENGTH_PACKET_LIMITS:
         raise ValueError("Bot response_length must be short, medium, or long")
     validated_bot["response_length"] = response_length
+    greet_new_users = bot.get("greet_new_users", app_config["bot"]["greet_new_users"])
+    if not isinstance(greet_new_users, bool):
+        raise ValueError("Bot greet_new_users must be true or false")
+    validated_bot["greet_new_users"] = greet_new_users
+    greet_channel = bot.get("greet_channel", app_config["bot"]["greet_channel"])
+    if not isinstance(greet_channel, str) or (
+        greet_channel and (not greet_channel.isdigit() or int(greet_channel) >= MAX_CHANNELS)
+    ):
+        raise ValueError("Bot greet_channel must be a configured channel index")
+    if greet_new_users and not greet_channel:
+        raise ValueError("Send /greet on in the channel where you want greetings sent")
+    validated_bot["greet_channel"] = greet_channel
 
     ollama_schedule = value.get("ollama", app_config["ollama"])
     if not isinstance(ollama_schedule, dict) or set(ollama_schedule) - {
-        "schedule_enabled", "start_time", "end_time", "greet_new_users",
+        "schedule_enabled", "start_time", "end_time",
     }:
-        raise ValueError("Ollama settings contain an unsupported option")
+        raise ValueError("Ollama schedule must contain only schedule_enabled, start_time, and end_time")
     schedule_enabled = ollama_schedule.get("schedule_enabled", app_config["ollama"]["schedule_enabled"])
     if not isinstance(schedule_enabled, bool):
         raise ValueError("Ollama schedule_enabled must be true or false")
-    greet_new_users = ollama_schedule.get("greet_new_users", app_config["ollama"]["greet_new_users"])
-    if not isinstance(greet_new_users, bool):
-        raise ValueError("Ollama greet_new_users must be true or false")
-    ollama_values = {
-        "schedule_enabled": schedule_enabled,
-        "greet_new_users": greet_new_users,
-    }
+    ollama_values = {"schedule_enabled": schedule_enabled}
     for key in ("start_time", "end_time"):
         setting = ollama_schedule.get(key, app_config["ollama"][key])
         if not isinstance(setting, str) or not TIME_OF_DAY_PATTERN.match(setting):
@@ -1261,8 +1289,8 @@ def clear_chat_memory_reply(sender_id, prompt):
     return "Done. I've cleared our chat memory."
 
 
-def update_greeting_setting_from_message(prompt):
-    global app_config
+def update_greeting_setting_from_message(prompt, channel_id=None):
+    global app_config, bot_settings
 
     match = re.fullmatch(
         r"\s*(?:\[[^\]]+\]\s*|[^:\r\n]{1,40}:\s*)?/greet\s+(on|off)\s*",
@@ -1273,9 +1301,20 @@ def update_greeting_setting_from_message(prompt):
         return None
 
     enabled = match.group(1).lower() == "on"
+    greet_channel = app_config["bot"].get("greet_channel", "")
+    if enabled and channel_id is not None:
+        greet_channel = str(channel_id)
+        if not greet_channel.isdigit() or int(greet_channel) >= MAX_CHANNELS:
+            return "I couldn't identify that channel. Send /greet on in a configured channel."
+    if enabled and not greet_channel:
+        return "Send /greet on in the channel where you want new-user greetings sent."
     updated_config = {
         **app_config,
-        "ollama": {**app_config["ollama"], "greet_new_users": enabled},
+        "bot": {
+            **app_config["bot"],
+            "greet_new_users": enabled,
+            "greet_channel": greet_channel,
+        },
     }
     try:
         write_app_config(updated_config)
@@ -1284,8 +1323,9 @@ def update_greeting_setting_from_message(prompt):
         return "I couldn't save the greeting setting to config.json. Check the file permissions."
 
     app_config = updated_config
+    bot_settings = app_config["bot"]
     if enabled:
-        return "New-user greetings are on. I'll greet contacts in all configured channels."
+        return f"New-user greetings are on in channel {greet_channel}."
     return "New-user greetings are off."
 
 
@@ -1550,7 +1590,7 @@ async def handle_incoming_channel_message(event):
     # (e.g. "[Alice] /bot ..." or "Alice: /bot ...") before it reaches us,
     # so look for /bot anywhere after a word boundary rather than only at
     # the very start of the message.
-    reply = update_greeting_setting_from_message(message_text)
+    reply = update_greeting_setting_from_message(message_text, channel_target)
     if reply is None:
         bot_command = re.search(r"(?:^|\s)/bot(?:\s+|$)", message_text, re.IGNORECASE)
         if bot_command is None:
@@ -1601,7 +1641,7 @@ async def handle_incoming_channel_message(event):
 async def handle_new_contact(event):
     if not meshcore_instance or not app_state["is_connected"]:
         return
-    if not app_config["ollama"]["greet_new_users"]:
+    if not app_config["bot"]["greet_new_users"]:
         return
 
     contact = event.payload or {}
@@ -1612,8 +1652,8 @@ async def handle_new_contact(event):
     if announced_contact_adverts.get(str(public_key)) == advert_timestamp:
         return
 
-    channels = list(app_state["channels"])
-    if not channels:
+    channel = app_config["bot"].get("greet_channel", "")
+    if not channel:
         return
 
     hops = contact.get("out_path_len")
@@ -1627,28 +1667,23 @@ async def handle_new_contact(event):
     greeting_parts = split_reply_into_messages(greeting, prefix=prefix)
     announced_contact_adverts[str(public_key)] = advert_timestamp
     async with paced_hardware_lock():
-        first_send = True
-        for channel in channels:
-            for part in greeting_parts:
-                if not first_send:
-                    await asyncio.sleep(HARDWARE_SEND_INTERVAL)
-                first_send = False
-                try:
-                    result, pending_delivery, hops = await send_to_target_with_pending_confirmation(
-                        channel, "channel", part
-                    )
-                    if result.type == EventType.ERROR:
-                        log_to_dash(f"Channel {channel} peer greeting rejected: {result.payload}")
-                        break
-                    sent_message = add_chat_message(
-                        "channel", channel, "outgoing", part
-                    )
-                    update_chat_message_status(sent_message, "unconfirmed")
-                    schedule_delivery_status_update(sent_message, pending_delivery, hops)
-                except Exception as error:
-                    log_to_dash(f"Channel {channel} peer greeting failed: {error}")
-                    break
-    log_to_dash(f"Announced new peer {display_name(public_key, contact)} in {len(channels)} channel(s).")
+        for part_number, part in enumerate(greeting_parts, start=1):
+            if part_number > 1:
+                await asyncio.sleep(HARDWARE_SEND_INTERVAL)
+            try:
+                result, pending_delivery, hops = await send_to_target_with_pending_confirmation(
+                    channel, "channel", part
+                )
+                if result.type == EventType.ERROR:
+                    log_to_dash(f"Channel {channel} peer greeting rejected: {result.payload}")
+                    return
+                sent_message = add_chat_message("channel", channel, "outgoing", part)
+                update_chat_message_status(sent_message, "unconfirmed")
+                schedule_delivery_status_update(sent_message, pending_delivery, hops)
+            except Exception as error:
+                log_to_dash(f"Channel {channel} peer greeting failed: {error}")
+                return
+    log_to_dash(f"Announced new peer {display_name(public_key, contact)} in channel {channel}.")
 
 
 async def disconnect_hardware():
@@ -2133,17 +2168,19 @@ body[data-theme="tron"].tron-overview #channels-view .messages-layout{grid-templ
 body[data-theme="tron"].tron-overview #nodes-view .conversation-rail,body[data-theme="tron"].tron-overview #channels-view .conversation-rail,body[data-theme="tron"].tron-overview #nodes-view .chat-panel,body[data-theme="tron"].tron-overview #channels-view .chat-panel{min-width:0;min-height:0;height:100%;margin:0;overflow:hidden}
 body[data-theme="tron"].tron-overview #node-chat-history,body[data-theme="tron"].tron-overview #channel-chat-history{min-height:0}
 body[data-theme="tron"].tron-overview #map-view .map-layout{flex:1;min-height:0;grid-template-columns:minmax(260px,360px) minmax(0,1fr);gap:8px}
-body[data-theme="tron"].tron-overview #map-view .map-rail{min-width:0;min-height:0;overflow:hidden;padding:12px}
+body[data-theme="tron"].tron-overview #map-view .map-rail{min-width:0;min-height:0;overflow:visible;padding:12px}
 body[data-theme="tron"].tron-overview #map-view .map-rail-summary{display:none}
 body[data-theme="tron"].tron-overview #map-view .map-peer-filters{gap:5px;margin-bottom:6px}
 body[data-theme="tron"].tron-overview #map-view .map-peer-filters label{font-size:9px}
 body[data-theme="tron"].tron-overview #map-view .map-peer-filters select,body[data-theme="tron"].tron-overview #map-view .map-peer-filters input{min-height:28px;padding:4px 16px 4px 6px;font-size:9px}
-body[data-theme="tron"].tron-overview #map-view #map-node-list{width:100%;flex:1;min-height:0;overflow:auto;border:0;border-radius:0;background:transparent;box-sizing:border-box}
+body[data-theme="tron"].tron-overview #map-view #map-node-list{width:100%;flex:none;min-height:0;overflow:visible;border:0;border-radius:0;background:transparent;box-sizing:border-box}
 body[data-theme="tron"].tron-overview #map-view #map-node-list>*{width:100%;box-sizing:border-box}
-body[data-theme="tron"].tron-overview #map-view #map-node-list>.map-empty{width:100%;min-width:0;max-width:none;box-sizing:border-box}
+body[data-theme="tron"].tron-overview #map-view #map-node-list:has(>.map-empty){flex:none;width:100%;height:auto;max-height:none;overflow:visible;padding:0}
+body[data-theme="tron"].tron-overview #map-view #map-node-list>.map-empty{width:310px;height:76px;min-width:310px;max-width:none;box-sizing:border-box;margin:0;justify-self:start}
 body[data-theme="tron"].tron-overview #map-view .map-peer-target{min-height:32px;padding:5px 7px;font-size:10px}
 body[data-theme="tron"].tron-overview #map-view .map-surface{min-height:0}
 body[data-theme="tron"] #map-view #map-node-list{display:grid;grid-template-columns:minmax(0,1fr);align-content:start;gap:6px;padding:6px;box-sizing:border-box}
+body[data-theme="tron"] #map-view #map-node-list:has(>.map-empty){height:auto;max-height:none;overflow:visible;padding:0}
 body[data-theme="tron"] #map-view .map-node-row{padding:0;border:0;gap:0}
 body[data-theme="tron"] #map-view .map-node-row-main{width:100%;gap:0;align-items:stretch;border:1px solid var(--border);border-radius:2px;background:#0b171d;box-sizing:border-box}
 body[data-theme="tron"] #map-view .map-node-row-main:hover{border-color:var(--accent);background:var(--accent-dim)}
@@ -2267,7 +2304,8 @@ async function loadLocalWeather(){let temperature=document.getElementById('weath
 async function loadAppConfig(){try{let response=await fetch('/api/config'),data=await response.json();if(!response.ok)throw new Error(data.error||'Settings could not be loaded');appConfig=data;syncConfigControls();if(new URLSearchParams(window.location.search).get('preview')==='tron')applyTheme('tron',false);loadLocalWeather();maybeCheckForUpdates()}catch(error){let statusMessage=document.getElementById('preferences-status');statusMessage.dataset.state='error';statusMessage.textContent=error.message}}
 async function saveAppConfig(config,statusId='preferences-status'){let statusMessage=document.getElementById(statusId);statusMessage.dataset.state='';statusMessage.textContent='Saving config.json...';try{let response=await fetch('/api/config',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)}),data=await response.json();if(!response.ok)throw new Error(data.error||'Settings could not be saved');appConfig=data;syncConfigControls();if(statusId==='config-status'){document.getElementById('config-json-editor').value=JSON.stringify(appConfig,null,2);configEditorLoaded=true}statusMessage.textContent='Saved to config.json.';statusMessage.dataset.state='success'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
 async function savePreference(key,value){await saveAppConfig({...appConfig,[key]:value})}
-async function saveBotSettings(event){event.preventDefault();let name=document.getElementById('bot-name').value.trim(),personality=document.getElementById('bot-personality').value.trim(),responseLength=document.getElementById('bot-response-length').value,statusMessage=document.getElementById('bot-settings-status');if(!name||!personality){statusMessage.textContent='Enter a bot name and personality.';statusMessage.dataset.state='error';return}await saveAppConfig({...appConfig,bot:{name,personality,response_length:responseLength}},'bot-settings-status')}
+async function saveBotSettings(event){event.preventDefault();let name=document.getElementById('bot-name').value.trim(),personality=document.getElementById('bot-personality').value.trim(),responseLength=document.getElementById('bot-response-length').value,greetNewUsers=document.getElementById('bot-greet-new-users').checked,statusMessage=document.getElementById('bot-settings-status');if(!name||!personality){statusMessage.textContent='Enter a bot name and personality.';statusMessage.dataset.state='error';return}await saveAppConfig({...appConfig,bot:{name,personality,response_length:responseLength,greet_new_users:greetNewUsers}},'bot-settings-status')}
+async function saveGreetingSetting(enabled){let checkbox=document.getElementById('bot-greet-new-users'),statusMessage=document.getElementById('bot-settings-status');if(enabled&&!appConfig.bot.greet_channel){checkbox.checked=false;statusMessage.textContent='Send /greet on in the channel where you want greetings sent.';statusMessage.dataset.state='error';return}await saveAppConfig({...appConfig,bot:{...appConfig.bot,greet_new_users:enabled}},'bot-settings-status')}
 async function saveWeatherLocation(event){event.preventDefault();let city=document.getElementById('weather-city').value.trim(),state=document.getElementById('weather-state').value.trim();if(!city){let statusMessage=document.getElementById('weather-settings-status');statusMessage.textContent='Enter a city.';statusMessage.dataset.state='error';return}await saveAppConfig({...appConfig,weather:{city,state}},'weather-settings-status');if(document.getElementById('weather-settings-status').dataset.state==='success')loadLocalWeather()}
 async function saveOllamaSettings(event){event.preventDefault();let scheduleEnabled=document.getElementById('ollama-schedule-enabled').checked,startTime=document.getElementById('ollama-schedule-start').value,endTime=document.getElementById('ollama-schedule-end').value,statusMessage=document.getElementById('ollama-settings-status');if(scheduleEnabled&&(!startTime||!endTime)){statusMessage.textContent='Set both a start and end time.';statusMessage.dataset.state='error';return}await saveAppConfig({...appConfig,ollama:{schedule_enabled:scheduleEnabled,start_time:startTime||'07:00',end_time:endTime||'17:00'}},'ollama-settings-status')}
 async function loadConfigEditor(){let statusMessage=document.getElementById('config-status');statusMessage.dataset.state='';statusMessage.textContent='Loading config.json...';try{let response=await fetch('/api/config'),data=await response.json();if(!response.ok)throw new Error(data.error||'config.json could not be loaded');appConfig=data;syncConfigControls();document.getElementById('config-json-editor').value=JSON.stringify(appConfig,null,2);configEditorLoaded=true;statusMessage.textContent='Loaded config.json.'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
@@ -2460,7 +2498,6 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 </div>
 <form class="settings-grid" style="margin-top:16px" onsubmit="saveOllamaSettings(event)">
 <div class="settings-item"><label><input type="checkbox" id="ollama-schedule-enabled"> Schedule on/off automatically</label><p class="settings-description">Turns Ollama on at the start time and off at the end time every day, to lower power use.</p></div>
-<div class="settings-item"><label><input type="checkbox" id="ollama-greet-new-users" onchange="saveAppConfig({...appConfig,ollama:{...appConfig.ollama,greet_new_users:this.checked}},'ollama-settings-status')"> Greet new users</label><p class="settings-description">When enabled, greet newly discovered contacts in all configured channels. Off by default.</p></div>
 <div class="settings-item"><label for="ollama-schedule-start">Turn on at</label><input type="time" id="ollama-schedule-start" value="07:00"></div>
 <div class="settings-item"><label for="ollama-schedule-end">Turn off at</label><input type="time" id="ollama-schedule-end" value="17:00"></div>
 <div class="settings-actions"><button type="submit">Save schedule</button><p id="ollama-settings-status" class="preferences-status" aria-live="polite"></p></div>
@@ -2470,6 +2507,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <form class="settings-grid" onsubmit="saveBotSettings(event)">
 <div class="settings-item"><label for="bot-name">Bot name</label><input id="bot-name" name="name" maxlength="40" required><p class="settings-description">Shown as the reply prefix in channel messages.</p></div>
 <div class="settings-item"><label for="bot-personality">Personality</label><input id="bot-personality" name="personality" maxlength="120" required><p class="settings-description">Tone and phrasing style used for replies, e.g. "helpful, friendly, and concise".</p></div>
+<div class="settings-item"><label><input type="checkbox" id="bot-greet-new-users" onchange="saveGreetingSetting(this.checked)"> Greet new users</label><p class="settings-description">Send /greet on in the channel where you want greetings sent. Off by default.</p></div>
 <div class="settings-item"><label for="bot-response-length">Response length</label><select id="bot-response-length" name="response_length"><option value="short">Short (up to 3 packets)</option><option value="medium">Medium (up to 6 packets)</option><option value="long">Long (up to 12 packets)</option></select><p class="settings-description">Caps how many mesh-radio packets a direct message or channel reply can use, so long answers don't flood the network.</p></div>
 <div class="settings-actions"><button type="submit">Save bot settings</button><p id="bot-settings-status" class="preferences-status" aria-live="polite"></p></div>
 </form>
@@ -2545,7 +2583,7 @@ function saveDefaultRegion(){let settings=readLocalRegions();settings.defaultReg
 function addLocalRegion(){let input=document.getElementById('new-region-name'),region=input.value.trim().toLowerCase(),status=document.getElementById('region-status');if(!/^[a-z0-9-]{1,30}$/.test(region)){status.textContent='Use 1-30 lowercase letters, numbers, or hyphens.';status.dataset.state='error';return}let settings=readLocalRegions();if(settings.regions.includes(region)){status.textContent='That region is already in the list.';status.dataset.state='error';return}settings.regions.push(region);settings.regions.sort();writeLocalRegions(settings);input.value='';status.textContent='Region added to this browser.';status.dataset.state='success';renderLocalRegions()}
 function removeLocalRegion(region){let settings=readLocalRegions();settings.regions=settings.regions.filter(item=>item!==region);if(settings.defaultRegion===region)settings.defaultRegion='';writeLocalRegions(settings);renderLocalRegions()}
 const syncConfigControlsWithGreeting=syncConfigControls;
-syncConfigControls=function(){syncConfigControlsWithGreeting();let greetingToggle=document.getElementById('ollama-greet-new-users');if(greetingToggle)greetingToggle.checked=Boolean(appConfig.ollama.greet_new_users)}
+syncConfigControls=function(){syncConfigControlsWithGreeting();let greetingToggle=document.getElementById('bot-greet-new-users');if(greetingToggle)greetingToggle.checked=Boolean(appConfig.bot.greet_new_users)}
 const loadDeviceSettingsWithLimits=loadDeviceSettings;
 loadDeviceSettings=async function(){await loadDeviceSettingsWithLimits();if(!loadedDeviceSettings)return;let maxPower=String(loadedDeviceSettings.max_tx_power??30),txPower=document.getElementById('custom-tx-power');txPower.max=maxPower;let pathHash=document.getElementById('path-hash-mode'),pathHashSupported=loadedDeviceSettings.device_info?.path_hash_mode!==undefined&&loadedDeviceSettings.device_info?.path_hash_mode!==null;pathHash.disabled=!pathHashSupported;pathHash.title=pathHashSupported?'':'Requires companion firmware v1.14 or newer'}
 const saveDeviceSettingsWithLimits=saveDeviceSettings;
