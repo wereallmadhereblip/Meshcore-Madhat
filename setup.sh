@@ -100,7 +100,7 @@ Version=1.0
 Type=Application
 Name=MeshCore AI Bot Dashboard
 Comment=Launch the MeshCore AI Bot Dashboard
-Exec=/bin/bash -lc 'cd "$HOME/Meshcore-Ollama-bot" && .venv/bin/python meshcore_ai_bot.py'
+Exec=/bin/bash -lc 'cd "$HOME/Meshcore-Ollama-bot" && .venv/bin/python madhat.py'
 Path=$HOME/Meshcore-Ollama-bot
 Terminal=true
 Icon=$HOME/Meshcore-Ollama-bot/dashboard-logo.png
@@ -125,4 +125,4 @@ fi
 
 echo "Starting the MeshCore AI Bot Dashboard..."
 cd "$APP_DIR"
-exec .venv/bin/python meshcore_ai_bot.py
+exec .venv/bin/python madhat.py

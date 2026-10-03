@@ -18,7 +18,7 @@ From the project directory:
 
 ```bash
 cd Meshcore-Ollama-bot
-.venv/bin/python meshcore_ai_bot.py
+.venv/bin/python madhat.py
 ```
 
 You can also launch the app from the desktop shortcut created during setup.
