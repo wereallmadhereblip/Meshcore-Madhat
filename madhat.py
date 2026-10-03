@@ -2173,9 +2173,9 @@ body[data-theme="tron"].tron-overview #map-view .map-rail-summary{display:none}
 body[data-theme="tron"].tron-overview #map-view .map-peer-filters{gap:5px;margin-bottom:6px}
 body[data-theme="tron"].tron-overview #map-view .map-peer-filters label{font-size:9px}
 body[data-theme="tron"].tron-overview #map-view .map-peer-filters select,body[data-theme="tron"].tron-overview #map-view .map-peer-filters input{min-height:28px;padding:4px 16px 4px 6px;font-size:9px}
-body[data-theme="tron"].tron-overview #map-view #map-node-list{width:100%;flex:none;min-height:0;overflow:visible;border:0;border-radius:0;background:transparent;box-sizing:border-box}
+body[data-theme="tron"].tron-overview #map-view #map-node-list{width:310px;min-width:310px;flex:none;min-height:0;overflow:visible;border:0;border-radius:0;background:transparent;box-sizing:border-box}
 body[data-theme="tron"].tron-overview #map-view #map-node-list>*{width:100%;box-sizing:border-box}
-body[data-theme="tron"].tron-overview #map-view #map-node-list:has(>.map-empty){flex:none;width:100%;height:auto;max-height:none;overflow:visible;padding:0}
+body[data-theme="tron"].tron-overview #map-view #map-node-list:has(>.map-empty){flex:none;width:310px;min-width:310px;height:auto;max-height:none;overflow:visible;padding:0}
 body[data-theme="tron"].tron-overview #map-view #map-node-list>.map-empty{width:310px;height:76px;min-width:310px;max-width:none;box-sizing:border-box;margin:0;justify-self:start}
 body[data-theme="tron"].tron-overview #map-view .map-peer-target{min-height:32px;padding:5px 7px;font-size:10px}
 body[data-theme="tron"].tron-overview #map-view .map-surface{min-height:0}
@@ -3667,14 +3667,28 @@ async def transmit_handler(request):
         return web.json_response({"error": str(error)}, status=500)
 
 
+async def auto_connect_hardware():
+    connection = app_config["connection"]
+    connection_type = connection["type"]
+    target = connection["ble_mac"] if connection_type == "bluetooth" else connection["serial_port"]
+    if not target:
+        return
+    log_to_dash("Reconnecting to the previously selected MeshCore device...")
+    await connect_hardware()
+
+
 async def on_startup(app):
     app["telemetry_task"] = asyncio.create_task(telemetry_loop())
     app["ollama_task"] = asyncio.create_task(update_available_models())
     app["ollama_schedule_task"] = asyncio.create_task(ollama_schedule_loop())
+    app["connection_task"] = asyncio.create_task(auto_connect_hardware())
 
 
 async def on_cleanup(app):
-    for task in (app["telemetry_task"], app["ollama_task"], app["ollama_schedule_task"]):
+    for task in (
+        app["connection_task"], app["telemetry_task"], app["ollama_task"],
+        app["ollama_schedule_task"],
+    ):
         task.cancel()
         try:
             await task
