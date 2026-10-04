@@ -1321,10 +1321,10 @@ async def fetch_weather_response(prompt, sender_id=None):
 
 
 def sync_generate(messages, model, max_chars=None):
-    options = {"temperature": 0.2, "num_ctx": 2048}
+    options = {"temperature": 0.2}
     if max_chars:
-        # Replies are truncated to max_chars anyway; stop generating past that (~3 chars/token).
-        options["num_predict"] = max(48, max_chars // 3 + 16)
+        # Keep generation within Ollama's former default while avoiding excess output.
+        options["num_predict"] = min(128, max(48, max_chars // 6 + 16))
     result = ollama.chat(
         model=model,
         messages=messages,
@@ -1387,7 +1387,7 @@ def update_greeting_setting_from_message(prompt, channel_id=None):
 
 
 HELP_TEXT = (
-    "Commands: /help, /help settings, /settings (show), /settings <name> <value>, /restart, /update, /syswifi status|on|off, /startota, /reboot, /sysreboot, /tightvnc on|off|restart, /power, "
+    "Commands: /help, /help settings, /settings (show), /settings <name> <value>, /restart, /update, /syswifi status|on|off, /startota, /reboot, /sysreboot, /tightvnc on|off|restart, /power, /fastfetch, "
     "wx <zip>, wx local, "
     "/greet on|off (in a channel), /bot <question> (in a channel). "
     "/settings works in direct messages from admins only."
@@ -1615,8 +1615,27 @@ def system_power_summary():
     return ", ".join(parts)
 
 
+def system_fastfetch_info():
+    result = subprocess.run(
+        ["fastfetch", "--pipe"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    if result.returncode != 0:
+        error = result.stderr.strip() or f"fastfetch exited with status {result.returncode}"
+        raise RuntimeError(error)
+
+    output = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", result.stdout)
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    if not lines:
+        raise RuntimeError("fastfetch returned no system information")
+    return limit_ai_reply(" | ".join(lines), MAX_AI_REPLY_PACKETS * 75)
+
+
 async def handle_slash_command(sender_id, prompt, allow_settings):
-    match = re.fullmatch(r"\s*/(help|settings|restart|update|syswifi|startota|reboot|sysreboot|tightvnc|power)\b\s*(.*)", prompt, re.IGNORECASE | re.DOTALL)
+    match = re.fullmatch(r"\s*/(help|settings|restart|update|syswifi|startota|reboot|sysreboot|tightvnc|power|fastfetch)\b\s*(.*)", prompt, re.IGNORECASE | re.DOTALL)
     if match is None:
         return None
     command, args = match.group(1).lower(), match.group(2).strip()
@@ -1637,6 +1656,20 @@ async def handle_slash_command(sender_id, prompt, allow_settings):
             log_to_dash(f"Rejected /power from non-admin {sender_id}")
             return f"Not allowed. Add \"{str(sender_id)[:12]}\" to bot.admins in config.json."
         return SingleMessage(await asyncio.to_thread(system_power_summary))
+    if command == "fastfetch":
+        if not is_settings_admin(sender_id):
+            log_to_dash(f"Rejected /fastfetch from non-admin {sender_id}")
+            return f"Not allowed. Add \"{str(sender_id)[:12]}\" to bot.admins in config.json."
+        try:
+            info = await asyncio.to_thread(system_fastfetch_info)
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+            log_to_dash(f"/fastfetch failed: {error}")
+            if isinstance(error, FileNotFoundError):
+                return "Fastfetch is not installed on this computer."
+            if isinstance(error, subprocess.TimeoutExpired):
+                return "Fastfetch timed out while collecting system information."
+            return f"Fastfetch failed: {error}"[:180]
+        return info
     if command == "reboot":
         if not is_settings_admin(sender_id):
             log_to_dash(f"Rejected /reboot from non-admin {sender_id}")
