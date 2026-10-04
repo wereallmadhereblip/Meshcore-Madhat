@@ -39,9 +39,21 @@ DEFAULT_BOT_PERSONALITY = "helpful, friendly, and concise"
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
 BOT_SETTINGS_PATH = CONFIG_DIR / "meshcore-ollama-bot" / "bot_settings.json"
 CHAT_HISTORY_PATH = CONFIG_DIR / "meshcore-ollama-bot" / "chat_history.json"
+PREFERENCES_PATH = CONFIG_DIR / "meshcore-ollama-bot" / "preferences.json"
 CONFIG_FILE_PATH = Path(__file__).resolve().with_name("config.json")
 AVAILABLE_THEMES = {"midnight", "light", "ocean", "amber", "linux", "macos", "cyberpunk", "tron"}
 TIME_OF_DAY_PATTERN = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+
+def should_auto_open_browser():
+    default = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    try:
+        preferences = json.loads(PREFERENCES_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return default
+    if isinstance(preferences, dict) and isinstance(preferences.get("auto_open_browser"), bool):
+        return preferences["auto_open_browser"]
+    return default
 
 
 def clean_bot_setting(value, limit):
@@ -3733,7 +3745,11 @@ def create_app():
 
 
 if __name__ == "__main__":
-    if not os.environ.pop("MESHC_OPS_RESTARTING", None):
+    if (
+        not os.environ.pop("MESHC_OPS_RESTARTING", None)
+        and should_auto_open_browser()
+        and (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    ):
         threading.Timer(
             1.0,
             lambda: webbrowser.open(

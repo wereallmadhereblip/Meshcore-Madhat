@@ -2,28 +2,55 @@
 
 This project includes a local dashboard for a MeshCore device and an Ollama-powered mesh assistant. It can connect over Bluetooth or a serial port.
 
-## Kali Linux setup
+## Orange Pi Zero 4 / Debian 13 setup
 
-Use this one-liner to remove any previous clone, download the project, and run the setup script:
+These steps target Debian GNU/Linux 13 (Trixie) arm64. Check that the board is running a 64-bit OS:
 
 ```bash
-rm -rf ~/Meshcore-Ollama-bot && git clone https://github.com/wereallmadhereblip/Meshcore-Ollama-bot.git ~/Meshcore-Ollama-bot && cd ~/Meshcore-Ollama-bot && bash setup.sh
+uname -m
+dpkg --print-architecture
 ```
 
-The installation also creates a desktop launcher named `MeshCore AI Bot Dashboard` on your desktop so you can start the app with a single click.
+Expected results are `aarch64` and `arm64`. Install and start the app:
+
+```bash
+sudo apt update
+sudo apt install -y git
+git clone https://github.com/wereallmadhereblip/Meshcore-Ollama-bot.git ~/Meshcore-Ollama-bot
+cd ~/Meshcore-Ollama-bot
+bash setup.sh
+```
+
+The setup script installs the Python and Bluetooth/serial dependencies, installs Ollama, and prompts you to choose `llama3.2:1b` or `qwen2.5:0.5b`. It preselects the smaller model on arm64 to reduce memory use. For unattended installs, set `OLLAMA_MODEL` to one of those model names before running `bash setup.sh`. A board with at least 2 GB RAM is recommended. Model inference runs on the CPU and may be slow.
+
+Setup also asks whether to open the dashboard automatically in a browser on the Orange Pi. This preference is saved under `~/.config/meshcore-ollama-bot/preferences.json`. Automatic opening requires a graphical desktop; a headless board can still be opened from a browser on the LAN.
+
+The script starts the dashboard in the foreground. On a desktop session it also creates a desktop launcher. For a headless board, open `http://<board-ip>:8080` from a browser on the same network; find the board address with:
+
+```bash
+hostname -I
+```
+
+The dashboard listens on the network so another device can access it. Keep it on a trusted LAN and do not expose port `8080` to the public internet.
+
+If setup added your account to the `dialout` group, log out and back in before using serial connections.
+
+## Other Linux distributions
+
+The same `bash setup.sh` installer can also be used on Kali Linux and other Debian-based desktop systems. A desktop launcher is created when a graphical session is detected.
 
 ## Run the dashboard
 
-From the project directory:
+From the project directory, start the dashboard with:
 
 ```bash
 cd Meshcore-Ollama-bot
 .venv/bin/python madhat.py
 ```
 
-You can also launch the app from the desktop shortcut created during setup.
+On desktop installations, you can also launch the app from the shortcut created during setup.
 
-The script starts the web server on port `8080` and attempts to open the dashboard automatically at http://127.0.0.1:8080.
+The script starts the web server on port `8080`. It opens the dashboard automatically when a graphical session is available; otherwise, open http://127.0.0.1:8080 locally or use the board's IP address from another device on the LAN.
 
 ## Customize the bot
 
