@@ -126,6 +126,11 @@ def load_app_config():
             value = saved_connection.get(key)
             if isinstance(value, str):
                 config["connection"][key] = value.strip()
+    # Serial on the default port unless the user chose a device.
+    if config["connection"]["type"] == "bluetooth" and not config["connection"]["ble_mac"]:
+        config["connection"]["type"] = "serial"
+    if config["connection"]["type"] == "serial" and not config["connection"]["serial_port"]:
+        config["connection"]["serial_port"] = DEFAULT_SERIAL_PORT
     saved_weather = saved_config.get("weather")
     if isinstance(saved_weather, dict):
         for key in ("city", "state"):
@@ -1394,7 +1399,7 @@ SETTINGS_HELP_TEXT = (
     "/settings names - App: name, personality, length (short|medium|long), model, "
     "theme, autoupdate on|off, city, state, schedule on|off, start HH:MM, end HH:MM. "
     "Device: devname, tx, freq, bw, sf, cr, repeat on|off, lat, lon, gps on|off, "
-    "advert flood|zero, synctime, reboot confirm."
+    "advert flood|zero, synctime, reboot confirm. System: startup on|off (start at boot)."
 )
 ON_VALUES = {"on", "true", "yes", "1"}
 OFF_VALUES = {"off", "false", "no", "0"}
@@ -1507,6 +1512,11 @@ async def handle_settings_command(sender_id, args):
             await run_device_handler(update_device_settings_handler, {"values": device_values[key]()})
             log_to_dash(f"Device setting changed by {sender_id}: {key}")
             return f"Device {key} updated."
+        if key == "startup":
+            enabled = parse_on_off(value)
+            await asyncio.to_thread(set_autostart, enabled)
+            log_to_dash(f"Start at boot {'enabled' if enabled else 'disabled'} by {sender_id}")
+            return f"Start at boot {'enabled' if enabled else 'disabled'}."
         if key == "advert":
             action = "advert_flood" if value.lower() == "flood" else "advert_zero_hop"
             await run_device_handler(device_action_handler, {"action": action})
@@ -1984,21 +1994,84 @@ def run_systemctl_user(*args):
     )
 
 
+SYSTEM_UNIT_PATH = Path("/etc/systemd/system") / AUTOSTART_UNIT_NAME
+
+
+def run_privileged(*args, input_text=None):
+    """Runs a command as root, using passwordless sudo when not already root."""
+    command = list(args) if os.geteuid() == 0 else ["sudo", "-n", *args]
+    return subprocess.run(
+        command, input=input_text, capture_output=True, text=True, timeout=30, check=False,
+    )
+
+
+def can_use_system_service():
+    if not Path("/run/systemd/system").is_dir():
+        return False
+    try:
+        return os.geteuid() == 0 or run_privileged("true").returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def autostart_enabled():
     try:
-        return run_systemctl_user("is-enabled", AUTOSTART_UNIT_NAME).stdout.strip() == "enabled"
+        for command in (["systemctl"], ["systemctl", "--user"]):
+            result = subprocess.run(
+                [*command, "is-enabled", AUTOSTART_UNIT_NAME],
+                capture_output=True, text=True, timeout=20, check=False,
+            )
+            if result.stdout.strip() == "enabled":
+                return True
+        return False
     except (OSError, subprocess.SubprocessError):
         return False
 
 
 def set_autostart(enabled):
-    """Enable/disable launching the dashboard at boot via a systemd user service."""
+    """Enable/disable launching the dashboard at boot (system service, else user service)."""
     if shutil.which("systemctl") is None:
         raise RuntimeError("systemd is not available on this system")
+    app_path = Path(__file__).resolve()
+    venv_python = app_path.parent / ".venv" / "bin" / "python"
+    python_path = venv_python if venv_python.exists() else Path(sys.executable)
+    user = getpass.getuser()
+
+    if can_use_system_service():
+        unit = None
+        if enabled:
+            unit = (
+                "[Unit]\n"
+                "Description=MeshCore AI Bot Dashboard\n"
+                "After=network-online.target ollama.service\n"
+                "Wants=network-online.target\n\n"
+                "[Service]\n"
+                f"User={user}\n"
+                "SupplementaryGroups=dialout\n"
+                f"WorkingDirectory={app_path.parent}\n"
+                "Environment=MESHC_OPS_RESTARTING=1\n"
+                f"ExecStart={python_path} {app_path}\n"
+                "Restart=always\n"
+                "RestartSec=5\n\n"
+                "[Install]\n"
+                "WantedBy=multi-user.target\n"
+            )
+            steps = [
+                ("tee", str(SYSTEM_UNIT_PATH)),
+                ("systemctl", "daemon-reload"),
+                ("systemctl", "enable", AUTOSTART_UNIT_NAME),
+            ]
+        else:
+            steps = [("systemctl", "disable", AUTOSTART_UNIT_NAME)]
+        for step in steps:
+            result = run_privileged(*step, input_text=unit if step[0] == "tee" else None)
+            if result.returncode != 0:
+                raise RuntimeError(result.stderr.strip() or f"{step[0]} failed")
+        if not enabled:
+            run_systemctl_user("disable", AUTOSTART_UNIT_NAME)
+        return
+
     if enabled:
-        app_path = Path(__file__).resolve()
-        venv_python = app_path.parent / ".venv" / "bin" / "python"
-        python_path = venv_python if venv_python.exists() else Path(sys.executable)
         AUTOSTART_UNIT_PATH.parent.mkdir(parents=True, exist_ok=True)
         AUTOSTART_UNIT_PATH.write_text(
             "[Unit]\n"
