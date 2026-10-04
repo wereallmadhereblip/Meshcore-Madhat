@@ -1320,11 +1320,16 @@ async def fetch_weather_response(prompt, sender_id=None):
         return "I couldn't retrieve live weather right now, so I don't want to guess. Please try again shortly."
 
 
-def sync_generate(messages, model):
+def sync_generate(messages, model, max_chars=None):
+    options = {"temperature": 0.2, "num_ctx": 2048}
+    if max_chars:
+        # Replies are truncated to max_chars anyway; stop generating past that (~3 chars/token).
+        options["num_predict"] = max(48, max_chars // 3 + 16)
     result = ollama.chat(
         model=model,
         messages=messages,
-        options={"temperature": 0.2},
+        options=options,
+        keep_alive="30m",
     )
     return result["message"]["content"]
 
@@ -1814,6 +1819,7 @@ async def generate_ai_response(sender_id, prompt, allow_settings_update=True):
             sync_generate,
             [{"role": "system", "content": system}, *history],
             app_state["selected_model"],
+            reply_limit,
         )
         reply = limit_ai_reply(reply.strip(), reply_limit)
         history.append({"role": "assistant", "content": reply})
