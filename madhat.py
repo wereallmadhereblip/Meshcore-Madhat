@@ -1705,7 +1705,7 @@ async def handle_slash_command(sender_id, prompt, allow_settings):
             return "No response from the radio. It may already be in OTA mode: join Wi-Fi MeshCore-OTA and open http://192.168.4.1/update"
         if result.type == EventType.ERROR:
             if "UNSUPPORTED_CMD" in str(result.payload).upper():
-                return "This radio's firmware rejected the CLI command used for OTA (unsupported command). Check the firmware build and that remote CLI is enabled."
+                return "This radio runs Companion firmware, which has no 'start ota' command (it exists only on Repeater/Room Server firmware). Update it with the MeshCore flasher or the app's firmware update instead."
             return f"Could not start OTA: {result.payload}"[:120]
         payload = result.payload
         radio_text = str(payload.get("text", "") if isinstance(payload, dict) else payload).strip()
