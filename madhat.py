@@ -1374,7 +1374,7 @@ def update_greeting_setting_from_message(prompt, channel_id=None):
 
 
 HELP_TEXT = (
-    "Commands: /help, /help settings, /settings (show), /settings <name> <value>, /restart, "
+    "Commands: /help, /help settings, /settings (show), /settings <name> <value>, /restart, /update, /syswifi status|on|off, /startota, /reboot, "
     "wx <zip>, wx local, "
     "/greet on|off (in a channel), /bot <question> (in a channel). "
     "/settings works in direct messages from admins only."
@@ -1386,12 +1386,18 @@ SETTINGS_HELP_TEXT = (
     "advert flood|zero, synctime, reboot confirm. System: startup on|off (start at boot)."
 )
 ON_VALUES = {"on", "true", "yes", "1"}
+OTA_INSTRUCTIONS = (
+    "OTA started. 1. Connect to OTA Network: join Wi-Fi MeshCore-OTA. "
+    "2. Upload the Firmware: go to http://192.168.4.1/update (or the IP shown in the CLI), "
+    "upload the .bin file and wait for the update to finish."
+)
 OFF_VALUES = {"off", "false", "no", "0"}
 
 
 class InternalRequest:
-    def __init__(self, payload):
+    def __init__(self, payload, restart_delay=0.3):
         self._payload = payload
+        self.restart_delay = restart_delay
 
     async def json(self):
         return self._payload
@@ -1523,8 +1529,40 @@ async def handle_settings_command(sender_id, args):
     return "Unknown setting. See /help settings"
 
 
+def run_wifi_command(action):
+    commands = []
+    if shutil.which("nmcli"):
+        commands.append(["nmcli", "radio", "wifi", action] if action != "status" else ["nmcli", "radio", "wifi"])
+    if shutil.which("rfkill"):
+        commands.append({
+            "on": ["rfkill", "unblock", "wifi"],
+            "off": ["rfkill", "block", "wifi"],
+            "status": ["rfkill", "list", "wifi"],
+        }[action])
+    if not commands:
+        raise RuntimeError("nmcli and rfkill are not installed")
+    last_error = ""
+    for command in commands:
+        for prefix in ([], ["sudo", "-n"]):
+            if prefix and os.geteuid() == 0:
+                continue
+            result = subprocess.run(
+                [*prefix, *command], capture_output=True, text=True, timeout=20, check=False,
+            )
+            if result.returncode == 0:
+                return command[0], result.stdout
+            last_error = result.stderr.strip() or result.stdout.strip()
+    raise RuntimeError(last_error or "Wi-Fi command failed")
+
+
+def wifi_status_text(tool, output):
+    if tool == "nmcli":
+        return output.strip().lower() == "enabled"
+    return "soft blocked: yes" not in output.lower() and "hard blocked: yes" not in output.lower()
+
+
 async def handle_slash_command(sender_id, prompt, allow_settings):
-    match = re.fullmatch(r"\s*/(help|settings|restart)\b\s*(.*)", prompt, re.IGNORECASE | re.DOTALL)
+    match = re.fullmatch(r"\s*/(help|settings|restart|update|syswifi|startota|reboot)\b\s*(.*)", prompt, re.IGNORECASE | re.DOTALL)
     if match is None:
         return None
     command, args = match.group(1).lower(), match.group(2).strip()
@@ -1540,6 +1578,74 @@ async def handle_slash_command(sender_id, prompt, allow_settings):
         # Delay lets the reply go out before the process is replaced.
         schedule_restart(delay=10)
         return "Restarting the app now. Back in about a minute."
+    if command == "reboot":
+        if not is_settings_admin(sender_id):
+            log_to_dash(f"Rejected /reboot from non-admin {sender_id}")
+            return f"Not allowed. Add \"{str(sender_id)[:12]}\" to bot.admins in config.json."
+        if not meshcore_instance or not app_state["is_connected"]:
+            return "The device is not connected."
+        log_to_dash(f"Node reboot requested by {sender_id}")
+
+        async def reboot_node():
+            # The reply is sent through the node, so wait for it to go out first.
+            await asyncio.sleep(10)
+            try:
+                async with paced_hardware_lock():
+                    await meshcore_instance.commands.reboot()
+            except Exception as error:
+                log_to_dash(f"Node reboot error: {error}")
+
+        asyncio.create_task(reboot_node())
+        return "Rebooting the node in a few seconds. This also closes the OTA Wi-Fi access point."
+    if command == "startota":
+        if not is_settings_admin(sender_id):
+            log_to_dash(f"Rejected /startota from non-admin {sender_id}")
+            return f"Not allowed. Add \"{str(sender_id)[:12]}\" to bot.admins in config.json."
+        if not meshcore_instance or not app_state["is_connected"]:
+            return "The device is not connected."
+        try:
+            async with paced_hardware_lock():
+                result = await meshcore_instance.commands.run_cli_command("start ota")
+        except Exception as error:
+            log_to_dash(f"/startota failed: {error}")
+            return f"Could not start OTA: {error}"[:120]
+        if result.type == EventType.ERROR:
+            return f"Could not start OTA: {result.payload}"[:120]
+        log_to_dash(f"OTA started by {sender_id}: {result.payload}")
+        return OTA_INSTRUCTIONS
+    if command == "syswifi":
+        if not is_settings_admin(sender_id):
+            log_to_dash(f"Rejected /syswifi from non-admin {sender_id}")
+            return f"Not allowed. Add \"{str(sender_id)[:12]}\" to bot.admins in config.json."
+        action = args.lower()
+        if action not in {"status", "on", "off"}:
+            return "Usage: /syswifi status, /syswifi on, or /syswifi off"
+        try:
+            tool, output = await asyncio.to_thread(run_wifi_command, action)
+            if action == "status":
+                return f"Computer Wi-Fi is {'on' if wifi_status_text(tool, output) else 'off'}."
+        except Exception as error:
+            log_to_dash(f"/syswifi {action} failed: {error}")
+            return f"Wi-Fi {action} failed: {error}"[:120]
+        log_to_dash(f"Computer Wi-Fi turned {action} by {sender_id}")
+        return f"Computer Wi-Fi turned {action}."
+    if command == "update":
+        if not is_settings_admin(sender_id):
+            log_to_dash(f"Rejected /update from non-admin {sender_id}")
+            return f"Not allowed. Add \"{str(sender_id)[:12]}\" to bot.admins in config.json."
+        log_to_dash(f"Update requested by {sender_id}")
+        try:
+            # A 10s restart delay lets this reply go out first.
+            response = await update_app_handler(InternalRequest({}, restart_delay=10))
+            data = json.loads(response.text)
+        except Exception as error:
+            log_to_dash(f"/update failed: {error}")
+            return f"Update failed: {error}"
+        if response.status >= 400:
+            return f"Update failed: {data.get('error', 'unknown error')}"[:120]
+        if not data.get("updated"):
+            return "Already up to date."
+        return "Update installed. Restarting now, back in about a minute."
     return await handle_settings_command(sender_id, args)
 
 
@@ -3360,14 +3466,7 @@ async def update_app_handler(request):
             {"updated": False, "message": "The app is already up to date."}
         )
 
-
-    async def restart_after_update():
-        await asyncio.sleep(0.3)
-        await disconnect_hardware()
-        os.environ["MESHC_OPS_RESTARTING"] = "1"
-        os.execv(sys.executable, [sys.executable, *sys.argv])
-
-    asyncio.create_task(restart_after_update())
+    schedule_restart(delay=getattr(request, "restart_delay", 0.3))
     return web.json_response({"updated": True, "message": "Update installed. Restarting dashboard."}, status=202)
 
 
