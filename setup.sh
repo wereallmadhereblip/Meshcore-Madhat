@@ -7,7 +7,38 @@ DESKTOP_DIR="$HOME/Desktop"
 
 sudo apt update
 sudo apt install -y git python3 python3-venv python3-pip python3-dev build-essential \
-  libffi-dev libssl-dev pkg-config curl bluez rfkill fastfetch whiptail zstd
+  libffi-dev libssl-dev pkg-config curl bluez rfkill fastfetch whiptail zstd \
+  tightvncserver novnc websockify xfce4 dbus-x11 openssl
+
+mkdir -p "$HOME/.vnc"
+if [[ ! -f "$HOME/.vnc/xstartup" ]]; then
+  cat > "$HOME/.vnc/xstartup" <<'EOF'
+#!/bin/sh
+unset SESSION_MANAGER
+unset DBUS_SESSION_BUS_ADDRESS
+exec startxfce4
+EOF
+fi
+chmod +x "$HOME/.vnc/xstartup"
+
+if [[ ! -f "$HOME/novnc.pem" ]]; then
+  openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+    -keyout "$HOME/novnc.pem" -out "$HOME/novnc.pem" \
+    -subj "/CN=$(hostname)"
+fi
+chmod 600 "$HOME/novnc.pem"
+
+if [[ ! -f "$HOME/.vnc/passwd" ]]; then
+  if [[ -t 0 ]]; then
+    echo "Set the password used to connect to TightVNC:"
+    vncpasswd
+  elif ( : < /dev/tty > /dev/tty ) 2>/dev/null; then
+    echo "Set the password used to connect to TightVNC:"
+    vncpasswd < /dev/tty > /dev/tty
+  else
+    echo "No VNC password is configured. Run 'vncpasswd' before using /tightvnc on." >&2
+  fi
+fi
 
 if ! id -nG "$USER" | grep -qw "dialout"; then
   sudo usermod -aG dialout "$USER"

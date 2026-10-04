@@ -7,7 +7,9 @@ import json
 import math
 import os
 import re
+import signal
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -51,6 +53,10 @@ LOG_VIEW_MAX_LINES = 2000
 CONFIG_FILE_PATH = Path(__file__).resolve().with_name("config.json")
 AUTOSTART_UNIT_NAME = "meshcore-madhat.service"
 AUTOSTART_UNIT_PATH = CONFIG_DIR / "systemd" / "user" / AUTOSTART_UNIT_NAME
+TIGHTVNC_CERT_PATH = Path.home() / "novnc.pem"
+TIGHTVNC_PID_PATH = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "meshcore-madhat" / "websockify.pid"
+TIGHTVNC_LOG_PATH = TIGHTVNC_PID_PATH.with_name("websockify.log")
+NOVNC_WEB_PATH = Path("/usr/share/novnc")
 AVAILABLE_THEMES = {"midnight", "light", "ocean", "amber", "linux", "macos", "cyberpunk", "tron"}
 ADMIN_KEY_PATTERN = re.compile(r"^[0-9a-fA-F]{6,64}$")
 TIME_OF_DAY_PATTERN = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
@@ -1374,7 +1380,7 @@ def update_greeting_setting_from_message(prompt, channel_id=None):
 
 
 HELP_TEXT = (
-    "Commands: /help, /help settings, /settings (show), /settings <name> <value>, /restart, /update, /syswifi status|on|off, /startota, /reboot, "
+    "Commands: /help, /help settings, /settings (show), /settings <name> <value>, /restart, /update, /syswifi status|on|off, /startota, /reboot, /sysreboot, /tightvnc on|off|restart, /power, "
     "wx <zip>, wx local, "
     "/greet on|off (in a channel), /bot <question> (in a channel). "
     "/settings works in direct messages from admins only."
@@ -1561,8 +1567,49 @@ def wifi_status_text(tool, output):
     return "soft blocked: yes" not in output.lower() and "hard blocked: yes" not in output.lower()
 
 
+def read_number(path):
+    try:
+        return float(Path(path).read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def system_power_summary():
+    parts = [f"load {os.getloadavg()[0]:.2f}"]
+    temps = [read_number(p) for p in Path("/sys/class/thermal").glob("thermal_zone*/temp")]
+    temps = [t / 1000 for t in temps if t]
+    if temps:
+        parts.append(f"temp {max(temps):.0f}C")
+    freq = read_number("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq")
+    if freq:
+        parts.append(f"cpu {freq / 1000:.0f}MHz")
+
+    watts = []
+    for supply in Path("/sys/class/power_supply").glob("*"):
+        # tcpm-source-psy-* reports the negotiated USB-C contract, not measured draw.
+        if supply.name.startswith("tcpm-source"):
+            continue
+        power = read_number(supply / "power_now")
+        volts = read_number(supply / "voltage_now")
+        amps = read_number(supply / "current_now")
+        if power:
+            watts.append(power / 1e6)
+        elif volts and amps:
+            watts.append(volts * amps / 1e12)
+    for hwmon in Path("/sys/class/hwmon").glob("hwmon*"):
+        power = read_number(hwmon / "power1_input")
+        millivolts = read_number(hwmon / "in0_input")
+        milliamps = read_number(hwmon / "curr1_input")
+        if power:
+            watts.append(power / 1e6)
+        elif millivolts and milliamps:
+            watts.append(millivolts * milliamps / 1e6)
+    parts.append(f"power {sum(watts):.1f}W" if watts else "no power sensor")
+    return ", ".join(parts)
+
+
 async def handle_slash_command(sender_id, prompt, allow_settings):
-    match = re.fullmatch(r"\s*/(help|settings|restart|update|syswifi|startota|reboot)\b\s*(.*)", prompt, re.IGNORECASE | re.DOTALL)
+    match = re.fullmatch(r"\s*/(help|settings|restart|update|syswifi|startota|reboot|sysreboot|tightvnc|power)\b\s*(.*)", prompt, re.IGNORECASE | re.DOTALL)
     if match is None:
         return None
     command, args = match.group(1).lower(), match.group(2).strip()
@@ -1578,6 +1625,11 @@ async def handle_slash_command(sender_id, prompt, allow_settings):
         # Delay lets the reply go out before the process is replaced.
         schedule_restart(delay=10)
         return "Restarting the app now. Back in about a minute."
+    if command == "power":
+        if not is_settings_admin(sender_id):
+            log_to_dash(f"Rejected /power from non-admin {sender_id}")
+            return f"Not allowed. Add \"{str(sender_id)[:12]}\" to bot.admins in config.json."
+        return SingleMessage(await asyncio.to_thread(system_power_summary))
     if command == "reboot":
         if not is_settings_admin(sender_id):
             log_to_dash(f"Rejected /reboot from non-admin {sender_id}")
@@ -1597,6 +1649,46 @@ async def handle_slash_command(sender_id, prompt, allow_settings):
 
         asyncio.create_task(reboot_node())
         return "Rebooting the node in a few seconds. This also closes the OTA Wi-Fi access point."
+    if command == "sysreboot":
+        if not is_settings_admin(sender_id):
+            log_to_dash(f"Rejected /sysreboot from non-admin {sender_id}")
+            return f"Not allowed. Add \"{str(sender_id)[:12]}\" to bot.admins in config.json."
+        log_to_dash(f"System reboot requested by {sender_id}")
+
+        async def reboot_system():
+            # Wait for the reply to be delivered before rebooting the host.
+            await asyncio.sleep(10)
+            try:
+                result = await asyncio.to_thread(run_privileged, "systemctl", "reboot")
+                if result.returncode != 0:
+                    error = result.stderr.strip() or "systemctl reboot failed"
+                    log_to_dash(f"/sysreboot failed: {error}")
+            except Exception as error:
+                log_to_dash(f"/sysreboot failed: {error}")
+
+        asyncio.create_task(reboot_system())
+        return "Rebooting the host in a few seconds."
+    if command == "tightvnc":
+        if not is_settings_admin(sender_id):
+            log_to_dash(f"Rejected /tightvnc from non-admin {sender_id}")
+            return f"Not allowed. Add \"{str(sender_id)[:12]}\" to bot.admins in config.json."
+        action = args.lower() or "status"
+        if action not in {"status", "on", "off", "restart"}:
+            return "Usage: /tightvnc status, /tightvnc on, /tightvnc off, or /tightvnc restart"
+        try:
+            status = await asyncio.to_thread(set_tightvnc, action)
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+            log_to_dash(f"/tightvnc {action} failed: {error}")
+            return f"TightVNC {action} failed: {error}"[:180]
+        log_to_dash(f"TightVNC {action} requested by {sender_id}")
+        if action == "status":
+            return (
+                f"TightVNC is {'on' if status['vnc_running'] else 'off'}; "
+                f"noVNC is {'on' if status['novnc_running'] else 'off'}."
+            )
+        if action == "restart":
+            return "TightVNC and noVNC restarted."
+        return f"TightVNC and noVNC turned {'off' if action == 'off' else 'on'}."
     if command == "startota":
         if not is_settings_admin(sender_id):
             log_to_dash(f"Rejected /startota from non-admin {sender_id}")
@@ -2112,6 +2204,178 @@ def run_privileged(*args, input_text=None):
     )
 
 
+def tightvnc_status():
+    try:
+        with socket.create_connection(("127.0.0.1", 5901), timeout=0.5):
+            vnc_running = True
+    except OSError:
+        vnc_running = False
+    return {
+        "vnc_running": vnc_running,
+        "novnc_running": _websockify_pid() is not None,
+        "url": "https://<host>:6080/vnc.html",
+    }
+
+
+def _websockify_pid():
+    try:
+        pid = int(TIGHTVNC_PID_PATH.read_text(encoding="ascii").strip())
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        pid = None
+    if pid is not None:
+        try:
+            command_line = Path(f"/proc/{pid}/cmdline").read_bytes()
+            process_state = Path(f"/proc/{pid}/stat").read_text(encoding="ascii").split(") ", 1)[1][0]
+        except OSError:
+            command_line = b""
+            process_state = ""
+        if (
+            process_state != "Z"
+            and b"websockify" in command_line
+            and b"6080" in command_line
+            and b"5901" in command_line
+        ):
+            return pid
+    try:
+        TIGHTVNC_PID_PATH.unlink()
+    except FileNotFoundError:
+        pass
+    return None
+
+
+def _run_tightvnc_command(command, operation):
+    result = subprocess.run(
+        command, capture_output=True, text=True, timeout=60, check=False,
+    )
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip() or f"{operation} failed"
+        raise RuntimeError(detail)
+    return result
+
+
+def _ensure_novnc_certificate():
+    if not TIGHTVNC_CERT_PATH.is_file():
+        result = subprocess.run(
+            [
+                "openssl", "req", "-x509", "-nodes", "-days", "365",
+                "-newkey", "rsa:2048", "-keyout", str(TIGHTVNC_CERT_PATH),
+                "-out", str(TIGHTVNC_CERT_PATH), "-subj", f"/CN={socket.gethostname()}",
+            ],
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+        if result.returncode:
+            detail = result.stderr.strip() or "Could not create the noVNC TLS certificate"
+            raise RuntimeError(detail)
+    TIGHTVNC_CERT_PATH.chmod(0o600)
+
+
+def _tightvnc_start():
+    if shutil.which("tightvncserver") is None:
+        raise RuntimeError("TightVNC is not installed. Run setup.sh to install it.")
+    if shutil.which("websockify") is None or not NOVNC_WEB_PATH.is_dir():
+        raise RuntimeError("noVNC/websockify is not installed. Run setup.sh to install it.")
+    if not (Path.home() / ".vnc" / "passwd").is_file():
+        raise RuntimeError("Set a VNC password first by running: vncpasswd")
+    _ensure_novnc_certificate()
+
+    if not tightvnc_status()["vnc_running"]:
+        _run_tightvnc_command(
+            ["tightvncserver", ":1", "-localhost"],
+            "Starting TightVNC",
+        )
+        for _ in range(20):
+            if tightvnc_status()["vnc_running"]:
+                break
+            time.sleep(0.25)
+        else:
+            raise RuntimeError("TightVNC did not start listening on localhost:5901")
+
+    if _websockify_pid() is None:
+        TIGHTVNC_PID_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with TIGHTVNC_LOG_PATH.open("ab") as log_file:
+            process = subprocess.Popen(
+                [
+                    "websockify", f"--web={NOVNC_WEB_PATH}/",
+                    f"--cert={TIGHTVNC_CERT_PATH}", "6080", "localhost:5901",
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        TIGHTVNC_PID_PATH.write_text(f"{process.pid}\n", encoding="ascii")
+        for _ in range(20):
+            if _websockify_pid() is not None:
+                try:
+                    with socket.create_connection(("127.0.0.1", 6080), timeout=0.2):
+                        break
+                except OSError:
+                    pass
+            if process.poll() is not None:
+                try:
+                    TIGHTVNC_PID_PATH.unlink()
+                except FileNotFoundError:
+                    pass
+                log_tail = TIGHTVNC_LOG_PATH.read_text(encoding="utf-8", errors="replace")[-500:].strip()
+                raise RuntimeError(log_tail or "noVNC/websockify exited during startup")
+            time.sleep(0.25)
+        else:
+            pid = _websockify_pid()
+            if pid is not None:
+                os.kill(pid, signal.SIGTERM)
+            try:
+                TIGHTVNC_PID_PATH.unlink()
+            except FileNotFoundError:
+                pass
+            raise RuntimeError("noVNC/websockify did not start on port 6080")
+    return tightvnc_status()
+
+
+def _tightvnc_stop():
+    failures = []
+    pid = _websockify_pid()
+    if pid is not None:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            for _ in range(20):
+                if _websockify_pid() is None:
+                    break
+                time.sleep(0.25)
+            else:
+                raise RuntimeError("noVNC/websockify did not stop after SIGTERM")
+        except (OSError, RuntimeError) as error:
+            failures.append(str(error))
+    if tightvnc_status()["vnc_running"]:
+        try:
+            _run_tightvnc_command(
+                ["tightvncserver", "-kill", ":1"],
+                "Stopping TightVNC",
+            )
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+            failures.append(str(error))
+    if failures:
+        raise RuntimeError("; ".join(failures))
+    return tightvnc_status()
+
+
+_tightvnc_lock = threading.Lock()
+
+
+def set_tightvnc(action):
+    if action not in {"status", "on", "off", "restart"}:
+        raise ValueError("action must be status, on, off, or restart")
+    with _tightvnc_lock:
+        if action == "status":
+            return tightvnc_status()
+        if action == "off":
+            return _tightvnc_stop()
+        if action == "restart":
+            _tightvnc_stop()
+        return _tightvnc_start()
+
+
 def can_use_system_service():
     if not Path("/run/systemd/system").is_dir():
         return False
@@ -2228,6 +2492,31 @@ async def update_autostart_handler(request):
         return web.json_response({"error": str(error)}, status=500)
     log_to_dash(f"Start at boot {'enabled' if enabled else 'disabled'}")
     return web.json_response({"enabled": enabled})
+
+
+async def tightvnc_handler(request):
+    status = await asyncio.to_thread(tightvnc_status)
+    return web.json_response(status)
+
+
+async def update_tightvnc_handler(request):
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+    action = payload.get("action") if isinstance(payload, dict) else None
+    if action not in {"on", "off", "restart"}:
+        return web.json_response(
+            {"error": "action must be on, off, or restart"},
+            status=400,
+        )
+    try:
+        status = await asyncio.to_thread(set_tightvnc, action)
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        log_to_dash(f"TightVNC {action} failed: {error}")
+        return web.json_response({"error": str(error)}, status=500)
+    log_to_dash(f"TightVNC {action} completed")
+    return web.json_response(status)
 
 
 async def serial_scan_handler(request):
@@ -2783,9 +3072,11 @@ const commonRadioProfiles={balanced:{radio_bw:125,radio_sf:7,radio_cr:5},long_ra
 function applyTheme(theme,persist=true){let previousTheme=document.body.dataset.theme,wasOverview=document.body.classList.contains('tron-overview');document.body.dataset.theme=theme;let modeSelect=document.getElementById('theme-mode-select'),colorSelect=document.getElementById('theme-select'),colorControl=document.getElementById('classic-theme-control');if(modeSelect)modeSelect.value=theme==='tron'?'tron':'classic';if(colorSelect&&theme!=='tron')colorSelect.value=theme;if(colorControl)colorControl.hidden=theme==='tron';let sessionTitle=document.getElementById('analyzer-session-title');if(sessionTitle)sessionTitle.textContent=theme==='tron'?'MeshCore Live Statistics':'Session';if(theme==='tron'&&previousTheme!=='tron'||theme!=='tron'&&wasOverview)showView('connection');if(persist)saveAppConfig({...appConfig,theme})}
 function selectThemeMode(mode){if(mode==='tron'){applyTheme('tron');return}let colorTheme=document.getElementById('theme-select').value;applyTheme(colorTheme==='tron'?'midnight':colorTheme)}
 function selectClassicTheme(theme){try{localStorage.setItem('meshcore-classic-theme',theme)}catch(error){}applyTheme(theme)}
-function showSettingsTab(tab){document.querySelectorAll('.settings-tab').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.settingsTab===tab)));for(let panel of document.querySelectorAll('.settings-tab-panel'))panel.hidden=panel.id!=='settings-'+tab+'-panel';if(tab==='config'){if(!configEditorLoaded)loadConfigEditor();loadAutostart()}if(tab==='ollama')loadOllamaModels();if(tab==='logs')loadAppLogs()}
+function showSettingsTab(tab){document.querySelectorAll('.settings-tab').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.settingsTab===tab)));for(let panel of document.querySelectorAll('.settings-tab-panel'))panel.hidden=panel.id!=='settings-'+tab+'-panel';if(tab==='config'){if(!configEditorLoaded)loadConfigEditor();loadAutostart()}if(tab==='ollama')loadOllamaModels();if(tab==='tightvnc')loadTightvnc();if(tab==='logs')loadAppLogs()}
 async function loadAutostart(){let box=document.getElementById('autostart-enabled');try{let response=await fetch('/api/autostart'),data=await response.json();box.checked=!!data.enabled}catch(error){}}
 async function saveAutostart(){let box=document.getElementById('autostart-enabled'),status=document.getElementById('autostart-status'),wanted=box.checked;try{let response=await fetch('/api/autostart',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:wanted})}),data=await response.json();if(!response.ok)throw new Error(data.error||'Failed');status.textContent=wanted?'Enabled':'Disabled'}catch(error){box.checked=!wanted;status.textContent=error.message}}
+async function loadTightvnc(){let status=document.getElementById('tightvnc-status');try{let response=await fetch('/api/tightvnc'),data=await response.json();if(!response.ok)throw new Error(data.error||'Status unavailable');status.textContent=`TightVNC: ${data.vnc_running?'on':'off'} · noVNC: ${data.novnc_running?'on':'off'} · ${data.url}`;status.dataset.state=data.vnc_running&&data.novnc_running?'success':''}catch(error){status.textContent=error.message;status.dataset.state='error'}}
+async function setTightvnc(action){let status=document.getElementById('tightvnc-status');status.textContent=`${action==='restart'?'Restarting':'Turning '+action} TightVNC...`;status.dataset.state='';for(let button of document.querySelectorAll('[data-tightvnc-action]'))button.disabled=true;try{let response=await fetch('/api/tightvnc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})}),data=await response.json();if(!response.ok)throw new Error(data.error||'TightVNC operation failed');status.textContent=`TightVNC: ${data.vnc_running?'on':'off'} · noVNC: ${data.novnc_running?'on':'off'} · ${data.url}`;status.dataset.state='success'}catch(error){status.textContent=error.message;status.dataset.state='error'}finally{for(let button of document.querySelectorAll('[data-tightvnc-action]'))button.disabled=false}}
 async function loadAppLogs(){let output=document.getElementById('app-log-output');try{let response=await fetch('/api/logs'),data=await response.json();output.textContent=(data.logs||[]).join('\n')||'No log entries.';output.scrollTop=output.scrollHeight}catch(error){output.textContent=error.message}}
 async function clearAppLogs(){if(!confirm('Delete all stored logs?'))return;let status=document.getElementById('app-log-status');try{let response=await fetch('/api/logs',{method:'DELETE'});if(!response.ok)throw new Error((await response.json()).error||'Failed');status.textContent='Logs cleared.';loadAppLogs()}catch(error){status.textContent=error.message}}
 function syncConfigControls(){let colorSelect=document.getElementById('theme-select'),savedClassicTheme=null;try{savedClassicTheme=localStorage.getItem('meshcore-classic-theme')}catch(error){}let validSavedClassicTheme=[...colorSelect.options].some(option=>option.value===savedClassicTheme),classicTheme=appConfig.theme==='tron'?(validSavedClassicTheme?savedClassicTheme:'midnight'):appConfig.theme;colorSelect.value=classicTheme;let modelSelect=document.getElementById('model');if(![...modelSelect.options].some(option=>option.value===appConfig.model))modelSelect.add(new Option(appConfig.model,appConfig.model));modelSelect.value=appConfig.model;document.getElementById('weather-city').value=appConfig.weather.city;document.getElementById('weather-state').value=appConfig.weather.state;document.getElementById('bot-name').value=appConfig.bot.name;document.getElementById('bot-personality').value=appConfig.bot.personality;document.getElementById('bot-response-length').value=appConfig.bot.response_length;document.getElementById('ollama-schedule-enabled').checked=appConfig.ollama.schedule_enabled;document.getElementById('ollama-schedule-start').value=appConfig.ollama.start_time;document.getElementById('ollama-schedule-end').value=appConfig.ollama.end_time;document.getElementById('auto-update-enabled').checked=appConfig.auto_update.enabled;applyTheme(appConfig.theme,false)}
@@ -2955,7 +3246,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <button type="button" class="tron-settings-back" onclick="showView('connection')">Dashboard</button>
 <div class="settings-layout">
 <section class="card"><div class="panel-heading"><div><span class="eyebrow">APPLICATION</span><h2>Settings</h2></div><span class="panel-index">04</span></div>
-<div class="settings-tabs" role="tablist" aria-label="Settings sections"><button type="button" class="settings-tab" role="tab" data-settings-tab="preferences" aria-pressed="true" onclick="showSettingsTab('preferences')">Themes</button><button type="button" class="settings-tab" role="tab" data-settings-tab="ollama" aria-pressed="false" onclick="showSettingsTab('ollama')">Ollama</button><button type="button" class="settings-tab" role="tab" data-settings-tab="bot" aria-pressed="false" onclick="showSettingsTab('bot')">Bot</button><button type="button" class="settings-tab" role="tab" data-settings-tab="weather" aria-pressed="false" onclick="showSettingsTab('weather')">Weather</button><button type="button" class="settings-tab" role="tab" data-settings-tab="config" aria-pressed="false" onclick="showSettingsTab('config')">Update</button><button type="button" class="settings-tab" role="tab" data-settings-tab="banner" aria-pressed="false" onclick="showSettingsTab('banner')">Banner</button><button type="button" class="settings-tab" role="tab" data-settings-tab="logs" aria-pressed="false" onclick="showSettingsTab('logs')">Logs</button></div>
+<div class="settings-tabs" role="tablist" aria-label="Settings sections"><button type="button" class="settings-tab" role="tab" data-settings-tab="preferences" aria-pressed="true" onclick="showSettingsTab('preferences')">Themes</button><button type="button" class="settings-tab" role="tab" data-settings-tab="ollama" aria-pressed="false" onclick="showSettingsTab('ollama')">Ollama</button><button type="button" class="settings-tab" role="tab" data-settings-tab="bot" aria-pressed="false" onclick="showSettingsTab('bot')">Bot</button><button type="button" class="settings-tab" role="tab" data-settings-tab="tightvnc" aria-pressed="false" onclick="showSettingsTab('tightvnc')">Remote Desktop</button><button type="button" class="settings-tab" role="tab" data-settings-tab="weather" aria-pressed="false" onclick="showSettingsTab('weather')">Weather</button><button type="button" class="settings-tab" role="tab" data-settings-tab="config" aria-pressed="false" onclick="showSettingsTab('config')">Update</button><button type="button" class="settings-tab" role="tab" data-settings-tab="banner" aria-pressed="false" onclick="showSettingsTab('banner')">Banner</button><button type="button" class="settings-tab" role="tab" data-settings-tab="logs" aria-pressed="false" onclick="showSettingsTab('logs')">Logs</button></div>
 <section id="settings-preferences-panel" class="settings-tab-panel">
 <div class="settings-grid">
 <div class="settings-item"><div class="theme-control-row"><label for="theme-mode-select">Theme</label><select id="theme-mode-select" onchange="selectThemeMode(this.value)"><option value="tron">TRON</option><option value="classic">Classic</option></select></div><div id="classic-theme-control" class="theme-control-row"><label for="theme-select">Colors</label><select id="theme-select" onchange="selectClassicTheme(this.value)"><option value="midnight">Midnight</option><option value="light">Light</option><option value="ocean">Ocean</option><option value="amber">Amber</option><option value="linux">Linux Console</option><option value="macos">macOS</option><option value="cyberpunk">Hacker Cyberpunk</option></select></div><p class="settings-description">Select TRON mode or choose Classic with a color palette.</p></div>
@@ -3003,6 +3294,11 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <div class="settings-item"><label for="bot-response-length">Response length</label><select id="bot-response-length" name="response_length"><option value="short">Short (up to 3 packets)</option><option value="medium">Medium (up to 6 packets)</option><option value="long">Long (up to 12 packets)</option></select><p class="settings-description">Caps how many mesh-radio packets a direct message or channel reply can use, so long answers don't flood the network.</p></div>
 <div class="settings-actions"><button type="submit">Save bot settings</button><p id="bot-settings-status" class="preferences-status" aria-live="polite"></p></div>
 </form>
+</section>
+<section id="settings-tightvnc-panel" class="settings-tab-panel" hidden>
+<div class="settings-grid">
+<div class="settings-item settings-item-full"><label>TightVNC / noVNC remote desktop</label><p class="settings-description">Manage the TightVNC server on localhost:5901 and the secure browser proxy on port 6080. Connect at https://&lt;host&gt;:6080/vnc.html and accept the self-signed certificate warning.</p><div class="device-action-grid"><button type="button" data-tightvnc-action="on" onclick="setTightvnc('on')">Turn on</button><button type="button" class="secondary" data-tightvnc-action="off" onclick="setTightvnc('off')">Turn off</button><button type="button" class="secondary" data-tightvnc-action="restart" onclick="setTightvnc('restart')">Restart</button></div><p id="tightvnc-status" class="preferences-status" aria-live="polite">Checking status...</p></div>
+</div>
 </section>
 <section id="settings-config-panel" class="settings-tab-panel" hidden>
 <label for="config-json-editor">config.json contents</label><textarea id="config-json-editor" class="config-json-editor" rows="18" spellcheck="false" aria-label="Edit config.json"></textarea>
@@ -4230,6 +4526,8 @@ def create_app():
     app.router.add_get("/api/peer-telemetry", peer_telemetry_handler)
     app.router.add_get("/api/autostart", autostart_handler)
     app.router.add_post("/api/autostart", update_autostart_handler)
+    app.router.add_get("/api/tightvnc", tightvnc_handler)
+    app.router.add_post("/api/tightvnc", update_tightvnc_handler)
     app.router.add_get("/api/logs", logs_handler)
     app.router.add_delete("/api/logs", clear_logs_handler)
     app.router.add_get("/api/scan/bluetooth", bluetooth_scan_handler)

@@ -21,7 +21,9 @@ cd ~/Meshcore-Ollama-bot
 bash setup.sh
 ```
 
-The setup script installs the Python, Bluetooth/serial and `zstd` dependencies (needed by the Ollama installer), installs Ollama, and prompts you to choose `llama3.2:1b` or `qwen2.5:0.5b`. It preselects the smaller model on arm64 to reduce memory use. For unattended installs, set `OLLAMA_MODEL` to one of those model names before running `bash setup.sh`. A board with at least 2 GB RAM is recommended. Model inference runs on the CPU and may be slow.
+The setup script installs the Python, Bluetooth/serial, TightVNC, noVNC, websockify, XFCE and `zstd` dependencies (needed by the Ollama installer), installs Ollama, and prompts you to choose `llama3.2:1b` or `qwen2.5:0.5b`. It preselects the smaller model on arm64 to reduce memory use. For unattended installs, set `OLLAMA_MODEL` to one of those model names before running `bash setup.sh`. A board with at least 2 GB RAM is recommended. Model inference runs on the CPU and may be slow.
+
+Setup creates a self-signed TLS certificate at `~/novnc.pem`, configures XFCE for the VNC desktop, and prompts you to set a TightVNC password. You can manage the remote desktop from **Settings → Remote Desktop** or send `/tightvnc on`, `/tightvnc off`, `/tightvnc restart`, and `/tightvnc status` to the bot as an administrator. The browser desktop is available at `https://<host-ip>:6080/vnc.html` while enabled. The browser will warn about the self-signed certificate; the VNC password is still required to log in.
 
 Setup also asks whether to open the dashboard automatically in a browser on the Orange Pi. This preference is saved under `~/.config/meshcore-ollama-bot/preferences.json`. Automatic opening requires a graphical desktop; a headless board can still be opened from a browser on the LAN.
 
@@ -33,7 +35,7 @@ hostname -I
 
 Setup also enables the dashboard to start automatically at boot through a systemd user service (`meshcore-madhat.service`, with lingering enabled so it runs without a login). Turn it off under **Settings → Update → Start the dashboard automatically when the system boots**, or run `systemctl --user disable meshcore-madhat.service`. Because the service owns port `8080`, use `systemctl --user stop meshcore-madhat.service` before running the dashboard manually.
 
-The dashboard listens on the network so another device can access it. Keep it on a trusted LAN and do not expose port `8080` to the public internet.
+The dashboard listens on the network so another device can access it. Keep it on a trusted LAN and do not expose ports `8080` or `6080` to the public internet.
 
 If setup added your account to the `dialout` group, log out and back in before using serial connections.
 
