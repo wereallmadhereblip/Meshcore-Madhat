@@ -32,6 +32,8 @@ WEB_HOST = "0.0.0.0"
 WEB_PORT = 8080
 MAX_CHANNELS = 40
 MAX_MESHCORE_MESSAGE_LENGTH = 100
+# Bytes; below the firmware's 160-byte text limit to leave room for the sender-name prefix.
+MAX_SINGLE_MESSAGE_LENGTH = 125
 MAX_AI_REPLY_PACKETS = 12
 RESPONSE_LENGTH_PACKET_LIMITS = {"short": 3, "medium": 6, "long": MAX_AI_REPLY_PACKETS}
 DEFAULT_RESPONSE_LENGTH = "medium"
@@ -659,7 +661,15 @@ def resolve_contact_id(candidate):
     return candidate_str
 
 
+class SingleMessage(str):
+    """A reply sent as one packet with no [n/m] part markers, trimmed to fit."""
+
+
 def split_reply_into_messages(reply, prefix="", max_parts=None):
+    if isinstance(reply, SingleMessage):
+        budget = MAX_SINGLE_MESSAGE_LENGTH - len(prefix.encode("utf-8"))
+        text = reply.encode("utf-8")[:budget].decode("utf-8", errors="ignore").rstrip(" ,;:.")
+        return [f"{prefix}{text}"]
     if len(reply) + len(prefix) <= MAX_MESHCORE_MESSAGE_LENGTH:
         return [f"{prefix}{reply}"]
 
@@ -1274,21 +1284,21 @@ async def fetch_weather_response(prompt, sender_id=None):
         wind_label = "km/h" if use_metric else "mph"
         code = int(current["weather_code"])
         answer = (
-            f"Current weather for {location_label}: {current['temperature_2m']:.1f} {temperature_label}, "
-            f"feels like {current['apparent_temperature']:.1f} {temperature_label}, "
-            f"{WEATHER_CODES.get(code, 'conditions unavailable')}; "
-            f"humidity {current['relative_humidity_2m']}%, "
-            f"wind {current['wind_speed_10m']} {wind_label}."
+            f"{location_label}: {current['temperature_2m']:.0f}{temperature_label} "
+            f"(feels {current['apparent_temperature']:.0f}), "
+            f"{WEATHER_CODES.get(code, 'unknown')}, "
+            f"hum {current['relative_humidity_2m']}%, "
+            f"wind {current['wind_speed_10m']:.0f}{wind_label}"
         )
         if forecast_requested:
             daily = weather["daily"]
-            for index, day_name in enumerate(("Today", "Tomorrow")):
+            for index, day_name in enumerate(("Today", "Tmrw")):
                 answer += (
-                    f" {day_name}: {WEATHER_CODES.get(int(daily['weather_code'][index]), 'conditions unavailable')}, "
-                    f"high {daily['temperature_2m_max'][index]:.1f} {temperature_label}, "
-                    f"low {daily['temperature_2m_min'][index]:.1f} {temperature_label}."
-                )
-        return answer + " Source: Open-Meteo."
+                    f". {day_name} {daily['temperature_2m_max'][index]:.0f}/"
+                    f"{daily['temperature_2m_min'][index]:.0f}{temperature_label} "
+                    f"{WEATHER_CODES.get(int(daily['weather_code'][index]), '')}"
+                ).rstrip()
+        return SingleMessage(answer)
     except Exception as error:
         log_to_dash(f"Live weather lookup failed: {error}")
         return "I couldn't retrieve live weather right now, so I don't want to guess. Please try again shortly."
@@ -1808,6 +1818,11 @@ async def handle_incoming_channel_message(event):
             prompt,
             allow_settings_update=False,
         )
+    # Weather answers are addressed to the asker so others in the channel can tell who it's for.
+    sender_match = re.match(r"^\s*(?:\[([^\]]{1,40})\]|([^:\r\n\[]{1,40}):)\s", text)
+    sender_name = (sender_match.group(1) or sender_match.group(2)).strip() if sender_match else ""
+    if isinstance(reply, SingleMessage) and sender_name:
+        reply = SingleMessage(f"@[{sender_name}] {reply}")
     log_to_dash(f"AI channel reply: {reply}")
     reply_parts = split_reply_into_messages(
         reply,
