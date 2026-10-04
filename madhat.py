@@ -1997,6 +1997,8 @@ def set_autostart(enabled):
         raise RuntimeError("systemd is not available on this system")
     if enabled:
         app_path = Path(__file__).resolve()
+        venv_python = app_path.parent / ".venv" / "bin" / "python"
+        python_path = venv_python if venv_python.exists() else Path(sys.executable)
         AUTOSTART_UNIT_PATH.parent.mkdir(parents=True, exist_ok=True)
         AUTOSTART_UNIT_PATH.write_text(
             "[Unit]\n"
@@ -2004,7 +2006,7 @@ def set_autostart(enabled):
             "After=network-online.target\n\n"
             "[Service]\n"
             f"WorkingDirectory={app_path.parent}\n"
-            f"ExecStart={sys.executable} {app_path}\n"
+            f"ExecStart={python_path} {app_path}\n"
             "Restart=always\n"
             "RestartSec=5\n\n"
             "[Install]\n"
