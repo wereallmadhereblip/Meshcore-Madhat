@@ -413,6 +413,8 @@ app_state = {
     "channels": {},
     "gateway_telemetry": {},
     "ollama_running": False,
+    "incoming_message_count": 0,
+    "latest_incoming_message": None,
 }
 
 executor = ThreadPoolExecutor(max_workers=1)
@@ -732,6 +734,13 @@ def add_chat_message(target_type, target, direction, text):
     chat_history[key].append(message)
     chat_history[key] = chat_history[key][-100:]
     save_chat_store()
+    if direction == "incoming":
+        app_state["incoming_message_count"] += 1
+        app_state["latest_incoming_message"] = {
+            "type": target_type,
+            "target": str(target),
+            "text": text[:120],
+        }
     return message
 
 
@@ -3177,7 +3186,7 @@ async function scanDevices(kind){let bluetooth=kind==='bluetooth',select=documen
 function scanBluetooth(){return scanDevices('bluetooth')}
 function scanSerial(){return scanDevices('serial')}
 function updateClock(){document.getElementById('current-datetime').textContent=new Date().toLocaleString()}
-async function status(){let r=await fetch('/api/status'),d=await r.json();let b=document.getElementById('status');b.textContent=d.is_connected?'CONNECTED':'DISCONNECTED';b.className='header-status '+(d.is_connected?'connected':'disconnected');document.getElementById('console').innerText=d.logs.join('\n');handleTraceEvents(d.trace_events||[]);renderOllamaPower(d.ollama_running)}
+async function status(){let r=await fetch('/api/status'),d=await r.json();let b=document.getElementById('status');b.textContent=d.is_connected?'CONNECTED':'DISCONNECTED';b.className='header-status '+(d.is_connected?'connected':'disconnected');document.getElementById('console').innerText=d.logs.join('\n');handleTraceEvents(d.trace_events||[]);renderOllamaPower(d.ollama_running);handleIncomingNotifications(d)}
 let ollamaToggleBusy=false;
 function renderOllamaPower(running){let button=document.getElementById('ollama-power-toggle'),status=document.getElementById('ollama-power-status');if(!button||ollamaToggleBusy)return;button.textContent=running?'Turn off':'Turn on';status.textContent=running?'Running. Turn it off between chats to save power.':'Stopped to save power. Replies will fail until it is turned back on.'}
 async function toggleOllama(){let button=document.getElementById('ollama-power-toggle'),status=document.getElementById('ollama-power-status'),running=button.textContent.trim()==='Turn off';ollamaToggleBusy=true;button.disabled=true;status.textContent=running?'Stopping Ollama...':'Starting Ollama...';try{let r=await fetch('/api/ollama/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!running})}),d=await r.json();if(!r.ok)throw new Error(d.error||'Could not change Ollama state');ollamaToggleBusy=false;renderOllamaPower(d.ollama_running);loadOllamaModels()}catch(error){ollamaToggleBusy=false;status.textContent=error.message}finally{button.disabled=false}}
@@ -3189,6 +3198,12 @@ async function pollOllamaModelProgress(model,stop){let panel=document.getElement
 function formatModelProgressSize(bytes){if(bytes<1024*1024)return Math.round(bytes/1024)+' KB';return (bytes/(1024*1024*1024)>=1?(bytes/(1024*1024*1024)).toFixed(2)+' GB':(bytes/(1024*1024)).toFixed(0)+' MB')}
 async function downloadOllamaModel(){let input=document.getElementById('ollama-download-input'),btn=document.getElementById('ollama-download-button'),statusEl=document.getElementById('ollama-model-status'),progressPanel=document.getElementById('ollama-download-progress'),model=(input?input.value:'').trim();if(!model){statusEl.dataset.state='error';statusEl.textContent='Enter a model name to download.';return}ollamaModelsBusy=true;if(btn)btn.disabled=true;if(input)input.disabled=true;statusEl.dataset.state='';statusEl.textContent='Starting download of "'+model+'"...';if(progressPanel)progressPanel.hidden=false;let stop={done:false},progressPoll=pollOllamaModelProgress(model,stop);try{let res=await fetch('/api/ollama/models/pull',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model})}),data=await res.json();if(!res.ok)throw new Error(data.error||'Failed to download model');statusEl.dataset.state='success';statusEl.textContent='Model "'+model+'" downloaded and installed successfully!';if(input)input.value='';await loadOllamaModels()}catch(err){statusEl.dataset.state='error';statusEl.textContent=err.message}finally{stop.done=true;await progressPoll;ollamaModelsBusy=false;if(btn)btn.disabled=false;if(input)input.disabled=false}}
 async function deleteOllamaModel(modelName){if(!window.confirm('Delete model "'+modelName+'"? This will permanently remove its files from disk.'))return;let statusEl=document.getElementById('ollama-model-status');statusEl.dataset.state='';statusEl.textContent='Deleting "'+modelName+'"...';try{let res=await fetch('/api/ollama/models/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:modelName})}),data=await res.json();if(!res.ok)throw new Error(data.error||'Failed to delete model');statusEl.dataset.state='success';statusEl.textContent='Model "'+modelName+'" deleted successfully.';if(data.selected_model&&data.selected_model!==appConfig.model){appConfig.model=data.selected_model;syncConfigControls()}await loadOllamaModels()}catch(err){statusEl.dataset.state='error';statusEl.textContent=err.message}}
+let notificationsInitialized=false,lastIncomingCount=0,notificationAudio=null;
+function notificationsEnabled(){try{return localStorage.getItem('meshcore-message-notifications')!=='off'}catch(error){return true}}
+function playNotificationSound(){try{notificationAudio=notificationAudio||new(window.AudioContext||window.webkitAudioContext)();let ctx=notificationAudio;if(ctx.state==='suspended')ctx.resume();let now=ctx.currentTime;[880,1175].forEach((freq,i)=>{let osc=ctx.createOscillator(),gain=ctx.createGain();osc.type='sine';osc.frequency.value=freq;gain.gain.setValueAtTime(0.0001,now+i*0.15);gain.gain.exponentialRampToValueAtTime(0.2,now+i*0.15+0.02);gain.gain.exponentialRampToValueAtTime(0.0001,now+i*0.15+0.14);osc.connect(gain);gain.connect(ctx.destination);osc.start(now+i*0.15);osc.stop(now+i*0.15+0.15)})}catch(error){}}
+function handleIncomingNotifications(d){let count=Number(d.incoming_message_count||0);if(!notificationsInitialized){lastIncomingCount=count;notificationsInitialized=true;return}if(count>lastIncomingCount){lastIncomingCount=count;if(notificationsEnabled()){playNotificationSound();let m=d.latest_incoming_message;if(m&&'Notification'in window&&Notification.permission==='granted'&&document.hidden){try{new Notification('New MeshCore message',{body:m.text})}catch(error){}}}}else if(count<lastIncomingCount){lastIncomingCount=count}}
+function syncNotificationControl(){let box=document.getElementById('notification-toggle');if(box)box.checked=notificationsEnabled()}
+function saveNotificationSetting(){let enabled=document.getElementById('notification-toggle').checked;try{localStorage.setItem('meshcore-message-notifications',enabled?'on':'off')}catch(error){}if(enabled){playNotificationSound();if('Notification'in window&&Notification.permission==='default')Notification.requestPermission()}}
 function handleTraceEvents(events){if(!traceEventsInitialized){for(let event of events)addTraceActivity(event);lastSeenTraceEventId=events.length?Number(events[events.length-1].id):0;traceEventsInitialized=true;return}for(let event of events){let eventId=Number(event.id);if(eventId<=lastSeenTraceEventId)continue;addTraceActivity(event);if(event.kind==='direct')pulseTrace(event.target_id,event.direction);lastSeenTraceEventId=eventId}}
 function addTraceActivity(event){let list=document.getElementById('live-trace-feed-list');if(list){document.getElementById('live-trace-feed-empty')?.remove();let target=event.target_name||event.target_id||'Unknown';let label=event.kind==='direct'?(event.direction==='inbound'?'Direct message from ':'Direct message to ')+target:(event.direction==='inbound'?'Message received on ':'Message sent to ')+'Channel '+target;let entry=document.createElement('div');entry.className='live-trace-feed-item';let timestamp=document.createElement('time');timestamp.textContent=event.timestamp||'';let body=document.createElement('div');body.textContent=label;entry.append(timestamp,body);list.prepend(entry);while(list.children.length>60)list.lastElementChild.remove()}addAnalyzerPacket(event)}
 function addAnalyzerPacket(event){let list=document.getElementById('analyzer-packet-list');if(!list)return;let empty=list.querySelector('.packet-empty');empty?.parentElement.remove();let row=document.createElement('tr');row.tabIndex=0;let direction=event.direction==='inbound'?'IN':'OUT';let transport=event.kind==='direct'?'DIRECT':'CHANNEL';let status=event.direction==='inbound'?'RECEIVED':'SENT';let values=[event.timestamp||'--',direction,transport,event.target_name||event.target_id||'Unknown',status];values.forEach((value,index)=>{let cell=document.createElement('td');cell.textContent=String(value);if(index===1)cell.className='packet-direction';if(index===2&&transport==='CHANNEL')cell.className='packet-channel';row.appendChild(cell)});row.onclick=()=>showAnalyzerEvent(event);row.onkeydown=key=>{if(key.key==='Enter'||key.key===' '){key.preventDefault();showAnalyzerEvent(event)}};list.prepend(row);while(list.children.length>60)list.lastElementChild.remove();analyzerEventCount=Math.min(analyzerEventCount+1,60);document.getElementById('analyzer-total').textContent=String(analyzerEventCount)}
@@ -3272,7 +3287,7 @@ function stopConsoleDrag(){consoleDrag=null;let dock=document.getElementById('co
 function initConsoleDock(){let dock=document.getElementById('console-dock'),toggle=document.getElementById('console-toggle');if(!dock||!toggle)return;let collapsed=true;dock.classList.toggle('collapsed',collapsed);toggle.setAttribute('aria-expanded',String(!collapsed));restoreConsoleLayout();if(window.ResizeObserver)new ResizeObserver(()=>{if(!consoleDrag)saveConsoleLayout()}).observe(dock);window.addEventListener('resize',()=>clampConsolePosition(dock))}
 function applyBannerVisibility(){let prefs={link:true,battery:true,weather:true,time:true};try{prefs={...prefs,...JSON.parse(localStorage.getItem('meshcore-banner-visibility')||'{}')}}catch(error){}let map={link:'banner-item-link',battery:'banner-item-battery',weather:'banner-item-weather',time:'banner-item-time'};for(let key of Object.keys(map)){let item=document.getElementById(map[key]);if(item)item.hidden=!prefs[key];let checkbox=document.getElementById('banner-toggle-'+key);if(checkbox)checkbox.checked=prefs[key]}}
 function saveBannerVisibility(){let prefs={link:document.getElementById('banner-toggle-link').checked,battery:document.getElementById('banner-toggle-battery').checked,weather:document.getElementById('banner-toggle-weather').checked,time:document.getElementById('banner-toggle-time').checked};try{localStorage.setItem('meshcore-banner-visibility',JSON.stringify(prefs))}catch(error){}applyBannerVisibility()}
-window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();status();peers();loadAppConfig();loadOllamaModels();updateClock();initConsoleDock();applyBannerVisibility();setInterval(updateClock,1000);setInterval(refreshActiveHistory,3000);setInterval(loadLocalWeather,30*60*1000)});setInterval(status,2000);setInterval(peers,10000);
+window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();status();peers();loadAppConfig();loadOllamaModels();updateClock();initConsoleDock();applyBannerVisibility();syncNotificationControl();setInterval(updateClock,1000);setInterval(refreshActiveHistory,3000);setInterval(loadLocalWeather,30*60*1000)});setInterval(status,2000);setInterval(peers,10000);
 </script></head><body>
 <header class="dashboard-header">
 <div class="brand-lockup"><img class="dashboard-logo" src="/dashboard-logo.png" alt="Dashboard logo"><div class="brand-copy"><span class="header-label">MESHCORE + OLLAMA</span><h1>DASHBOARD</h1></div></div>
@@ -3324,6 +3339,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <section id="settings-preferences-panel" class="settings-tab-panel">
 <div class="settings-grid">
 <div class="settings-item"><div class="theme-control-row"><label for="theme-mode-select">Theme</label><select id="theme-mode-select" onchange="selectThemeMode(this.value)"><option value="tron">TRON</option><option value="classic">Classic</option></select></div><div id="classic-theme-control" class="theme-control-row"><label for="theme-select">Colors</label><select id="theme-select" onchange="selectClassicTheme(this.value)"><option value="midnight">Midnight</option><option value="light">Light</option><option value="ocean">Ocean</option><option value="amber">Amber</option><option value="linux">Linux Console</option><option value="macos">macOS</option><option value="cyberpunk">Hacker Cyberpunk</option></select></div><p class="settings-description">Select TRON mode or choose Classic with a color palette.</p></div>
+<div class="settings-item"><label><input type="checkbox" id="notification-toggle" checked onchange="saveNotificationSetting()"> Message notification sound</label><p class="settings-description">Play a sound when a new message arrives. Browsers may require a click on the page before audio can play.</p></div>
 </div>
 <p id="preferences-status" class="preferences-status" aria-live="polite"></p>
 </section>
@@ -3492,6 +3508,8 @@ async def status_handler(request):
         "logs": app_state["logs"],
         "trace_events": app_state["trace_events"],
         "ollama_running": app_state["ollama_running"],
+        "incoming_message_count": app_state["incoming_message_count"],
+        "latest_incoming_message": app_state["latest_incoming_message"],
     })
 
 
