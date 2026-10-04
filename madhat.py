@@ -1701,9 +1701,17 @@ async def handle_slash_command(sender_id, prompt, allow_settings):
         except Exception as error:
             log_to_dash(f"/startota failed: {error}")
             return f"Could not start OTA: {error}"[:120]
+        if result is None:
+            return "No response from the radio. It may already be in OTA mode: join Wi-Fi MeshCore-OTA and open http://192.168.4.1/update"
         if result.type == EventType.ERROR:
+            if "UNSUPPORTED_CMD" in str(result.payload).upper():
+                return "This radio's firmware rejected the CLI command used for OTA (unsupported command). Check the firmware build and that remote CLI is enabled."
             return f"Could not start OTA: {result.payload}"[:120]
-        log_to_dash(f"OTA started by {sender_id}: {result.payload}")
+        payload = result.payload
+        radio_text = str(payload.get("text", "") if isinstance(payload, dict) else payload).strip()
+        log_to_dash(f"OTA started by {sender_id}: {radio_text}")
+        if radio_text:
+            return f"Radio: {radio_text}. {OTA_INSTRUCTIONS}"
         return OTA_INSTRUCTIONS
     if command == "syswifi":
         if not is_settings_admin(sender_id):
