@@ -21,7 +21,7 @@ cd ~/Meshcore-Ollama-bot
 bash setup.sh
 ```
 
-The setup script installs the Python and Bluetooth/serial dependencies, installs Ollama, and prompts you to choose `llama3.2:1b` or `qwen2.5:0.5b`. It preselects the smaller model on arm64 to reduce memory use. For unattended installs, set `OLLAMA_MODEL` to one of those model names before running `bash setup.sh`. A board with at least 2 GB RAM is recommended. Model inference runs on the CPU and may be slow.
+The setup script installs the Python, Bluetooth/serial and `zstd` dependencies (needed by the Ollama installer), installs Ollama, and prompts you to choose `llama3.2:1b` or `qwen2.5:0.5b`. It preselects the smaller model on arm64 to reduce memory use. For unattended installs, set `OLLAMA_MODEL` to one of those model names before running `bash setup.sh`. A board with at least 2 GB RAM is recommended. Model inference runs on the CPU and may be slow.
 
 Setup also asks whether to open the dashboard automatically in a browser on the Orange Pi. This preference is saved under `~/.config/meshcore-ollama-bot/preferences.json`. Automatic opening requires a graphical desktop; a headless board can still be opened from a browser on the LAN.
 

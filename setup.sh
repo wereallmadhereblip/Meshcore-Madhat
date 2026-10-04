@@ -7,7 +7,7 @@ DESKTOP_DIR="$HOME/Desktop"
 
 sudo apt update
 sudo apt install -y git python3 python3-venv python3-pip python3-dev build-essential \
-  libffi-dev libssl-dev pkg-config curl bluez rfkill fastfetch whiptail
+  libffi-dev libssl-dev pkg-config curl bluez rfkill fastfetch whiptail zstd
 
 if ! id -nG "$USER" | grep -qw "dialout"; then
   sudo usermod -aG dialout "$USER"
