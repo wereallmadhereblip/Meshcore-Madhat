@@ -135,7 +135,7 @@ ollama pull qwen2.5:0.5b
 
 - Confirm your virtual environment is active before running the dashboard.
 - The Settings page has an Ollama tab where you can:
-  - Download new models (with quick presets for `qwen2.5:0.5b`, `llama3.2:1b`, `llama3.2:3b`, etc.)
+  - Download new models with live download and installation progress (with quick presets for `qwen2.5:0.5b`, `llama3.2:1b`, `llama3.2:3b`, etc.)
   - Delete unused models to free up disk/RAM space (especially useful on Live Kali Linux)
   - Switch the active bot model
   - Stop/start the Ollama server on demand to save power

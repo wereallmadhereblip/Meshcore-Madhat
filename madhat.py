@@ -408,6 +408,7 @@ app_state = {
     "available_models": [DEFAULT_MODEL, "qwen2.5:0.5b"],
     "models_info": [],
     "model_action_busy": False,
+    "model_progress": None,
     "contacts": {},
     "channels": {},
     "gateway_telemetry": {},
@@ -2716,6 +2717,10 @@ body:has(#nodes-view:not([hidden])){height:100vh;overflow:hidden}
 .model-card-badge{display:inline-block;padding:2px 7px;border-radius:10px;background:var(--accent-dim);color:var(--accent);font-size:10px;font-weight:700;text-transform:uppercase;border:1px solid var(--accent)}
 .model-card-actions{display:flex;gap:6px;align-items:center}
 .model-card-actions button{min-height:28px;padding:4px 10px;font-size:11px}
+.ollama-download-progress{margin-top:12px}
+.ollama-download-progress[hidden]{display:none}
+.ollama-download-progress progress{display:block;width:100%;height:12px;margin:6px 0}
+.ollama-download-progress p{margin:0;color:var(--muted);font-size:11px}
 .model-card-actions .delete-btn{color:var(--danger)!important;border-color:color-mix(in srgb,var(--danger) 45%,var(--border))!important}
 .model-card-actions .delete-btn:hover{background:color-mix(in srgb,var(--danger) 15%,transparent)}
 .download-control{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-top:6px}
@@ -3127,7 +3132,9 @@ let ollamaModelsBusy=false;
 async function loadOllamaModels(){let listEl=document.getElementById('installed-models-list');if(!listEl)return;try{let res=await fetch('/api/ollama/models');let data=await res.json();if(!res.ok)throw new Error(data.error||'Failed to load models');let models=data.models||[];let available=data.available_models||[];let currentModel=appConfig.model||data.selected_model;let modelSelect=document.getElementById('model');if(modelSelect){let prevVal=modelSelect.value||currentModel;modelSelect.replaceChildren();for(let name of available)modelSelect.add(new Option(name,name));if(prevVal&&[...modelSelect.options].some(o=>o.value===prevVal))modelSelect.value=prevVal;else if([...modelSelect.options].some(o=>o.value===currentModel))modelSelect.value=currentModel}if(!data.ollama_running){listEl.innerHTML='<p class="map-empty">Ollama server is currently stopped. Turn it on above to view or manage models.</p>';return}if(models.length===0){listEl.innerHTML='<p class="map-empty">No models installed in Ollama yet. Use the download section below to pull a model.</p>';return}listEl.replaceChildren();for(let m of models){let isCurrent=m.name===currentModel;let card=document.createElement('div');card.className='model-card';let info=document.createElement('div');info.className='model-card-info';let name=document.createElement('span');name.className='model-card-name';name.textContent=m.name;info.appendChild(name);if(m.size){let size=document.createElement('span');size.className='model-card-size';size.textContent=m.size;info.appendChild(size)}if(isCurrent){let badge=document.createElement('span');badge.className='model-card-badge';badge.textContent='Active';info.appendChild(badge)}card.appendChild(info);let actions=document.createElement('div');actions.className='model-card-actions';if(!isCurrent){let useBtn=document.createElement('button');useBtn.type='button';useBtn.className='secondary';useBtn.textContent='Use';useBtn.onclick=()=>setActiveModel(m.name);actions.appendChild(useBtn)}let delBtn=document.createElement('button');delBtn.type='button';delBtn.className='delete-btn';delBtn.textContent='Delete';delBtn.onclick=()=>deleteOllamaModel(m.name);actions.appendChild(delBtn);card.appendChild(actions);listEl.appendChild(card)}}catch(err){listEl.replaceChildren();let errP=document.createElement('p');errP.className='map-empty';errP.textContent='Could not load models: '+err.message;listEl.appendChild(errP)}}
 async function setActiveModel(modelName){let statusEl=document.getElementById('ollama-model-status');statusEl.dataset.state='';statusEl.textContent='Activating model '+modelName+'...';try{await savePreference('model',modelName);statusEl.dataset.state='success';statusEl.textContent='Active model set to '+modelName+'.';loadOllamaModels()}catch(err){statusEl.dataset.state='error';statusEl.textContent=err.message}}
 function setDownloadModel(modelName){let input=document.getElementById('ollama-download-input');if(input){input.value=modelName;input.focus()}}
-async function downloadOllamaModel(){let input=document.getElementById('ollama-download-input'),btn=document.getElementById('ollama-download-button'),statusEl=document.getElementById('ollama-model-status'),model=(input?input.value:'').trim();if(!model){statusEl.dataset.state='error';statusEl.textContent='Enter a model name to download.';return}ollamaModelsBusy=true;if(btn)btn.disabled=true;if(input)input.disabled=true;statusEl.dataset.state='';statusEl.textContent='Downloading "'+model+'"... This may take a few minutes depending on network speed.';try{let res=await fetch('/api/ollama/models/pull',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model})}),data=await res.json();if(!res.ok)throw new Error(data.error||'Failed to download model');statusEl.dataset.state='success';statusEl.textContent='Model "'+model+'" downloaded successfully!';if(input)input.value='';await loadOllamaModels()}catch(err){statusEl.dataset.state='error';statusEl.textContent=err.message}finally{ollamaModelsBusy=false;if(btn)btn.disabled=false;if(input)input.disabled=false}}
+async function pollOllamaModelProgress(model,stop){let panel=document.getElementById('ollama-download-progress'),phaseEl=document.getElementById('ollama-download-phase'),bar=document.getElementById('ollama-download-progress-bar'),detail=document.getElementById('ollama-download-detail');if(!panel||!phaseEl||!bar||!detail)return;panel.hidden=false;while(!stop.done){try{let res=await fetch('/api/ollama/models/progress'),data=await res.json();if(!res.ok)throw new Error(data.error||'Could not read model progress');let progress=data.progress;if(progress&&progress.model===model){let phase=progress.phase==='installing'?'Installing':progress.phase==='error'?'Download failed':'Downloading';phaseEl.textContent=phase+' "'+model+'": '+(progress.status||phase.toLowerCase());let completed=Number(progress.completed)||0,total=Number(progress.total)||0;if(total>0){bar.max=100;bar.value=progress.phase==='installing'?100:Math.min(100,completed/total*100);detail.textContent=progress.phase==='installing'?'Downloaded '+formatModelProgressSize(completed)+' of '+formatModelProgressSize(total):formatModelProgressSize(completed)+' of '+formatModelProgressSize(total)+' ('+Math.floor(completed/total*100)+'%)'}else if(progress.phase==='installing'){bar.max=100;bar.value=100;detail.textContent='Finishing model installation...'}else{bar.removeAttribute('value');detail.textContent='Waiting for download size...'}}}catch(error){phaseEl.textContent='Download progress unavailable: '+error.message;break}await new Promise(resolve=>setTimeout(resolve,700))}}
+function formatModelProgressSize(bytes){if(bytes<1024*1024)return Math.round(bytes/1024)+' KB';return (bytes/(1024*1024*1024)>=1?(bytes/(1024*1024*1024)).toFixed(2)+' GB':(bytes/(1024*1024)).toFixed(0)+' MB')}
+async function downloadOllamaModel(){let input=document.getElementById('ollama-download-input'),btn=document.getElementById('ollama-download-button'),statusEl=document.getElementById('ollama-model-status'),progressPanel=document.getElementById('ollama-download-progress'),model=(input?input.value:'').trim();if(!model){statusEl.dataset.state='error';statusEl.textContent='Enter a model name to download.';return}ollamaModelsBusy=true;if(btn)btn.disabled=true;if(input)input.disabled=true;statusEl.dataset.state='';statusEl.textContent='Starting download of "'+model+'"...';if(progressPanel)progressPanel.hidden=false;let stop={done:false},progressPoll=pollOllamaModelProgress(model,stop);try{let res=await fetch('/api/ollama/models/pull',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model})}),data=await res.json();if(!res.ok)throw new Error(data.error||'Failed to download model');statusEl.dataset.state='success';statusEl.textContent='Model "'+model+'" downloaded and installed successfully!';if(input)input.value='';await loadOllamaModels()}catch(err){statusEl.dataset.state='error';statusEl.textContent=err.message}finally{stop.done=true;await progressPoll;ollamaModelsBusy=false;if(btn)btn.disabled=false;if(input)input.disabled=false}}
 async function deleteOllamaModel(modelName){if(!window.confirm('Delete model "'+modelName+'"? This will permanently remove its files from disk.'))return;let statusEl=document.getElementById('ollama-model-status');statusEl.dataset.state='';statusEl.textContent='Deleting "'+modelName+'"...';try{let res=await fetch('/api/ollama/models/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:modelName})}),data=await res.json();if(!res.ok)throw new Error(data.error||'Failed to delete model');statusEl.dataset.state='success';statusEl.textContent='Model "'+modelName+'" deleted successfully.';if(data.selected_model&&data.selected_model!==appConfig.model){appConfig.model=data.selected_model;syncConfigControls()}await loadOllamaModels()}catch(err){statusEl.dataset.state='error';statusEl.textContent=err.message}}
 function handleTraceEvents(events){if(!traceEventsInitialized){for(let event of events)addTraceActivity(event);lastSeenTraceEventId=events.length?Number(events[events.length-1].id):0;traceEventsInitialized=true;return}for(let event of events){let eventId=Number(event.id);if(eventId<=lastSeenTraceEventId)continue;addTraceActivity(event);if(event.kind==='direct')pulseTrace(event.target_id,event.direction);lastSeenTraceEventId=eventId}}
 function addTraceActivity(event){let list=document.getElementById('live-trace-feed-list');if(list){document.getElementById('live-trace-feed-empty')?.remove();let target=event.target_name||event.target_id||'Unknown';let label=event.kind==='direct'?(event.direction==='inbound'?'Direct message from ':'Direct message to ')+target:(event.direction==='inbound'?'Message received on ':'Message sent to ')+'Channel '+target;let entry=document.createElement('div');entry.className='live-trace-feed-item';let timestamp=document.createElement('time');timestamp.textContent=event.timestamp||'';let body=document.createElement('div');body.textContent=label;entry.append(timestamp,body);list.prepend(entry);while(list.children.length>60)list.lastElementChild.remove()}addAnalyzerPacket(event)}
@@ -3291,6 +3298,11 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <button type="button" class="preset-btn" onclick="setDownloadModel('phi3:mini')">phi3:mini (~2.2 GB)</button>
 </div>
 <p class="settings-description">Enter any Ollama model name or select a preset to pull it from the Ollama library.</p>
+<div id="ollama-download-progress" class="ollama-download-progress" hidden aria-live="polite">
+<p id="ollama-download-phase">Preparing download...</p>
+<progress id="ollama-download-progress-bar" max="100"></progress>
+<p id="ollama-download-detail"></p>
+</div>
 </div>
 </div>
 <form class="settings-grid" style="margin-top:16px" onsubmit="saveOllamaSettings(event)">
@@ -3460,6 +3472,13 @@ async def ollama_models_handler(request):
     })
 
 
+async def ollama_model_progress_handler(request):
+    return web.json_response({
+        "progress": app_state.get("model_progress"),
+        "busy": app_state.get("model_action_busy", False),
+    })
+
+
 async def ollama_pull_model_handler(request):
     try:
         data = await request.json()
@@ -3488,11 +3507,54 @@ async def ollama_pull_model_handler(request):
             )
 
     app_state["model_action_busy"] = True
+    app_state["model_progress"] = {
+        "model": model_name,
+        "phase": "downloading",
+        "status": "Starting download",
+        "completed": 0,
+        "total": 0,
+    }
     log_to_dash(f"Starting download of Ollama model '{model_name}'...")
 
     try:
+        def pull_with_progress():
+            for response in ollama.pull(model_name, stream=True):
+                if isinstance(response, dict):
+                    status = str(response.get("status", ""))
+                    completed = response.get("completed", 0)
+                    total = response.get("total", 0)
+                else:
+                    status = str(getattr(response, "status", ""))
+                    completed = getattr(response, "completed", 0)
+                    total = getattr(response, "total", 0)
+                status_lower = status.lower()
+                phase = (
+                    "installing"
+                    if status_lower in {
+                        "verifying sha256 digest",
+                        "writing manifest",
+                        "removing any unused layers",
+                        "success",
+                    }
+                    else "downloading"
+                )
+                app_state["model_progress"] = {
+                    "model": model_name,
+                    "phase": phase,
+                    "status": status or ("Installing model" if phase == "installing" else "Downloading model"),
+                    "completed": completed if isinstance(completed, (int, float)) else 0,
+                    "total": total if isinstance(total, (int, float)) else 0,
+                }
+
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, lambda: ollama.pull(model_name))
+        await loop.run_in_executor(None, pull_with_progress)
+        app_state["model_progress"] = {
+            "model": model_name,
+            "phase": "installing",
+            "status": "Installation complete",
+            "completed": 1,
+            "total": 1,
+        }
         log_to_dash(f"Model '{model_name}' downloaded successfully.")
         await fetch_available_models()
         return web.json_response({
@@ -3503,6 +3565,13 @@ async def ollama_pull_model_handler(request):
             "selected_model": app_config.get("model", DEFAULT_MODEL),
         })
     except Exception as error:
+        app_state["model_progress"] = {
+            "model": model_name,
+            "phase": "error",
+            "status": str(error),
+            "completed": 0,
+            "total": 0,
+        }
         log_to_dash(f"Failed to download model '{model_name}': {error}")
         return web.json_response(
             {"error": f"Failed to download '{model_name}': {error}"},
@@ -4534,6 +4603,7 @@ def create_app():
     app.router.add_get("/api/update/check", check_for_update_handler)
     app.router.add_post("/api/ollama/toggle", ollama_toggle_handler)
     app.router.add_get("/api/ollama/models", ollama_models_handler)
+    app.router.add_get("/api/ollama/models/progress", ollama_model_progress_handler)
     app.router.add_post("/api/ollama/models/pull", ollama_pull_model_handler)
     app.router.add_post("/api/ollama/models/delete", ollama_delete_model_handler)
     app.router.add_get("/api/peers", peers_handler)
