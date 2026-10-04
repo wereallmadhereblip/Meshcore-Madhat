@@ -144,6 +144,10 @@ if [[ -f "$SCRIPT_DIR/config.json" && "$SELECTED_MODEL" != "llama3.2:1b" ]]; the
   APP_DIR="$APP_DIR" SELECTED_MODEL="$SELECTED_MODEL" python3 -c 'import json, os; from pathlib import Path; p=Path(os.environ["APP_DIR"])/"config.json"; c=json.loads(p.read_text()); c["model"] = os.environ["SELECTED_MODEL"] if c.get("model") == "llama3.2:1b" else c.get("model", "llama3.2:1b"); p.write_text(json.dumps(c, indent=2) + "\n")'
 fi
 
+# Start the dashboard at boot via a systemd user service (can be turned off in app settings).
+"$APP_DIR/.venv/bin/python" "$APP_DIR/madhat.py" --set-autostart on \
+  || echo "Could not enable start at boot; enable it later in the dashboard settings." >&2
+
 echo "Setup complete."
 if [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
   mkdir -p "$DESKTOP_DIR"

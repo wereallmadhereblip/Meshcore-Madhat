@@ -1,4 +1,5 @@
 import asyncio
+import getpass
 import hashlib
 import html
 import inspect
@@ -25,6 +26,8 @@ from meshcore import EventType, MeshCore
 from serial.tools import list_ports
 
 DEFAULT_MODEL = "llama3.2:1b"
+DEFAULT_SERIAL_PORT = "/dev/ttyACM0"
+AUTO_RECONNECT_INTERVAL_SECONDS = 10
 WEB_HOST = "0.0.0.0"
 WEB_PORT = 8080
 MAX_CHANNELS = 40
@@ -40,8 +43,14 @@ CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
 BOT_SETTINGS_PATH = CONFIG_DIR / "meshcore-ollama-bot" / "bot_settings.json"
 CHAT_HISTORY_PATH = CONFIG_DIR / "meshcore-ollama-bot" / "chat_history.json"
 PREFERENCES_PATH = CONFIG_DIR / "meshcore-ollama-bot" / "preferences.json"
+LOG_FILE_PATH = CONFIG_DIR / "meshcore-ollama-bot" / "app.log"
+LOG_FILE_MAX_BYTES = 2 * 1024 * 1024
+LOG_VIEW_MAX_LINES = 2000
 CONFIG_FILE_PATH = Path(__file__).resolve().with_name("config.json")
+AUTOSTART_UNIT_NAME = "meshcore-madhat.service"
+AUTOSTART_UNIT_PATH = CONFIG_DIR / "systemd" / "user" / AUTOSTART_UNIT_NAME
 AVAILABLE_THEMES = {"midnight", "light", "ocean", "amber", "linux", "macos", "cyberpunk", "tron"}
+ADMIN_KEY_PATTERN = re.compile(r"^[0-9a-fA-F]{6,64}$")
 TIME_OF_DAY_PATTERN = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
 
@@ -89,9 +98,9 @@ def load_app_config():
     config = {
         "model": DEFAULT_MODEL,
         "theme": "midnight",
-        "connection": {"type": "bluetooth", "ble_mac": "", "serial_port": ""},
+        "connection": {"type": "serial", "ble_mac": "", "serial_port": DEFAULT_SERIAL_PORT},
         "weather": {"city": "", "state": ""},
-        "bot": {**load_bot_settings(), "greet_new_users": False, "greet_channel": ""},
+        "bot": {**load_bot_settings(), "greet_new_users": False, "greet_channel": "", "admins": []},
         "ollama": {"schedule_enabled": False, "start_time": "07:00", "end_time": "17:00"},
         "auto_update": {"enabled": True},
     }
@@ -139,6 +148,12 @@ def load_app_config():
         greet_channel = saved_bot.get("greet_channel")
         if isinstance(greet_channel, str) and greet_channel.isdigit() and int(greet_channel) < MAX_CHANNELS:
             config["bot"]["greet_channel"] = greet_channel
+        saved_admins = saved_bot.get("admins")
+        if isinstance(saved_admins, list):
+            config["bot"]["admins"] = [
+                item.strip().lower() for item in saved_admins
+                if isinstance(item, str) and ADMIN_KEY_PATTERN.match(item.strip())
+            ]
     saved_ollama = saved_config.get("ollama")
     if isinstance(saved_ollama, dict):
         if isinstance(saved_ollama.get("schedule_enabled"), bool):
@@ -216,7 +231,7 @@ def validate_app_config(value):
 
     bot = value.get("bot", app_config["bot"])
     if not isinstance(bot, dict) or set(bot) - {
-        "name", "personality", "response_length", "greet_new_users", "greet_channel",
+        "name", "personality", "response_length", "greet_new_users", "greet_channel", "admins",
     }:
         raise ValueError("Bot settings contain an unsupported option")
     validated_bot = {}
@@ -244,6 +259,12 @@ def validate_app_config(value):
     if greet_new_users and not greet_channel:
         raise ValueError("Send /greet on in the channel where you want greetings sent")
     validated_bot["greet_channel"] = greet_channel
+    admins = bot.get("admins", app_config["bot"].get("admins", []))
+    if not isinstance(admins, list) or not all(
+        isinstance(item, str) and ADMIN_KEY_PATTERN.match(item.strip()) for item in admins
+    ):
+        raise ValueError("Bot admins must be a list of hex public-key prefixes (6+ characters)")
+    validated_bot["admins"] = [item.strip().lower() for item in admins]
 
     ollama_schedule = value.get("ollama", app_config["ollama"])
     if not isinstance(ollama_schedule, dict) or set(ollama_schedule) - {
@@ -368,6 +389,7 @@ app_state = {
     "serial_port": app_config["connection"]["serial_port"],
     "selected_model": app_config["model"],
     "is_connected": False,
+    "auto_reconnect": True,
     "logs": [],
     "trace_events": [],
     "available_models": [DEFAULT_MODEL, "qwen2.5:0.5b"],
@@ -476,11 +498,33 @@ def save_chat_store():
 load_chat_store()
 
 
+def write_log_file(line):
+    try:
+        LOG_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        if LOG_FILE_PATH.exists() and LOG_FILE_PATH.stat().st_size > LOG_FILE_MAX_BYTES:
+            LOG_FILE_PATH.replace(LOG_FILE_PATH.with_name("app.log.1"))
+        with LOG_FILE_PATH.open("a", encoding="utf-8") as log_file:
+            log_file.write(line.replace("\n", " | ") + "\n")
+    except OSError:
+        pass
+
+
+def read_log_file():
+    lines = []
+    for path in (LOG_FILE_PATH.with_name("app.log.1"), LOG_FILE_PATH):
+        try:
+            lines.extend(path.read_text(encoding="utf-8", errors="replace").splitlines())
+        except OSError:
+            continue
+    return lines[-LOG_VIEW_MAX_LINES:]
+
+
 def log_to_dash(message):
     formatted = f"[{datetime.now():%H:%M:%S}] {message}"
     print(formatted)
     app_state["logs"].append(formatted)
     app_state["logs"] = app_state["logs"][-50:]
+    write_log_file(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {message}")
 
 
 def record_trace_event(kind, direction, target_id):
@@ -1341,7 +1385,167 @@ def update_greeting_setting_from_message(prompt, channel_id=None):
     return "New-user greetings are off."
 
 
+HELP_TEXT = (
+    "Commands: /help, /help settings, /settings (show), /settings <name> <value>, "
+    "/greet on|off (in a channel), /bot <question> (in a channel). "
+    "/settings works in direct messages from admins only."
+)
+SETTINGS_HELP_TEXT = (
+    "/settings names - App: name, personality, length (short|medium|long), model, "
+    "theme, autoupdate on|off, city, state, schedule on|off, start HH:MM, end HH:MM. "
+    "Device: devname, tx, freq, bw, sf, cr, repeat on|off, lat, lon, gps on|off, "
+    "advert flood|zero, synctime, reboot confirm."
+)
+ON_VALUES = {"on", "true", "yes", "1"}
+OFF_VALUES = {"off", "false", "no", "0"}
+
+
+class InternalRequest:
+    def __init__(self, payload):
+        self._payload = payload
+
+    async def json(self):
+        return self._payload
+
+
+def is_settings_admin(sender_id):
+    sender = str(sender_id).lower()
+    return any(
+        sender.startswith(admin) or admin.startswith(sender)
+        for admin in app_config["bot"].get("admins", [])
+    )
+
+
+def parse_on_off(value):
+    value = value.strip().lower()
+    if value in ON_VALUES:
+        return True
+    if value in OFF_VALUES:
+        return False
+    raise ValueError("Use on or off")
+
+
+def save_app_config_change(change):
+    global app_config, bot_settings
+    config = json.loads(json.dumps(app_config))
+    change(config)
+    config = validate_app_config(config)
+    write_app_config(config)
+    app_config = config
+    bot_settings = app_config["bot"]
+    app_state["selected_model"] = app_config["model"]
+
+
+def app_settings_summary():
+    bot = app_config["bot"]
+    return (
+        f"name={bot['name']}; length={bot['response_length']}; model={app_config['model']}; "
+        f"theme={app_config['theme']}; autoupdate={'on' if app_config['auto_update']['enabled'] else 'off'}; "
+        f"city={app_config['weather']['city'] or '-'}. See /help settings"
+    )
+
+
+async def run_device_handler(handler, payload):
+    response = await handler(InternalRequest(payload))
+    data = json.loads(response.text)
+    if response.status >= 400:
+        raise RuntimeError(data.get("error", "Device request failed"))
+    return data
+
+
+async def handle_settings_command(sender_id, args):
+    parts = args.split(None, 1)
+    key = parts[0].lower() if parts else ""
+    value = parts[1].strip() if len(parts) > 1 else ""
+    if not key:
+        return app_settings_summary()
+    if not is_settings_admin(sender_id):
+        log_to_dash(f"Rejected /settings from non-admin {sender_id}")
+        return "You are not allowed to change settings. Add your key to bot.admins in config.json."
+    if not value and key not in {"advert", "synctime"}:
+        return f"Usage: /settings {key} <value>. See /help settings"
+
+    def set_bot(name, text=None):
+        return lambda c: c["bot"].__setitem__(name, value if text is None else text)
+
+    try:
+        app_changes = {
+            "name": set_bot("name"),
+            "personality": set_bot("personality"),
+            "length": set_bot("response_length", value.lower()),
+            "model": lambda c: c.__setitem__("model", value),
+            "theme": lambda c: c.__setitem__("theme", value.lower()),
+            "city": lambda c: c["weather"].__setitem__("city", value),
+            "state": lambda c: c["weather"].__setitem__("state", value),
+            "start": lambda c: c["ollama"].__setitem__("start_time", value),
+            "end": lambda c: c["ollama"].__setitem__("end_time", value),
+        }
+        if key == "autoupdate":
+            enabled = parse_on_off(value)
+            app_changes[key] = lambda c: c["auto_update"].__setitem__("enabled", enabled)
+        elif key == "schedule":
+            enabled = parse_on_off(value)
+            app_changes[key] = lambda c: c["ollama"].__setitem__("schedule_enabled", enabled)
+        if key in app_changes:
+            save_app_config_change(app_changes[key])
+            log_to_dash(f"Settings changed by {sender_id}: {key}")
+            return f"Updated {key}."
+
+        device_values = {
+            "devname": lambda: {"name": value},
+            "tx": lambda: {"tx_power": int(value)},
+            "freq": lambda: {"radio_freq": float(value)},
+            "bw": lambda: {"radio_bw": float(value)},
+            "sf": lambda: {"radio_sf": int(value)},
+            "cr": lambda: {"radio_cr": int(value)},
+            "repeat": lambda: {"repeat": parse_on_off(value)},
+            "lat": lambda: {"adv_lat": float(value)},
+            "lon": lambda: {"adv_lon": float(value)},
+            "gps": lambda: {"gps_enabled": parse_on_off(value)},
+        }
+        if key in device_values:
+            await run_device_handler(update_device_settings_handler, {"values": device_values[key]()})
+            log_to_dash(f"Device setting changed by {sender_id}: {key}")
+            return f"Device {key} updated."
+        if key == "advert":
+            action = "advert_flood" if value.lower() == "flood" else "advert_zero_hop"
+            await run_device_handler(device_action_handler, {"action": action})
+            return "Advert sent."
+        if key == "synctime":
+            await run_device_handler(device_action_handler, {"action": "sync_time"})
+            return "Device time synced."
+        if key == "reboot":
+            if value.lower() != "confirm":
+                return "Send /settings reboot confirm to reboot the device."
+            await run_device_handler(device_action_handler, {"action": "reboot"})
+            return "Device rebooting."
+    except ValueError as error:
+        return f"Invalid value: {error}"
+    except OSError:
+        return "I couldn't save that change to config.json."
+    except Exception as error:
+        log_to_dash(f"/settings {key} failed: {error}")
+        return f"Could not apply {key}: {error}"
+    return "Unknown setting. See /help settings"
+
+
+async def handle_slash_command(sender_id, prompt, allow_settings):
+    match = re.fullmatch(r"\s*/(help|settings)\b\s*(.*)", prompt, re.IGNORECASE | re.DOTALL)
+    if match is None:
+        return None
+    command, args = match.group(1).lower(), match.group(2).strip()
+    if command == "help":
+        return SETTINGS_HELP_TEXT if args.lower() == "settings" else HELP_TEXT
+    if not allow_settings:
+        return "Send /settings in a direct message to me."
+    return await handle_settings_command(sender_id, args)
+
+
 async def generate_ai_response(sender_id, prompt, allow_settings_update=True):
+    command_reply = await handle_slash_command(sender_id, prompt, allow_settings_update)
+    if command_reply is not None:
+        return command_reply
+
     if allow_settings_update:
         greeting_reply = update_greeting_setting_from_message(prompt)
         if greeting_reply is not None:
@@ -1752,6 +1956,96 @@ async def bluetooth_scan_handler(request):
             )
         ]
     })
+
+
+async def logs_handler(request):
+    return web.json_response({"logs": read_log_file()})
+
+
+async def clear_logs_handler(request):
+    for path in (LOG_FILE_PATH, LOG_FILE_PATH.with_name("app.log.1")):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            return web.json_response({"error": str(error)}, status=500)
+    app_state["logs"] = []
+    return web.json_response({"ok": True})
+
+
+def run_systemctl_user(*args):
+    return subprocess.run(
+        ["systemctl", "--user", *args],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+
+
+def autostart_enabled():
+    try:
+        return run_systemctl_user("is-enabled", AUTOSTART_UNIT_NAME).stdout.strip() == "enabled"
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def set_autostart(enabled):
+    """Enable/disable launching the dashboard at boot via a systemd user service."""
+    if shutil.which("systemctl") is None:
+        raise RuntimeError("systemd is not available on this system")
+    if enabled:
+        app_path = Path(__file__).resolve()
+        AUTOSTART_UNIT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        AUTOSTART_UNIT_PATH.write_text(
+            "[Unit]\n"
+            "Description=MeshCore AI Bot Dashboard\n"
+            "After=network-online.target\n\n"
+            "[Service]\n"
+            f"WorkingDirectory={app_path.parent}\n"
+            f"ExecStart={sys.executable} {app_path}\n"
+            "Restart=always\n"
+            "RestartSec=5\n\n"
+            "[Install]\n"
+            "WantedBy=default.target\n",
+            encoding="utf-8",
+        )
+        steps = [("daemon-reload",), ("enable", AUTOSTART_UNIT_NAME)]
+    else:
+        steps = [("disable", AUTOSTART_UNIT_NAME)]
+    for step in steps:
+        result = run_systemctl_user(*step)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or f"systemctl {step[0]} failed")
+    if enabled:
+        # Linger lets the user service start at boot without a login session.
+        subprocess.run(
+            ["loginctl", "enable-linger", getpass.getuser()],
+            capture_output=True,
+            check=False,
+        )
+
+
+async def autostart_handler(request):
+    return web.json_response({"enabled": await asyncio.to_thread(autostart_enabled)})
+
+
+async def update_autostart_handler(request):
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+    enabled = payload.get("enabled") if isinstance(payload, dict) else None
+    if not isinstance(enabled, bool):
+        return web.json_response({"error": "enabled must be true or false"}, status=400)
+    try:
+        await asyncio.to_thread(set_autostart, enabled)
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        log_to_dash(f"Autostart change failed: {error}")
+        return web.json_response({"error": str(error)}, status=500)
+    log_to_dash(f"Start at boot {'enabled' if enabled else 'disabled'}")
+    return web.json_response({"enabled": enabled})
 
 
 async def serial_scan_handler(request):
@@ -2307,7 +2601,11 @@ const commonRadioProfiles={balanced:{radio_bw:125,radio_sf:7,radio_cr:5},long_ra
 function applyTheme(theme,persist=true){let previousTheme=document.body.dataset.theme,wasOverview=document.body.classList.contains('tron-overview');document.body.dataset.theme=theme;let modeSelect=document.getElementById('theme-mode-select'),colorSelect=document.getElementById('theme-select'),colorControl=document.getElementById('classic-theme-control');if(modeSelect)modeSelect.value=theme==='tron'?'tron':'classic';if(colorSelect&&theme!=='tron')colorSelect.value=theme;if(colorControl)colorControl.hidden=theme==='tron';let sessionTitle=document.getElementById('analyzer-session-title');if(sessionTitle)sessionTitle.textContent=theme==='tron'?'MeshCore Live Statistics':'Session';if(theme==='tron'&&previousTheme!=='tron'||theme!=='tron'&&wasOverview)showView('connection');if(persist)saveAppConfig({...appConfig,theme})}
 function selectThemeMode(mode){if(mode==='tron'){applyTheme('tron');return}let colorTheme=document.getElementById('theme-select').value;applyTheme(colorTheme==='tron'?'midnight':colorTheme)}
 function selectClassicTheme(theme){try{localStorage.setItem('meshcore-classic-theme',theme)}catch(error){}applyTheme(theme)}
-function showSettingsTab(tab){document.querySelectorAll('.settings-tab').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.settingsTab===tab)));for(let panel of document.querySelectorAll('.settings-tab-panel'))panel.hidden=panel.id!=='settings-'+tab+'-panel';if(tab==='config'&&!configEditorLoaded)loadConfigEditor();if(tab==='ollama')loadOllamaModels()}
+function showSettingsTab(tab){document.querySelectorAll('.settings-tab').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.settingsTab===tab)));for(let panel of document.querySelectorAll('.settings-tab-panel'))panel.hidden=panel.id!=='settings-'+tab+'-panel';if(tab==='config'){if(!configEditorLoaded)loadConfigEditor();loadAutostart()}if(tab==='ollama')loadOllamaModels();if(tab==='logs')loadAppLogs()}
+async function loadAutostart(){let box=document.getElementById('autostart-enabled');try{let response=await fetch('/api/autostart'),data=await response.json();box.checked=!!data.enabled}catch(error){}}
+async function saveAutostart(){let box=document.getElementById('autostart-enabled'),status=document.getElementById('autostart-status'),wanted=box.checked;try{let response=await fetch('/api/autostart',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:wanted})}),data=await response.json();if(!response.ok)throw new Error(data.error||'Failed');status.textContent=wanted?'Enabled':'Disabled'}catch(error){box.checked=!wanted;status.textContent=error.message}}
+async function loadAppLogs(){let output=document.getElementById('app-log-output');try{let response=await fetch('/api/logs'),data=await response.json();output.textContent=(data.logs||[]).join('\n')||'No log entries.';output.scrollTop=output.scrollHeight}catch(error){output.textContent=error.message}}
+async function clearAppLogs(){if(!confirm('Delete all stored logs?'))return;let status=document.getElementById('app-log-status');try{let response=await fetch('/api/logs',{method:'DELETE'});if(!response.ok)throw new Error((await response.json()).error||'Failed');status.textContent='Logs cleared.';loadAppLogs()}catch(error){status.textContent=error.message}}
 function syncConfigControls(){let colorSelect=document.getElementById('theme-select'),savedClassicTheme=null;try{savedClassicTheme=localStorage.getItem('meshcore-classic-theme')}catch(error){}let validSavedClassicTheme=[...colorSelect.options].some(option=>option.value===savedClassicTheme),classicTheme=appConfig.theme==='tron'?(validSavedClassicTheme?savedClassicTheme:'midnight'):appConfig.theme;colorSelect.value=classicTheme;let modelSelect=document.getElementById('model');if(![...modelSelect.options].some(option=>option.value===appConfig.model))modelSelect.add(new Option(appConfig.model,appConfig.model));modelSelect.value=appConfig.model;document.getElementById('weather-city').value=appConfig.weather.city;document.getElementById('weather-state').value=appConfig.weather.state;document.getElementById('bot-name').value=appConfig.bot.name;document.getElementById('bot-personality').value=appConfig.bot.personality;document.getElementById('bot-response-length').value=appConfig.bot.response_length;document.getElementById('ollama-schedule-enabled').checked=appConfig.ollama.schedule_enabled;document.getElementById('ollama-schedule-start').value=appConfig.ollama.start_time;document.getElementById('ollama-schedule-end').value=appConfig.ollama.end_time;document.getElementById('auto-update-enabled').checked=appConfig.auto_update.enabled;applyTheme(appConfig.theme,false)}
 const weatherIcons={sun:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>',partly:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="16" cy="7" r="3"/><path d="M16 2v1m0 8v1m5-5h-1m-8 0h-1M5 19h12a3 3 0 0 0 .3-6A5 5 0 0 0 8 11.5 3.8 3.8 0 0 0 5 19Z"/></svg>',cloud:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19h13a4 4 0 0 0 .4-8A6 6 0 0 0 7 9.5 4.8 4.8 0 0 0 5 19Z"/></svg>',fog:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm-2 4h14m-10 3h14"/></svg>',rain:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 15h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 7 4 4 0 0 0 5 15Zm2 3-1 2m7-2-1 2m7-2-1 2"/></svg>',snow:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm2 4h.01M12 19h.01M18 18h.01"/></svg>',storm:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm8 1-3 4h3l-1 3 4-5h-3l1-2"/></svg>'};
 function weatherIconName(code){if(code===null||code===undefined||!Number.isFinite(Number(code)))return 'cloud';code=Number(code);if(code===0)return 'sun';if(code===1||code===2)return 'partly';if(code===45||code===48)return 'fog';if(code===51||code===53||code===55||code===56||code===57||code===61||code===63||code===65||code===66||code===67||code===80||code===81||code===82)return 'rain';if(code===71||code===73||code===75||code===77||code===85||code===86)return 'snow';if(code===95||code===96||code===99)return 'storm';return 'cloud'}
@@ -2475,7 +2773,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <button type="button" class="tron-settings-back" onclick="showView('connection')">Dashboard</button>
 <div class="settings-layout">
 <section class="card"><div class="panel-heading"><div><span class="eyebrow">APPLICATION</span><h2>Settings</h2></div><span class="panel-index">04</span></div>
-<div class="settings-tabs" role="tablist" aria-label="Settings sections"><button type="button" class="settings-tab" role="tab" data-settings-tab="preferences" aria-pressed="true" onclick="showSettingsTab('preferences')">Themes</button><button type="button" class="settings-tab" role="tab" data-settings-tab="ollama" aria-pressed="false" onclick="showSettingsTab('ollama')">Ollama</button><button type="button" class="settings-tab" role="tab" data-settings-tab="bot" aria-pressed="false" onclick="showSettingsTab('bot')">Bot</button><button type="button" class="settings-tab" role="tab" data-settings-tab="weather" aria-pressed="false" onclick="showSettingsTab('weather')">Weather</button><button type="button" class="settings-tab" role="tab" data-settings-tab="config" aria-pressed="false" onclick="showSettingsTab('config')">Update</button><button type="button" class="settings-tab" role="tab" data-settings-tab="banner" aria-pressed="false" onclick="showSettingsTab('banner')">Banner</button></div>
+<div class="settings-tabs" role="tablist" aria-label="Settings sections"><button type="button" class="settings-tab" role="tab" data-settings-tab="preferences" aria-pressed="true" onclick="showSettingsTab('preferences')">Themes</button><button type="button" class="settings-tab" role="tab" data-settings-tab="ollama" aria-pressed="false" onclick="showSettingsTab('ollama')">Ollama</button><button type="button" class="settings-tab" role="tab" data-settings-tab="bot" aria-pressed="false" onclick="showSettingsTab('bot')">Bot</button><button type="button" class="settings-tab" role="tab" data-settings-tab="weather" aria-pressed="false" onclick="showSettingsTab('weather')">Weather</button><button type="button" class="settings-tab" role="tab" data-settings-tab="config" aria-pressed="false" onclick="showSettingsTab('config')">Update</button><button type="button" class="settings-tab" role="tab" data-settings-tab="banner" aria-pressed="false" onclick="showSettingsTab('banner')">Banner</button><button type="button" class="settings-tab" role="tab" data-settings-tab="logs" aria-pressed="false" onclick="showSettingsTab('logs')">Logs</button></div>
 <section id="settings-preferences-panel" class="settings-tab-panel">
 <div class="settings-grid">
 <div class="settings-item"><div class="theme-control-row"><label for="theme-mode-select">Theme</label><select id="theme-mode-select" onchange="selectThemeMode(this.value)"><option value="tron">TRON</option><option value="classic">Classic</option></select></div><div id="classic-theme-control" class="theme-control-row"><label for="theme-select">Colors</label><select id="theme-select" onchange="selectClassicTheme(this.value)"><option value="midnight">Midnight</option><option value="light">Light</option><option value="ocean">Ocean</option><option value="amber">Amber</option><option value="linux">Linux Console</option><option value="macos">macOS</option><option value="cyberpunk">Hacker Cyberpunk</option></select></div><p class="settings-description">Select TRON mode or choose Classic with a color palette.</p></div>
@@ -2527,6 +2825,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <section id="settings-config-panel" class="settings-tab-panel" hidden>
 <label for="config-json-editor">config.json contents</label><textarea id="config-json-editor" class="config-json-editor" rows="18" spellcheck="false" aria-label="Edit config.json"></textarea>
 <label class="settings-item-full"><input type="checkbox" id="auto-update-enabled" checked onchange="saveAutoUpdateSetting()"> Automatically check the repository for updates every 24 hours and prompt to install</label>
+<label class="settings-item-full"><input type="checkbox" id="autostart-enabled" onchange="saveAutostart()"> Start the dashboard automatically when the system boots <span id="autostart-status" aria-live="polite"></span></label>
 <div class="config-actions"><button type="button" onclick="saveConfigFile()">Save config.json</button><button id="restart-dashboard-button" type="button" onclick="restartDashboard()">Restart Dashboard</button><button id="update-app-button" class="secondary" type="button" onclick="updateApp()">Update from repository</button><p id="config-status" class="config-status" aria-live="polite"></p></div>
 </section>
 <section id="settings-weather-panel" class="settings-tab-panel" hidden>
@@ -2535,6 +2834,10 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <label for="weather-state">State (optional)<input id="weather-state" name="state" maxlength="80" value="" placeholder="Optional"></label>
 <div class="settings-actions"><button type="submit">Save location</button><p id="weather-settings-status" class="preferences-status" aria-live="polite"></p></div>
 </form>
+</section>
+<section id="settings-logs-panel" class="settings-tab-panel" hidden>
+<pre id="app-log-output" class="device-debug-output" style="max-height:60vh;margin:0 0 12px">Loading...</pre>
+<div class="config-actions"><button type="button" onclick="loadAppLogs()">Refresh</button><button type="button" class="secondary" onclick="clearAppLogs()">Clear logs</button><p id="app-log-status" class="config-status" aria-live="polite"></p></div>
 </section>
 <section id="settings-banner-panel" class="settings-tab-panel" hidden>
 <div class="settings-grid">
@@ -3633,11 +3936,13 @@ async def connect_handler(request):
     except OSError as error:
         log_to_dash(f"Failed to save connection settings to config.json: {error}")
 
+    app_state["auto_reconnect"] = True
     await connect_hardware()
     return web.json_response({"is_connected": app_state["is_connected"]})
 
 
 async def disconnect_handler(request):
+    app_state["auto_reconnect"] = False
     await disconnect_hardware()
     return web.json_response({"is_connected": False})
 
@@ -3680,13 +3985,25 @@ async def transmit_handler(request):
 
 
 async def auto_connect_hardware():
-    connection = app_config["connection"]
-    connection_type = connection["type"]
-    target = connection["ble_mac"] if connection_type == "bluetooth" else connection["serial_port"]
-    if not target:
-        return
-    log_to_dash("Reconnecting to the previously selected MeshCore device...")
-    await connect_hardware()
+    # Keeps retrying so the bot recovers when the radio is unplugged or reboots.
+    while True:
+        try:
+            if app_state["auto_reconnect"] and not app_state["is_connected"] and not connection_lock.locked():
+                if app_state["connection_type"] == "bluetooth":
+                    target = app_state["ble_mac"]
+                else:
+                    target = app_state["serial_port"]
+                    if target == DEFAULT_SERIAL_PORT and not os.path.exists(target):
+                        target = ""
+                if target:
+                    log_to_dash(f"Auto-connecting to MeshCore device {target}...")
+                    await connect_hardware()
+            await asyncio.sleep(AUTO_RECONNECT_INTERVAL_SECONDS)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            log_to_dash(f"Auto-connect error: {error}")
+            await asyncio.sleep(AUTO_RECONNECT_INTERVAL_SECONDS)
 
 
 async def on_startup(app):
@@ -3727,6 +4044,10 @@ def create_app():
     app.router.add_post("/api/ollama/models/delete", ollama_delete_model_handler)
     app.router.add_get("/api/peers", peers_handler)
     app.router.add_get("/api/peer-telemetry", peer_telemetry_handler)
+    app.router.add_get("/api/autostart", autostart_handler)
+    app.router.add_post("/api/autostart", update_autostart_handler)
+    app.router.add_get("/api/logs", logs_handler)
+    app.router.add_delete("/api/logs", clear_logs_handler)
     app.router.add_get("/api/scan/bluetooth", bluetooth_scan_handler)
     app.router.add_get("/api/scan/serial", serial_scan_handler)
     app.router.add_get("/api/chat-history", chat_history_handler)
@@ -3745,6 +4066,9 @@ def create_app():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "--set-autostart" and sys.argv[2] in {"on", "off"}:
+        set_autostart(sys.argv[2] == "on")
+        sys.exit(0)
     if (
         not os.environ.pop("MESHC_OPS_RESTARTING", None)
         and should_auto_open_browser()

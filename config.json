@@ -2,9 +2,9 @@
   "model": "llama3.2:1b",
   "theme": "tron",
   "connection": {
-    "type": "bluetooth",
+    "type": "serial",
     "ble_mac": "",
-    "serial_port": ""
+    "serial_port": "/dev/ttyACM0"
   },
   "weather": {
     "city": "",

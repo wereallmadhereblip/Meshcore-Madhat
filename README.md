@@ -31,6 +31,8 @@ The script starts the dashboard in the foreground. On a desktop session it also 
 hostname -I
 ```
 
+Setup also enables the dashboard to start automatically at boot through a systemd user service (`meshcore-madhat.service`, with lingering enabled so it runs without a login). Turn it off under **Settings → Update → Start the dashboard automatically when the system boots**, or run `systemctl --user disable meshcore-madhat.service`. Because the service owns port `8080`, use `systemctl --user stop meshcore-madhat.service` before running the dashboard manually.
+
 The dashboard listens on the network so another device can access it. Keep it on a trusted LAN and do not expose port `8080` to the public internet.
 
 If setup added your account to the `dialout` group, log out and back in before using serial connections.
