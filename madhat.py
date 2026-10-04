@@ -1615,9 +1615,17 @@ def system_power_summary():
     return ", ".join(parts)
 
 
+FASTFETCH_FIELDS = {
+    "os": "OS", "host": "Host", "kernel": "Kernel", "uptime": "Up", "cpu": "CPU",
+    "gpu": "GPU", "memory": "RAM", "swap": "Swap", "disk": "Disk",
+    "local ip": "IP", "battery": "Bat",
+}
+
+
 def system_fastfetch_info():
+    # --logo none drops the ASCII art, which can't be shown in the MeshCore app.
     result = subprocess.run(
-        ["fastfetch", "--pipe"],
+        ["fastfetch", "--logo", "none", "--pipe"],
         capture_output=True,
         text=True,
         timeout=10,
@@ -1628,10 +1636,16 @@ def system_fastfetch_info():
         raise RuntimeError(error)
 
     output = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", result.stdout)
-    lines = [line.strip() for line in output.splitlines() if line.strip()]
-    if not lines:
+    items = []
+    for line in output.splitlines():
+        key, separator, value = line.partition(":")
+        value = re.sub(r"\s+", " ", value).strip()
+        label = FASTFETCH_FIELDS.get(re.sub(r"\s*\(.*\)$", "", key.strip()).lower())
+        if separator and label and value:
+            items.append(f"{label}: {value}")
+    if not items:
         raise RuntimeError("fastfetch returned no system information")
-    return limit_ai_reply(" | ".join(lines), MAX_AI_REPLY_PACKETS * 75)
+    return limit_ai_reply(" | ".join(items), MAX_AI_REPLY_PACKETS * 75)
 
 
 async def handle_slash_command(sender_id, prompt, allow_settings):
