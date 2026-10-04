@@ -1158,6 +1158,14 @@ WEATHER_CODES = {
 }
 
 
+def wind_arrow(degrees_from):
+    """Arrow pointing the way the wind is blowing (the API reports where it comes from)."""
+    if degrees_from is None:
+        return ""
+    arrows = "↑↗→↘↓↙←↖"
+    return arrows[round(((float(degrees_from) + 180) % 360) / 45) % 8]
+
+
 async def geocode_location(session, location):
     # Open-Meteo's geocoding search wants just a place name, so a combined
     # "city state"/"city country" string (e.g. "hartford connecticut") often
@@ -1268,7 +1276,7 @@ async def fetch_weather_response(prompt, sender_id=None):
                 params={
                     "latitude": latitude,
                     "longitude": longitude,
-                    "current": "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m",
+                    "current": "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m",
                     "daily": "weather_code,temperature_2m_max,temperature_2m_min",
                     "forecast_days": 3,
                     "temperature_unit": temperature_unit,
@@ -1287,8 +1295,8 @@ async def fetch_weather_response(prompt, sender_id=None):
             f"{location_label}: {current['temperature_2m']:.0f}{temperature_label} "
             f"(feels {current['apparent_temperature']:.0f}), "
             f"{WEATHER_CODES.get(code, 'unknown')}, "
-            f"hum {current['relative_humidity_2m']}%, "
-            f"wind {current['wind_speed_10m']:.0f}{wind_label}"
+            f"humidity {current['relative_humidity_2m']}%, "
+            f"wind {wind_arrow(current.get('wind_direction_10m'))}{current['wind_speed_10m']:.0f}{wind_label}"
         )
         if forecast_requested:
             daily = weather["daily"]
