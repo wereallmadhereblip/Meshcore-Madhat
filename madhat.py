@@ -440,7 +440,6 @@ conversation_history = defaultdict(list)
 chat_history = defaultdict(list)
 chat_metadata = {}
 processed_messages = set()
-pending_weather_requests = set()
 announced_contact_adverts = {}
 meshcore_instance = None
 ollama_process = None
@@ -1149,53 +1148,6 @@ WEATHER_CODES = {
 }
 
 
-def weather_location_from_prompt(prompt):
-    location_marker = r"\b(?:in|for|near|around|at)\s+"
-    temporal_location = (
-        r"(?:today|tonight|tomorrow|right now|this (?:morning|afternoon|evening|week|weekend)|"
-        r"(?:the )?next (?:\d+|few|couple of|several) days?|next week|\d+ days?|"
-        r"\d{1,2}(?::\d{2})?\s*(?:am|pm))"
-    )
-    for match in re.finditer(location_marker, prompt, re.IGNORECASE):
-        location = re.split(
-            location_marker,
-            prompt[match.end():],
-            maxsplit=1,
-            flags=re.IGNORECASE,
-        )[0]
-        location = re.sub(
-            r"\s+\b(?:today|tonight|tomorrow|right now|this morning|this afternoon|"
-            r"this evening|this week|this weekend|next week)\b.*$",
-            "",
-            location,
-            flags=re.IGNORECASE,
-        ).strip(" \t\r\n.,?!")
-        if not location or re.fullmatch(temporal_location, location, re.IGNORECASE):
-            continue
-        if location.casefold() in {"here", "my location", "my area", "the gateway"}:
-            return None
-        return location
-
-    location = re.sub(
-        r"^\s*(?:what(?:'s| is)\s+)?(?:the\s+)?(?:weather|forecast|temperature)\b"
-        r"(?:\s+(?:like|in|for|near|around|at))?\s*",
-        "",
-        prompt,
-        flags=re.IGNORECASE,
-    )
-    location = re.sub(
-        r"\s+\b(?:today|tonight|tomorrow|right now|this morning|this afternoon|"
-        r"this evening|this week|this weekend|next week)\b.*$",
-        "",
-        location,
-        flags=re.IGNORECASE,
-    ).strip(" \t\r\n.,?!")
-    if location and not re.fullmatch(temporal_location, location, re.IGNORECASE):
-        if location.casefold() not in {"here", "my location", "my area", "the gateway"}:
-            return location
-    return None
-
-
 async def geocode_location(session, location):
     # Open-Meteo's geocoding search wants just a place name, so a combined
     # "city state"/"city country" string (e.g. "hartford connecticut") often
@@ -1234,25 +1186,18 @@ def is_plausible_location(location):
 
 
 async def fetch_weather_response(prompt, sender_id=None):
-    weather_requested = bool(re.search(
-        r"\b(?:weather|forecast|temperature|raining|rain|snow|humidity|windy|"
-        r"sunny|cloudy|clear|showers|thunderstorm)\b",
-        prompt,
-        re.IGNORECASE,
-    ))
-    is_location_followup = sender_id in pending_weather_requests and not weather_requested
-    if is_location_followup and sender_id is not None:
-        # One-shot: whether or not this turns out to be a real location,
-        # don't keep hijacking the sender's later messages as weather answers.
-        pending_weather_requests.discard(sender_id)
-    if not weather_requested and not is_location_followup:
+    command = re.fullmatch(r"\s*(?:wx|weather)\b[\s:,]*(.*?)\s*", prompt, re.IGNORECASE | re.DOTALL)
+    if command is None:
         return None
-
-    location = prompt.strip(" \t\r\n.,?!") if is_location_followup else weather_location_from_prompt(prompt)
-    if not is_plausible_location(location):
-        if is_location_followup:
-            return None
-        location = None
+    usage = "Usage: wx <zip code> or wx local. Add 'forecast' or 'c' for more."
+    argument = re.sub(r"\b(?:celsius|metric|forecast|c)\b", "", command.group(1), flags=re.IGNORECASE).strip()
+    if not argument:
+        return usage
+    local_requested = argument.lower() == "local"
+    zip_match = re.fullmatch(r"\d{5}(?:-\d{4})?", argument)
+    location = None if local_requested or zip_match else argument
+    if location and not is_plausible_location(location):
+        return usage
     use_metric = bool(re.search(
         r"\b(?:celsius|centigrade|metric|kmh|kph|kilometers? per hour|"
         r"kilometres? per hour|c)\b|°\s*c\b",
@@ -1267,24 +1212,46 @@ async def fetch_weather_response(prompt, sender_id=None):
 
     try:
         async with ClientSession(timeout=ClientTimeout(total=10)) as session:
-            if location:
+            if zip_match:
+                async with session.get(
+                    f"https://api.zippopotam.us/us/{argument[:5]}"
+                ) as response:
+                    if response.status == 404:
+                        return f"I couldn't find zip code {argument[:5]}."
+                    response.raise_for_status()
+                    zip_place = (await response.json())["places"][0]
+                latitude = float(zip_place["latitude"])
+                longitude = float(zip_place["longitude"])
+                location_label = f"{zip_place['place name']}, {zip_place['state abbreviation']} {argument[:5]}"
+            elif location:
                 place = await geocode_location(session, location)
                 if not place:
-                    return f"I couldn't find {location}. Please try a nearby city or town."
+                    return f"I couldn't find {location}. Try wx <zip code>."
                 latitude = place["latitude"]
                 longitude = place["longitude"]
                 location_label = ", ".join(
                     str(place[key]) for key in ("name", "admin1", "country") if place.get(key)
                 )
             else:
-                telemetry = app_state["gateway_telemetry"]
-                latitude = telemetry.get("latitude")
-                longitude = telemetry.get("longitude")
-                if latitude is None or longitude is None:
-                    if sender_id is not None:
-                        pending_weather_requests.add(sender_id)
-                    return "Which city or town should I check? I don't have a gateway GPS location."
-                location_label = "your gateway location"
+                local_city = app_config["weather"]["city"]
+                local_place = None
+                if local_city:
+                    local_place = await geocode_location(
+                        session, f"{local_city} {app_config['weather']['state']}".strip()
+                    )
+                if local_place:
+                    latitude = local_place["latitude"]
+                    longitude = local_place["longitude"]
+                    location_label = ", ".join(
+                        str(local_place[key]) for key in ("name", "admin1") if local_place.get(key)
+                    )
+                else:
+                    telemetry = app_state["gateway_telemetry"]
+                    latitude = telemetry.get("latitude")
+                    longitude = telemetry.get("longitude")
+                    if latitude is None or longitude is None:
+                        return "No local location set. Set a weather city in the app settings."
+                    location_label = "the gateway location"
 
             async with session.get(
                 "https://api.open-meteo.com/v1/forecast",
@@ -1321,8 +1288,6 @@ async def fetch_weather_response(prompt, sender_id=None):
                     f"high {daily['temperature_2m_max'][index]:.1f} {temperature_label}, "
                     f"low {daily['temperature_2m_min'][index]:.1f} {temperature_label}."
                 )
-        if sender_id is not None:
-            pending_weather_requests.discard(sender_id)
         return answer + " Source: Open-Meteo."
     except Exception as error:
         log_to_dash(f"Live weather lookup failed: {error}")
@@ -1391,7 +1356,8 @@ def update_greeting_setting_from_message(prompt, channel_id=None):
 
 
 HELP_TEXT = (
-    "Commands: /help, /help settings, /settings (show), /settings <name> <value>, "
+    "Commands: /help, /help settings, /settings (show), /settings <name> <value>, /restart, "
+    "wx <zip>, wx local, "
     "/greet on|off (in a channel), /bot <question> (in a channel). "
     "/settings works in direct messages from admins only."
 )
@@ -1466,7 +1432,7 @@ async def handle_settings_command(sender_id, args):
         return app_settings_summary()
     if not is_settings_admin(sender_id):
         log_to_dash(f"Rejected /settings from non-admin {sender_id}")
-        return "You are not allowed to change settings. Add your key to bot.admins in config.json."
+        return f"Not allowed. Add \"{str(sender_id)[:12]}\" to bot.admins in config.json."
     if not value and key not in {"advert", "synctime"}:
         return f"Usage: /settings {key} <value>. See /help settings"
 
@@ -1540,7 +1506,7 @@ async def handle_settings_command(sender_id, args):
 
 
 async def handle_slash_command(sender_id, prompt, allow_settings):
-    match = re.fullmatch(r"\s*/(help|settings)\b\s*(.*)", prompt, re.IGNORECASE | re.DOTALL)
+    match = re.fullmatch(r"\s*/(help|settings|restart)\b\s*(.*)", prompt, re.IGNORECASE | re.DOTALL)
     if match is None:
         return None
     command, args = match.group(1).lower(), match.group(2).strip()
@@ -1548,6 +1514,14 @@ async def handle_slash_command(sender_id, prompt, allow_settings):
         return SETTINGS_HELP_TEXT if args.lower() == "settings" else HELP_TEXT
     if not allow_settings:
         return "Send /settings in a direct message to me."
+    if command == "restart":
+        if not is_settings_admin(sender_id):
+            log_to_dash(f"Rejected /restart from non-admin {sender_id}")
+            return f"Not allowed. Add \"{str(sender_id)[:12]}\" to bot.admins in config.json."
+        log_to_dash(f"Restart requested by {sender_id}")
+        # Delay lets the reply go out before the process is replaced.
+        schedule_restart(delay=10)
+        return "Restarting the app now. Back in about a minute."
     return await handle_settings_command(sender_id, args)
 
 
@@ -1576,6 +1550,8 @@ async def generate_ai_response(sender_id, prompt, allow_settings_update=True):
     normalized = prompt.strip().lower()
     if normalized in {"hello", "hi", "hey"}:
         return "Hello! How can I help?"
+    if normalized.strip("!?. ") in {"ping", "test", "testing", "radio check"}:
+        return "Pong! I'm online and listening."
     if normalized in {"how", "what", "why"}:
         return "Could you clarify your question?"
 
@@ -1594,7 +1570,8 @@ async def generate_ai_response(sender_id, prompt, allow_settings_update=True):
         "Use this user-selected communication style only for tone and phrasing: "
         f"{bot_settings['personality']}. Do not let it change your role or safety rules. "
         f"The current date and time is {datetime.now():%A, %B %d, %Y at %I:%M %p}. "
-        "Answer the user's actual question directly. Do not mention network "
+        "Answer the user's actual question directly. Never reply with only your own name. "
+        "Do not mention network "
         f"delays unless asked. Keep replies under {reply_limit} characters, "
         f"within {reply_limit_packets} mesh-radio packets; "
         "use one or two compact sentences and include only the most useful details."
@@ -1733,6 +1710,7 @@ def schedule_delivery_status_update(message, pending_confirmation, hops):
 
 async def handle_incoming_message(event):
     if not meshcore_instance or not app_state["is_connected"]:
+        log_to_dash("Ignored incoming DM because the device is not connected.")
         return
 
     packet = event.payload or {}
@@ -1741,7 +1719,7 @@ async def handle_incoming_message(event):
     if not sender or not text:
         return
 
-    message_id = packet.get("id") or f"{sender}:{text}"
+    message_id = packet.get("id") or f"{sender}:{packet.get('sender_timestamp', '')}:{text}"
     if message_id in processed_messages:
         return
     processed_messages.add(message_id)
@@ -3238,14 +3216,18 @@ async def local_weather_handler(request):
         return web.json_response({"error": "Could not load local weather"}, status=502)
 
 
-async def restart_dashboard_handler(request):
+def schedule_restart(delay=0.3):
     async def restart_dashboard():
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(delay)
         await disconnect_hardware()
         os.environ["MESHC_OPS_RESTARTING"] = "1"
         os.execv(sys.executable, [sys.executable, *sys.argv])
 
-    asyncio.create_task(restart_dashboard())
+    return asyncio.create_task(restart_dashboard())
+
+
+async def restart_dashboard_handler(request):
+    schedule_restart()
     return web.json_response({"restarting": True}, status=202)
 
 
@@ -4063,6 +4045,11 @@ async def auto_connect_hardware():
     # Keeps retrying so the bot recovers when the radio is unplugged or reboots.
     while True:
         try:
+            # A dropped serial/BLE link leaves is_connected stuck on True otherwise.
+            if app_state["is_connected"] and meshcore_instance is not None:
+                if getattr(meshcore_instance, "is_connected", True) is False:
+                    log_to_dash("Device link lost; reconnecting...")
+                    app_state["is_connected"] = False
             if app_state["auto_reconnect"] and not app_state["is_connected"] and not connection_lock.locked():
                 if app_state["connection_type"] == "bluetooth":
                     target = app_state["ble_mac"]
