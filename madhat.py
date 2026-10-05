@@ -3114,7 +3114,7 @@ body[data-theme="tron"] .settings-tabs{background:transparent}
 body[data-theme="tron"] .tron-mode-button{background:rgba(0,80,100,.28)}
 body[data-theme="tron"].tron-overview{background-color:#000}
 body[data-theme="tron"].tron-overview #connection-view .connection-card{display:flex;flex-direction:column;overflow:hidden}
-.incoming-adverts{display:flex;flex:0 0 33%;flex-direction:row;align-items:center;gap:8px;min-width:180px;max-width:33%;height:30px;overflow:hidden;padding:2px 6px;border-left:2px solid var(--accent);background:transparent}
+.incoming-adverts{display:flex;flex:0 0 auto;width:min(33%,300px);flex-direction:row;align-items:center;gap:8px;min-width:180px;max-width:33%;height:30px;overflow:hidden;padding:2px 6px;border-left:2px solid var(--accent);background:transparent}
 .incoming-adverts-heading{display:flex;flex:none;flex-direction:column;align-items:flex-start;gap:1px;margin:0}
 .incoming-adverts-heading h3{margin:0;color:var(--muted);font-size:8px;font-weight:700;text-transform:uppercase;white-space:nowrap}
 .incoming-adverts-count{color:var(--muted);font:8px ui-monospace,monospace}
@@ -3124,11 +3124,11 @@ body[data-theme="tron"].tron-overview #connection-view .connection-card{display:
 .incoming-advert-track.scrolling{animation:advert-marquee var(--advert-duration,20s) linear infinite}
 .incoming-adverts-list:hover .incoming-advert-track.scrolling{animation-play-state:paused}
 .incoming-advert-group{display:flex;flex-direction:column;gap:1px;padding-bottom:6px}
-.incoming-advert-row{display:flex;align-items:center;justify-content:space-between;gap:6px;min-width:0;min-height:11px;padding:0 4px;border-left:1px solid var(--border);background:transparent}
+.incoming-advert-row{display:flex;align-items:center;justify-content:flex-start;gap:6px;width:fit-content;max-width:100%;min-width:0;min-height:11px;padding:0 4px;border-left:1px solid var(--border);background:transparent}
 .incoming-advert-name{min-width:0;overflow:hidden;color:var(--text);font:9px ui-monospace,monospace;text-overflow:ellipsis;white-space:nowrap}
 .incoming-advert-meta{flex:none;color:var(--muted);font:8px ui-monospace,monospace;white-space:nowrap}
 @keyframes advert-marquee{from{transform:translateY(0)}to{transform:translateY(-50%)}}
-body[data-theme="tron"] .incoming-adverts{flex:0 0 33%;min-width:0;max-width:33%;height:30px;border-left-color:#00d8ff;background:rgba(0,0,0,.45)}
+body[data-theme="tron"] .incoming-adverts{flex:0 0 auto;width:min(33%,300px);min-width:0;max-width:33%;height:30px;border-left-color:#00d8ff;background:rgba(0,0,0,.45)}
 body[data-theme="tron"] .incoming-adverts-heading h3{color:#58dff7;font:600 9px "IBM Plex Mono","Cascadia Code",ui-monospace,monospace}
 body[data-theme="tron"] .incoming-adverts-count{font-size:9px}
 body[data-theme="tron"] .incoming-advert-empty{font:9px/1.3 ui-monospace,monospace}
