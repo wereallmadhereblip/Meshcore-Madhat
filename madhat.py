@@ -736,10 +736,28 @@ def add_chat_message(target_type, target, direction, text):
     save_chat_store()
     if direction == "incoming":
         app_state["incoming_message_count"] += 1
+        sender_name = ""
+        channel_name = ""
+        body = text
+        if target_type == "channel":
+            entry = next(
+                (value for key, value in app_state["channels"].items() if str(key) == str(target)),
+                None,
+            )
+            channel_name = display_name(target, entry) if entry is not None else f"Channel {target}"
+            sender_match = re.match(r"^\s*(?:\[([^\]]{1,40})\]|([^:\r\n\[]{1,40}):)\s*(.*)$", text, re.DOTALL)
+            if sender_match:
+                sender_name = (sender_match.group(1) or sender_match.group(2)).strip()
+                body = sender_match.group(3)
+        else:
+            entry = app_state["contacts"].get(str(target))
+            sender_name = display_name(target, entry) if entry is not None else f"Node {str(target)[:8]}"
         app_state["latest_incoming_message"] = {
             "type": target_type,
             "target": str(target),
-            "text": text[:120],
+            "sender": sender_name,
+            "channel": channel_name,
+            "text": body[:120],
         }
     return message
 
@@ -3224,7 +3242,7 @@ async function deleteOllamaModel(modelName){if(!window.confirm('Delete model "'+
 let notificationsInitialized=false,lastIncomingCount=0,notificationAudio=null;
 function notificationsEnabled(){try{return localStorage.getItem('meshcore-message-notifications')!=='off'}catch(error){return true}}
 function playNotificationSound(){try{notificationAudio=notificationAudio||new(window.AudioContext||window.webkitAudioContext)();let ctx=notificationAudio;if(ctx.state==='suspended')ctx.resume();let now=ctx.currentTime;[880,1175].forEach((freq,i)=>{let osc=ctx.createOscillator(),gain=ctx.createGain();osc.type='sine';osc.frequency.value=freq;gain.gain.setValueAtTime(0.0001,now+i*0.15);gain.gain.exponentialRampToValueAtTime(0.2,now+i*0.15+0.02);gain.gain.exponentialRampToValueAtTime(0.0001,now+i*0.15+0.14);osc.connect(gain);gain.connect(ctx.destination);osc.start(now+i*0.15);osc.stop(now+i*0.15+0.15)})}catch(error){}}
-function handleIncomingNotifications(d){let count=Number(d.incoming_message_count||0);if(!notificationsInitialized){lastIncomingCount=count;notificationsInitialized=true;return}if(count>lastIncomingCount){lastIncomingCount=count;if(notificationsEnabled()){playNotificationSound();let m=d.latest_incoming_message;if(m)showToast(m.type==='channel'?'New channel message':'New direct message',m.text);if(m&&'Notification'in window&&Notification.permission==='granted'&&document.hidden){try{new Notification('New MeshCore message',{body:m.text})}catch(error){}}}}else if(count<lastIncomingCount){lastIncomingCount=count}}
+function handleIncomingNotifications(d){let count=Number(d.incoming_message_count||0);if(!notificationsInitialized){lastIncomingCount=count;notificationsInitialized=true;return}if(count>lastIncomingCount){lastIncomingCount=count;if(notificationsEnabled()){playNotificationSound();let m=d.latest_incoming_message;if(m)showToast(m.type==='channel'?(m.sender?m.sender+' \u00b7 ':'')+'#'+(m.channel||m.target):(m.sender||'New direct message'),m.text);if(m&&'Notification'in window&&Notification.permission==='granted'&&document.hidden){try{new Notification('New MeshCore message',{body:m.text})}catch(error){}}}}else if(count<lastIncomingCount){lastIncomingCount=count}}
 function showToast(title,body,duration=3500){let stack=document.getElementById('toast-stack');if(!stack){stack=document.createElement('div');stack.id='toast-stack';stack.setAttribute('aria-live','polite');document.body.append(stack)}let toast=document.createElement('div'),heading=document.createElement('strong'),text=document.createElement('span');toast.className='toast';heading.textContent=title;text.textContent=body;toast.append(heading,text);stack.append(toast);while(stack.children.length>3)stack.firstChild.remove();requestAnimationFrame(()=>toast.classList.add('show'));setTimeout(()=>{toast.classList.remove('show');setTimeout(()=>toast.remove(),300)},duration)}
 function syncNotificationControl(){let box=document.getElementById('notification-toggle');if(box)box.checked=notificationsEnabled()}
 function saveNotificationSetting(){let enabled=document.getElementById('notification-toggle').checked;try{localStorage.setItem('meshcore-message-notifications',enabled?'on':'off')}catch(error){}if(enabled){playNotificationSound();if('Notification'in window&&Notification.permission==='default')Notification.requestPermission()}}
