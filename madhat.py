@@ -2773,6 +2773,14 @@ body:has(#nodes-view:not([hidden])){height:100vh;overflow:hidden}
 .settings-tab{min-height:32px;padding:6px 10px;border-color:transparent;border-bottom:2px solid transparent;border-radius:0;background:transparent;color:var(--muted)}
 .settings-tab[aria-pressed="true"]{border-bottom-color:var(--accent);color:var(--accent)}
 .settings-tab-panel[hidden]{display:none}
+.bot-terminal{grid-column:1/-1;width:100%;margin-top:16px;border:1px solid var(--border);border-radius:6px;background:#050a0d;color:#c8e6d0;font:12px/1.5 ui-monospace,"Cascadia Code",monospace;overflow:hidden}
+.bot-terminal-bar{display:flex;align-items:center;gap:12px;padding:6px 10px;border-bottom:1px solid var(--border);color:#7fa;font-size:10px;font-weight:700;letter-spacing:.08em}
+.bot-terminal-note{flex:1;color:var(--muted);font-weight:400;letter-spacing:0}
+.bot-terminal-bar button{min-height:22px;padding:2px 8px;font-size:10px}
+.bot-terminal-output{height:280px;overflow-y:auto;padding:10px;white-space:pre-wrap;word-break:break-word}
+.bot-terminal-output .you{color:#8cf}.bot-terminal-output .bot{color:#c8e6d0;margin-bottom:8px}.bot-terminal-output .err{color:#f88}.bot-terminal-output .sys{color:#789}
+.bot-terminal-input{display:flex;align-items:center;gap:8px;padding:8px 10px;border-top:1px solid var(--border)}
+.bot-terminal-input span{color:#7fa}.bot-terminal-input input{flex:1;min-width:0;margin:0;background:transparent;border:0;color:inherit;font:inherit;outline:none}
 .weather-settings-layout{max-width:560px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:end}
 .weather-settings-layout label{margin:0}
 .weather-settings-layout .settings-actions{grid-column:1/-1;display:flex;align-items:center;gap:10px}
@@ -3211,6 +3219,9 @@ async function loadLocalWeather(){let temperature=document.getElementById('weath
 async function loadAppConfig(){try{let response=await fetch('/api/config'),data=await response.json();if(!response.ok)throw new Error(data.error||'Settings could not be loaded');appConfig=data;syncConfigControls();if(new URLSearchParams(window.location.search).get('preview')==='tron')applyTheme('tron',false);loadLocalWeather();maybeCheckForUpdates()}catch(error){let statusMessage=document.getElementById('preferences-status');statusMessage.dataset.state='error';statusMessage.textContent=error.message}}
 async function saveAppConfig(config,statusId='preferences-status'){let statusMessage=document.getElementById(statusId);statusMessage.dataset.state='';statusMessage.textContent='Saving config.json...';try{let response=await fetch('/api/config',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)}),data=await response.json();if(!response.ok)throw new Error(data.error||'Settings could not be saved');appConfig=data;syncConfigControls();if(statusId==='config-status'){document.getElementById('config-json-editor').value=JSON.stringify(appConfig,null,2);configEditorLoaded=true}statusMessage.textContent='Saved to config.json.';statusMessage.dataset.state='success'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
 async function savePreference(key,value){await saveAppConfig({...appConfig,[key]:value})}
+function botTerminalLine(cls,text){let out=document.getElementById('bot-terminal-output'),line=document.createElement('div');line.className=cls;line.textContent=text;out.appendChild(line);out.scrollTop=out.scrollHeight;return line}
+async function sendBotTerminal(event){event.preventDefault();let input=document.getElementById('bot-terminal-text'),send=document.getElementById('bot-terminal-send'),message=input.value.trim();if(!message)return;input.value='';botTerminalLine('you','> '+message);send.disabled=true;let pending=botTerminalLine('sys','thinking...');try{let response=await fetch('/api/bot-console',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message})}),data=await response.json();pending.remove();if(!response.ok)throw new Error(data.error||'Request failed');botTerminalLine('bot',data.reply||'(no reply)')}catch(error){pending.remove();botTerminalLine('err','Error: '+error.message)}finally{send.disabled=false;input.focus()}}
+async function clearBotTerminal(){document.getElementById('bot-terminal-output').replaceChildren();try{await fetch('/api/bot-console',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reset:true})})}catch(error){}}
 async function saveBotSettings(event){event.preventDefault();let name=document.getElementById('bot-name').value.trim(),personality=document.getElementById('bot-personality').value.trim(),responseLength=document.getElementById('bot-response-length').value,greetNewUsers=document.getElementById('bot-greet-new-users').checked,statusMessage=document.getElementById('bot-settings-status');if(!name||!personality){statusMessage.textContent='Enter a bot name and personality.';statusMessage.dataset.state='error';return}await saveAppConfig({...appConfig,bot:{name,personality,response_length:responseLength,greet_new_users:greetNewUsers}},'bot-settings-status')}
 async function saveGreetingSetting(enabled){let checkbox=document.getElementById('bot-greet-new-users'),statusMessage=document.getElementById('bot-settings-status');if(enabled&&!appConfig.bot.greet_channel){checkbox.checked=false;statusMessage.textContent='Send /greet on in the channel where you want greetings sent.';statusMessage.dataset.state='error';return}await saveAppConfig({...appConfig,bot:{...appConfig.bot,greet_new_users:enabled}},'bot-settings-status')}
 async function saveWeatherLocation(event){event.preventDefault();let city=document.getElementById('weather-city').value.trim(),state=document.getElementById('weather-state').value.trim();if(!city){let statusMessage=document.getElementById('weather-settings-status');statusMessage.textContent='Enter a city.';statusMessage.dataset.state='error';return}await saveAppConfig({...appConfig,weather:{city,state}},'weather-settings-status');if(document.getElementById('weather-settings-status').dataset.state==='success')loadLocalWeather()}
@@ -3444,6 +3455,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <div class="settings-item"><label for="bot-response-length">Response length</label><select id="bot-response-length" name="response_length"><option value="short">Short (up to 3 packets)</option><option value="medium">Medium (up to 6 packets)</option><option value="long">Long (up to 12 packets)</option></select><p class="settings-description">Caps how many mesh-radio packets a direct message or channel reply can use, so long answers don't flood the network.</p></div>
 <div class="settings-actions"><button type="submit">Save bot settings</button><p id="bot-settings-status" class="preferences-status" aria-live="polite"></p></div>
 </form>
+<div class="bot-terminal" id="bot-terminal"><div class="bot-terminal-bar"><span>BOT TERMINAL</span><span class="bot-terminal-note">Local test chat &middot; not sent to the MeshCore device</span><button type="button" onclick="clearBotTerminal()">Clear</button></div><div class="bot-terminal-output" id="bot-terminal-output" role="log" aria-live="polite"></div><form class="bot-terminal-input" onsubmit="sendBotTerminal(event)"><span>&gt;</span><input id="bot-terminal-text" autocomplete="off" maxlength="2000" placeholder="Ask the model something..."><button type="submit" id="bot-terminal-send">Send</button></form></div>
 </section>
 <section id="settings-tightvnc-panel" class="settings-tab-panel" hidden>
 <div class="settings-grid">
@@ -3573,6 +3585,49 @@ async def status_handler(request):
         "incoming_message_count": app_state["incoming_message_count"],
         "latest_incoming_message": app_state["latest_incoming_message"],
     })
+
+
+bot_console_history = []
+bot_console_lock = asyncio.Lock()
+
+
+async def bot_console_handler(request):
+    # Isolated from the radio: never touches the MeshCore device or chat logs.
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if data.get("reset"):
+        bot_console_history.clear()
+        return web.json_response({"ok": True})
+    message = str(data.get("message", "")).strip()[:2000]
+    if not message:
+        return web.json_response({"error": "Enter a message"}, status=400)
+    if not app_state["ollama_running"]:
+        return web.json_response({"error": "Ollama is not running"}, status=503)
+    system = (
+        f"You are {bot_settings['name']}, an AI assistant. "
+        "Use this communication style only for tone and phrasing: "
+        f"{bot_settings['personality']}. "
+        f"The current date and time is {datetime.now():%A, %B %d, %Y at %I:%M %p}. "
+        "You have no internet access; never invent facts."
+    )
+    async with bot_console_lock:
+        bot_console_history.append({"role": "user", "content": message})
+        del bot_console_history[:-MAX_HISTORY_MESSAGES]
+        try:
+            reply = await asyncio.to_thread(
+                sync_generate,
+                [{"role": "system", "content": system}, *bot_console_history],
+                app_state["selected_model"],
+            )
+        except Exception as error:
+            bot_console_history.pop()
+            log_to_dash(f"Bot console error: {error}")
+            return web.json_response({"error": "The model could not respond"}, status=502)
+        reply = reply.strip()
+        bot_console_history.append({"role": "assistant", "content": reply})
+    return web.json_response({"reply": reply, "model": app_state["selected_model"]})
 
 
 async def ollama_toggle_handler(request):
@@ -4763,6 +4818,7 @@ def create_app():
     app.router.add_post("/api/restart", restart_dashboard_handler)
     app.router.add_post("/api/update", update_app_handler)
     app.router.add_get("/api/update/check", check_for_update_handler)
+    app.router.add_post("/api/bot-console", bot_console_handler)
     app.router.add_post("/api/ollama/toggle", ollama_toggle_handler)
     app.router.add_get("/api/ollama/models", ollama_models_handler)
     app.router.add_get("/api/ollama/models/progress", ollama_model_progress_handler)
