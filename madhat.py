@@ -3132,6 +3132,14 @@ body[data-theme="tron"] .incoming-advert-empty{font:9px/1.3 ui-monospace,monospa
 body[data-theme="tron"] .incoming-advert-row{border-left:2px solid rgba(0,190,235,.52);background:rgba(0,30,42,.36)}
 body[data-theme="tron"] .incoming-advert-name{font-size:10px}
 body[data-theme="tron"] .incoming-advert-meta{color:#75b4c8;font-size:9px}
+.noise-floor{display:flex;flex:1 1 160px;align-items:center;gap:8px;min-width:140px;max-width:320px;height:30px;overflow:hidden;padding:2px 6px;border-left:2px solid var(--accent);background:transparent}
+.noise-floor-heading{display:flex;flex:none;flex-direction:column;align-items:flex-start;gap:1px}
+.noise-floor-heading h3{margin:0;color:var(--muted);font-size:8px;font-weight:700;text-transform:uppercase;white-space:nowrap}
+.noise-floor-value{color:var(--accent);font:9px ui-monospace,monospace;white-space:nowrap}
+.noise-floor-canvas{flex:1;min-width:0;width:100%;height:26px;display:block}
+body[data-theme="tron"] .noise-floor{border-left-color:#00d8ff;background:rgba(0,0,0,.45)}
+body[data-theme="tron"] .noise-floor-heading h3{color:#58dff7;font:600 9px "IBM Plex Mono","Cascadia Code",ui-monospace,monospace}
+@media(max-width:720px){.noise-floor{flex-basis:100%;max-width:none}}
 .incoming-advert-new{animation:advert-arrival .24s ease-out}
 @keyframes advert-arrival{from{opacity:0;transform:translateX(-5px)}to{opacity:1;transform:translateX(0)}}
 body[data-theme="tron"] .analyzer-stat-grid{display:none}
@@ -3218,6 +3226,11 @@ function playNotificationSound(){try{notificationAudio=notificationAudio||new(wi
 function handleIncomingNotifications(d){let count=Number(d.incoming_message_count||0);if(!notificationsInitialized){lastIncomingCount=count;notificationsInitialized=true;return}if(count>lastIncomingCount){lastIncomingCount=count;if(notificationsEnabled()){playNotificationSound();let m=d.latest_incoming_message;if(m&&'Notification'in window&&Notification.permission==='granted'&&document.hidden){try{new Notification('New MeshCore message',{body:m.text})}catch(error){}}}}else if(count<lastIncomingCount){lastIncomingCount=count}}
 function syncNotificationControl(){let box=document.getElementById('notification-toggle');if(box)box.checked=notificationsEnabled()}
 function saveNotificationSetting(){let enabled=document.getElementById('notification-toggle').checked;try{localStorage.setItem('meshcore-message-notifications',enabled?'on':'off')}catch(error){}if(enabled){playNotificationSound();if('Notification'in window&&Notification.permission==='default')Notification.requestPermission()}}
+const NOISE_MAX_POINTS=90;
+let noiseSamples=[],noiseLoading=false;
+function drawNoiseScope(){let canvas=document.getElementById('noise-floor-canvas');if(!canvas)return;let w=canvas.clientWidth,h=canvas.clientHeight;if(!w||!h)return;let dpr=window.devicePixelRatio||1;if(canvas.width!==Math.round(w*dpr)||canvas.height!==Math.round(h*dpr)){canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr)}let ctx=canvas.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);let style=getComputedStyle(document.body),accent=style.getPropertyValue('--accent').trim()||'#00d8ff',muted=style.getPropertyValue('--border').trim()||'#244';ctx.strokeStyle=muted;ctx.lineWidth=1;ctx.globalAlpha=.6;for(let i=1;i<3;i++){let y=Math.round(h*i/3)+.5;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}ctx.globalAlpha=1;if(noiseSamples.length<2)return;let values=noiseSamples.map(sample=>sample.v),lo=Math.min(...values),hi=Math.max(...values),span=Math.max(10,hi-lo),mid=(hi+lo)/2;lo=mid-span/2;hi=mid+span/2;let x=i=>w-(noiseSamples.length-1-i)*(w/(NOISE_MAX_POINTS-1)),y=v=>h-2-(v-lo)/(hi-lo)*(h-4);ctx.beginPath();noiseSamples.forEach((sample,i)=>{i?ctx.lineTo(x(i),y(sample.v)):ctx.moveTo(x(i),y(sample.v))});ctx.strokeStyle=accent;ctx.lineWidth=1.5;ctx.shadowColor=accent;ctx.shadowBlur=4;ctx.stroke();ctx.shadowBlur=0}
+async function pollNoiseFloor(){let label=document.getElementById('noise-floor-value');if(!label||noiseLoading||document.hidden)return;noiseLoading=true;try{let response=await fetch('/api/noise-floor'),data=await response.json();if(!response.ok||typeof data.noise_floor!=='number'){label.textContent=data.connected===false?'offline':'-- dBm';return}if(!noiseSamples.length||noiseSamples[noiseSamples.length-1].t!==data.time){noiseSamples.push({t:data.time,v:data.noise_floor});if(noiseSamples.length>NOISE_MAX_POINTS)noiseSamples.shift()}label.textContent=data.noise_floor+' dBm';drawNoiseScope()}catch(error){label.textContent='-- dBm'}finally{noiseLoading=false}}
+window.addEventListener('resize',drawNoiseScope);
 function handleTraceEvents(events){if(!traceEventsInitialized){for(let event of events)addTraceActivity(event);lastSeenTraceEventId=events.length?Number(events[events.length-1].id):0;traceEventsInitialized=true;return}for(let event of events){let eventId=Number(event.id);if(eventId<=lastSeenTraceEventId)continue;addTraceActivity(event);if(event.kind==='direct')pulseTrace(event.target_id,event.direction);lastSeenTraceEventId=eventId}}
 function addTraceActivity(event){let list=document.getElementById('live-trace-feed-list');if(list){document.getElementById('live-trace-feed-empty')?.remove();let target=event.target_name||event.target_id||'Unknown';let label=event.kind==='direct'?(event.direction==='inbound'?'Direct message from ':'Direct message to ')+target:(event.direction==='inbound'?'Message received on ':'Message sent to ')+'Channel '+target;let entry=document.createElement('div');entry.className='live-trace-feed-item';let timestamp=document.createElement('time');timestamp.textContent=event.timestamp||'';let body=document.createElement('div');body.textContent=label;entry.append(timestamp,body);list.prepend(entry);while(list.children.length>60)list.lastElementChild.remove()}addAnalyzerPacket(event)}
 function addAnalyzerPacket(event){let list=document.getElementById('analyzer-packet-list');if(!list)return;let empty=list.querySelector('.packet-empty');empty?.parentElement.remove();let row=document.createElement('tr');row.tabIndex=0;let direction=event.direction==='inbound'?'IN':'OUT';let transport=event.kind==='direct'?'DIRECT':'CHANNEL';let status=event.direction==='inbound'?'RECEIVED':'SENT';let values=[event.timestamp||'--',direction,transport,event.target_name||event.target_id||'Unknown',status];values.forEach((value,index)=>{let cell=document.createElement('td');cell.textContent=String(value);if(index===1)cell.className='packet-direction';if(index===2&&transport==='CHANNEL')cell.className='packet-channel';row.appendChild(cell)});row.onclick=()=>showAnalyzerEvent(event);row.onkeydown=key=>{if(key.key==='Enter'||key.key===' '){key.preventDefault();showAnalyzerEvent(event)}};list.prepend(row);while(list.children.length>60)list.lastElementChild.remove();analyzerEventCount=Math.min(analyzerEventCount+1,60);document.getElementById('analyzer-total').textContent=String(analyzerEventCount)}
@@ -3313,11 +3326,12 @@ function initTronLayout(){tronLayout=loadTronLayout();let tray=document.createEl
 function initConsoleDock(){let dock=document.getElementById('console-dock'),toggle=document.getElementById('console-toggle');if(!dock||!toggle)return;let collapsed=true;dock.classList.toggle('collapsed',collapsed);toggle.setAttribute('aria-expanded',String(!collapsed));restoreConsoleLayout();if(window.ResizeObserver)new ResizeObserver(()=>{if(!consoleDrag)saveConsoleLayout()}).observe(dock);window.addEventListener('resize',()=>clampConsolePosition(dock))}
 function applyBannerVisibility(){let prefs={link:true,battery:true,weather:true,time:true};try{prefs={...prefs,...JSON.parse(localStorage.getItem('meshcore-banner-visibility')||'{}')}}catch(error){}let map={link:'banner-item-link',battery:'banner-item-battery',weather:'banner-item-weather',time:'banner-item-time'};for(let key of Object.keys(map)){let item=document.getElementById(map[key]);if(item)item.hidden=!prefs[key];let checkbox=document.getElementById('banner-toggle-'+key);if(checkbox)checkbox.checked=prefs[key]}}
 function saveBannerVisibility(){let prefs={link:document.getElementById('banner-toggle-link').checked,battery:document.getElementById('banner-toggle-battery').checked,weather:document.getElementById('banner-toggle-weather').checked,time:document.getElementById('banner-toggle-time').checked};try{localStorage.setItem('meshcore-banner-visibility',JSON.stringify(prefs))}catch(error){}applyBannerVisibility()}
-window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();status();peers();loadAppConfig();loadOllamaModels();updateClock();initConsoleDock();applyBannerVisibility();syncNotificationControl();initTronLayout();setInterval(updateClock,1000);setInterval(refreshActiveHistory,3000);setInterval(loadLocalWeather,30*60*1000)});setInterval(status,2000);setInterval(peers,10000);
+window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();status();peers();loadAppConfig();loadOllamaModels();updateClock();initConsoleDock();applyBannerVisibility();syncNotificationControl();initTronLayout();pollNoiseFloor();setInterval(pollNoiseFloor,2000);setInterval(updateClock,1000);setInterval(refreshActiveHistory,3000);setInterval(loadLocalWeather,30*60*1000)});setInterval(status,2000);setInterval(peers,10000);
 </script></head><body>
 <header class="dashboard-header">
 <div class="brand-lockup"><img class="dashboard-logo" src="/dashboard-logo.png" alt="Dashboard logo"><div class="brand-copy"><span class="header-label">MESHCORE + OLLAMA</span><h1>DASHBOARD</h1></div></div>
 <section class="incoming-adverts" aria-label="Incoming radio adverts"><div class="incoming-adverts-heading"><h3>Incoming Adverts</h3><span id="incoming-adverts-count" class="incoming-adverts-count">0</span></div><div id="incoming-adverts-list" class="incoming-adverts-list" aria-live="polite"><p class="incoming-advert-empty">Waiting for incoming adverts...</p></div></section>
+<section class="noise-floor" aria-label="Noise floor"><div class="noise-floor-heading"><h3>Noise Floor</h3><span id="noise-floor-value" class="noise-floor-value">-- dBm</span></div><canvas id="noise-floor-canvas" class="noise-floor-canvas" role="img" aria-label="Real-time noise floor in dBm"></canvas></section>
 <nav class="top-nav" aria-label="Dashboard pages"><button type="button" class="nav-tab" data-view="connection" aria-pressed="true" onclick="showView('connection')">Connection</button><button type="button" class="nav-tab" data-view="nodes" aria-pressed="false" onclick="showView('nodes')">Nodes</button><button type="button" class="nav-tab" data-view="channels" aria-pressed="false" onclick="showView('channels')">Channels</button><button type="button" class="nav-tab" data-view="map" aria-pressed="false" onclick="showView('map')">Map <span class="nav-count" id="map-node-count" hidden>0</span></button><button type="button" class="nav-tab" data-view="analyzer" aria-pressed="false" onclick="showView('analyzer')">Analyzer <span class="nav-count" id="analyzer-count" hidden>0</span></button><button type="button" class="nav-tab" data-view="settings" aria-pressed="false" onclick="showView('settings')">App Settings</button><button type="button" class="nav-tab" data-view="device-settings" aria-pressed="false" onclick="showView('device-settings')">Device Settings</button></nav>
 <div class="header-meta">
 <div id="banner-item-link" class="header-meta-item"><span class="header-label">LINK</span><span id="status" class="header-status disconnected">DISCONNECTED</span></div>
@@ -4522,6 +4536,31 @@ async def device_action_handler(request):
         return web.json_response({"error": str(error)}, status=502)
 
 
+async def noise_floor_handler(request):
+    if not meshcore_instance or not app_state["is_connected"]:
+        return web.json_response({"connected": False}, status=503)
+    method = getattr(meshcore_instance.commands, "get_stats_radio", None)
+    if method is None:
+        return web.json_response({"error": "This firmware does not support radio statistics"}, status=501)
+    # Skip the read while the radio is busy sending so the scope never delays replies.
+    if not hardware_lock.locked():
+        try:
+            async with paced_hardware_lock():
+                result = await asyncio.wait_for(method(), timeout=3)
+            if result is not None and result.type != EventType.ERROR and isinstance(result.payload, dict):
+                noise = result.payload.get("noise_floor")
+                if isinstance(noise, (int, float)):
+                    app_state["noise_floor"] = {
+                        "noise_floor": noise,
+                        "last_rssi": result.payload.get("last_rssi"),
+                        "last_snr": result.payload.get("last_snr"),
+                        "time": time.time(),
+                    }
+        except Exception as error:
+            log_to_dash(f"Noise floor read failed: {error}")
+    return web.json_response({"connected": True, **(app_state.get("noise_floor") or {})})
+
+
 async def device_gpx_export_handler(request):
     export_type = request.query.get("type", "all")
     if export_type not in {"repeaters", "contacts", "all"}:
@@ -4714,6 +4753,7 @@ def create_app():
     app.router.add_get("/api/scan/bluetooth", bluetooth_scan_handler)
     app.router.add_get("/api/scan/serial", serial_scan_handler)
     app.router.add_get("/api/chat-history", chat_history_handler)
+    app.router.add_get("/api/noise-floor", noise_floor_handler)
     app.router.add_post("/api/chat-management", manage_chat_handler)
     app.router.add_post("/api/delete-target", delete_target_handler)
     app.router.add_get("/api/device-settings", device_settings_handler)
