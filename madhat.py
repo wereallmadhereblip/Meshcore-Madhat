@@ -1680,13 +1680,40 @@ def disconnect_wifi():
         raise RuntimeError(nmcli_error(result, "disconnect failed"))
 
 
+WIFI_AP_STATE_PATH = TIGHTVNC_PID_PATH.with_name("wifi-ap-paused.json")
+
+
+def wifi_client_profiles():
+    result = run_nmcli(["-t", "-f", "NAME,TYPE", "connection", "show"], 15)
+    names = []
+    for line in result.stdout.splitlines():
+        fields = split_nmcli_fields(line)
+        if len(fields) >= 2 and fields[1] == "802-11-wireless" and fields[0] != WIFI_AP_CONNECTION:
+            names.append(fields[0])
+    return names
+
+
+def wifi_ap_active(interface):
+    result = run_nmcli(["-t", "-f", "GENERAL.CONNECTION,GENERAL.STATE", "dev", "show", interface], 15)
+    return WIFI_AP_CONNECTION in result.stdout and "(connected)" in result.stdout
+
+
 def start_wifi_ap():
     interface = wifi_interface()
     run_nmcli(["radio", "wifi", "on"], 15)
-    # Drop any current client connection and stale hotspot profile so the adapter is free.
+    # Saved networks would otherwise auto-reconnect and take the adapter back from the AP.
+    paused = [n for n in wifi_client_profiles() if run_nmcli(["-g", "connection.autoconnect", "connection", "show", n], 15).stdout.strip() != "no"]
+    try:
+        WIFI_AP_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        WIFI_AP_STATE_PATH.write_text(json.dumps(paused))
+    except OSError:
+        pass
+    for name in paused:
+        run_nmcli(["connection", "modify", name, "connection.autoconnect", "no"], 15)
     run_nmcli(["connection", "down", WIFI_AP_CONNECTION], 15)
     run_nmcli(["dev", "disconnect", interface], 30)
     run_nmcli(["connection", "delete", WIFI_AP_CONNECTION], 15)
+    error = None
     result = run_nmcli([
         "connection", "add", "type", "wifi", "ifname", interface, "con-name", WIFI_AP_CONNECTION,
         "autoconnect", "no", "ssid", WIFI_AP_SSID,
@@ -1695,22 +1722,37 @@ def start_wifi_ap():
         "wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", WIFI_AP_PASSWORD,
     ], 30)
     if result.returncode != 0:
-        raise RuntimeError(nmcli_error(result, "could not create the access point profile"))
-    result = run_nmcli(["connection", "up", WIFI_AP_CONNECTION, "ifname", interface], 45)
-    if result.returncode != 0:
-        error = nmcli_error(result, "could not start the access point")
+        error = nmcli_error(result, "could not create the access point profile")
+    else:
+        result = run_nmcli(["connection", "up", WIFI_AP_CONNECTION, "ifname", interface], 45)
+        if result.returncode != 0:
+            error = nmcli_error(result, "could not start the access point")
+        else:
+            time.sleep(4)
+            if not wifi_ap_active(interface):
+                error = "access point started but dropped (adapter may not support AP mode)"
+    if error:
         run_nmcli(["connection", "delete", WIFI_AP_CONNECTION], 15)
+        restore_wifi_clients()
         raise RuntimeError(error)
-    check = run_nmcli(["-t", "-f", "NAME,DEVICE", "connection", "show", "--active"], 15)
-    if WIFI_AP_CONNECTION not in check.stdout:
-        raise RuntimeError("access point did not stay up")
+
+
+def restore_wifi_clients():
+    try:
+        names = json.loads(WIFI_AP_STATE_PATH.read_text())
+        WIFI_AP_STATE_PATH.unlink()
+    except (OSError, ValueError):
+        return
+    for name in names if isinstance(names, list) else []:
+        run_nmcli(["connection", "modify", str(name), "connection.autoconnect", "yes"], 15)
 
 
 def stop_wifi_ap():
     result = run_nmcli(["connection", "down", WIFI_AP_CONNECTION], 30)
+    run_nmcli(["connection", "delete", WIFI_AP_CONNECTION], 15)
+    restore_wifi_clients()
     if result.returncode != 0:
         raise RuntimeError(nmcli_error(result, "access point is not running"))
-    run_nmcli(["connection", "delete", WIFI_AP_CONNECTION], 15)
 
 
 def local_ip_addresses():
