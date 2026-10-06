@@ -1414,7 +1414,7 @@ def update_greeting_setting_from_message(prompt, channel_id=None):
 
 
 HELP_TEXT = (
-    "Commands: /help, /help settings, /settings (show), /settings <name> <value>, /restart, /update, /syswifi status|on|off, /reboot, /sysreboot, /tightvnc on|off|restart, /power, /fastfetch, "
+    "Commands: /help, /help settings, /settings (show), /settings <name> <value>, /restart, /update, /syswifi status|on|off|scan|connect <n> <password>, /reboot, /sysreboot, /tightvnc on|off|restart, /power, /fastfetch, "
     "wx <zip>, wx local, "
     "/greet on|off (in a channel), /bot <question> (in a channel). "
     "/settings works in direct messages from admins only."
@@ -1588,6 +1588,67 @@ def run_wifi_command(action):
                 return command[0], result.stdout
             last_error = result.stderr.strip() or result.stdout.strip()
     raise RuntimeError(last_error or "Wi-Fi command failed")
+
+
+WIFI_SCAN_LIMIT = 10
+wifi_scan_results = {}
+
+
+def run_nmcli(args, timeout):
+    if not shutil.which("nmcli"):
+        raise RuntimeError("nmcli is not installed")
+    last = None
+    for prefix in ([], ["sudo", "-n"]):
+        if prefix and os.geteuid() == 0:
+            continue
+        last = subprocess.run([*prefix, "nmcli", *args], capture_output=True, text=True, timeout=timeout, check=False)
+        if last.returncode == 0:
+            break
+    return last
+
+
+def split_nmcli_fields(line):
+    fields, current, escaped = [], "", False
+    for char in line:
+        if escaped:
+            current += char
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == ":":
+            fields.append(current)
+            current = ""
+        else:
+            current += char
+    fields.append(current)
+    return fields
+
+
+def scan_wifi_networks():
+    result = run_nmcli(["-t", "-f", "SSID,SIGNAL,SECURITY", "dev", "wifi", "list", "--rescan", "yes"], 30)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "scan failed")
+    best = {}
+    for line in result.stdout.splitlines():
+        fields = split_nmcli_fields(line)
+        if len(fields) < 3 or not fields[0].strip():
+            continue
+        ssid = fields[0]
+        try:
+            signal_pct = int(fields[1])
+        except ValueError:
+            signal_pct = 0
+        if ssid not in best or signal_pct > best[ssid]["signal"]:
+            best[ssid] = {"ssid": ssid, "signal": signal_pct, "secured": bool(fields[2].strip() and fields[2].strip() != "--")}
+    return sorted(best.values(), key=lambda n: -n["signal"])[:WIFI_SCAN_LIMIT]
+
+
+def connect_wifi_network(ssid, password):
+    command = ["-w", "20", "dev", "wifi", "connect", ssid]
+    if password:
+        command += ["password", password]
+    result = run_nmcli(command, 40)
+    return result.returncode == 0
 
 
 def wifi_status_text(tool, output):
@@ -1769,9 +1830,38 @@ async def handle_slash_command(sender_id, prompt, allow_settings):
         if not is_settings_admin(sender_id):
             log_to_dash(f"Rejected /syswifi from non-admin {sender_id}")
             return f"Not allowed. Add \"{str(sender_id)[:12]}\" to bot.admins in config.json."
-        action = args.lower()
+        parts = args.split(None, 2)
+        action = parts[0].lower() if parts else ""
+        if action == "scan":
+            try:
+                networks = await asyncio.to_thread(scan_wifi_networks)
+            except Exception as error:
+                log_to_dash(f"/syswifi scan failed: {error}")
+                return f"Wi-Fi scan failed: {error}"[:120]
+            wifi_scan_results[sender_id] = networks
+            if not networks:
+                return "No Wi-Fi access points found."
+            lines = [f"{i}. {n['ssid'][:32]} ({n['signal']}%{'' if n['secured'] else ', open'})" for i, n in enumerate(networks, 1)]
+            return "Wi-Fi networks:\n" + "\n".join(lines) + "\nReply: /syswifi connect <number> <password>"
+        if action == "connect":
+            networks = wifi_scan_results.get(sender_id)
+            if not networks:
+                return "Run /syswifi scan first."
+            if len(parts) < 2 or not parts[1].isdigit() or not 1 <= int(parts[1]) <= len(networks):
+                return "Usage: /syswifi connect <number> <password> (number from /syswifi scan)"
+            network = networks[int(parts[1]) - 1]
+            password = parts[2].strip() if len(parts) > 2 else ""
+            if network["secured"] and len(password) < 8:
+                return "That network needs a password (8+ characters): /syswifi connect <number> <password>"
+            log_to_dash(f"/syswifi connect to {network['ssid']} requested by {sender_id}")
+            try:
+                connected = await asyncio.to_thread(connect_wifi_network, network["ssid"], password)
+            except Exception as error:
+                log_to_dash(f"/syswifi connect failed: {error}")
+                return "Wi-Fi failed"
+            return "Wi-Fi connected" if connected else "Wi-Fi failed"
         if action not in {"status", "on", "off"}:
-            return "Usage: /syswifi status, /syswifi on, or /syswifi off"
+            return "Usage: /syswifi status, on, off, scan, or connect <number> <password>"
         try:
             tool, output = await asyncio.to_thread(run_wifi_command, action)
             if action == "status":
