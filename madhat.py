@@ -1698,6 +1698,21 @@ def wifi_ap_active(interface):
     return WIFI_AP_CONNECTION in result.stdout and "(connected)" in result.stdout
 
 
+WIFI_AP_DNSMASQ_CONF = Path("/etc/NetworkManager/dnsmasq-shared.d/madhat-ap.conf")
+
+
+def set_ap_dhcp_only(enabled):
+    # Another service often owns port 53, which makes NetworkManager's dnsmasq fail; the AP only needs DHCP.
+    try:
+        if enabled:
+            run_privileged("mkdir", "-p", str(WIFI_AP_DNSMASQ_CONF.parent))
+            run_privileged("tee", str(WIFI_AP_DNSMASQ_CONF), input_text="port=0\n")
+        else:
+            run_privileged("rm", "-f", str(WIFI_AP_DNSMASQ_CONF))
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def start_wifi_ap():
     interface = wifi_interface()
     run_nmcli(["radio", "wifi", "on"], 15)
@@ -1715,6 +1730,7 @@ def start_wifi_ap():
     run_nmcli(["connection", "delete", WIFI_AP_CONNECTION], 15)
     error = None
     ip_address = None
+    set_ap_dhcp_only(True)
     if not (shutil.which("dnsmasq") or Path("/usr/sbin/dnsmasq").exists()):
         error = "dnsmasq is missing; run: sudo apt install dnsmasq-base"
     # The default shared subnet can clash with another connection, so retry on a different one.
@@ -1748,6 +1764,7 @@ def start_wifi_ap():
         break
     if error:
         run_nmcli(["connection", "delete", WIFI_AP_CONNECTION], 15)
+        set_ap_dhcp_only(False)
         restore_wifi_clients()
         raise RuntimeError(error)
     return ip_address or "10.42.0.1"
@@ -1766,6 +1783,7 @@ def restore_wifi_clients():
 def stop_wifi_ap():
     result = run_nmcli(["connection", "down", WIFI_AP_CONNECTION], 30)
     run_nmcli(["connection", "delete", WIFI_AP_CONNECTION], 15)
+    set_ap_dhcp_only(False)
     restore_wifi_clients()
     if result.returncode != 0:
         raise RuntimeError(nmcli_error(result, "access point is not running"))
