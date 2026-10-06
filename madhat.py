@@ -1414,7 +1414,7 @@ def update_greeting_setting_from_message(prompt, channel_id=None):
 
 
 HELP_TEXT = (
-    "Commands: /help, /help settings, /settings (show), /settings <name> <value>, /restart, /update, /syswifi status|on|off|scan|connect <n> <password>, /reboot, /sysreboot, /tightvnc on|off|restart, /power, /fastfetch, "
+    "Commands: /help, /help settings, /settings (show), /settings <name> <value>, /restart, /update, /syswifi status|on|off|scan|connect <n> <password>|disconnect|ap [off], /reboot, /sysreboot, /tightvnc on|off|restart, /power, /fastfetch, "
     "wx <zip>, wx local, "
     "/greet on|off (in a channel), /bot <question> (in a channel). "
     "/settings works in direct messages from admins only."
@@ -1651,6 +1651,67 @@ def connect_wifi_network(ssid, password):
     return result.returncode == 0
 
 
+WIFI_AP_SSID = "orangepizero"
+WIFI_AP_PASSWORD = "orangepi"
+WIFI_AP_CONNECTION = "madhat-hotspot"
+
+
+def wifi_interface():
+    result = run_nmcli(["-t", "-f", "DEVICE,TYPE", "dev"], 15)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "could not list network devices")
+    for line in result.stdout.splitlines():
+        fields = split_nmcli_fields(line)
+        if len(fields) >= 2 and fields[1] == "wifi":
+            return fields[0]
+    raise RuntimeError("no Wi-Fi adapter found")
+
+
+def disconnect_wifi():
+    interface = wifi_interface()
+    result = run_nmcli(["dev", "disconnect", interface], 30)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "disconnect failed")
+
+
+def start_wifi_ap():
+    interface = wifi_interface()
+    run_nmcli(["connection", "delete", WIFI_AP_CONNECTION], 15)
+    result = run_nmcli([
+        "dev", "wifi", "hotspot", "ifname", interface, "con-name", WIFI_AP_CONNECTION,
+        "ssid", WIFI_AP_SSID, "password", WIFI_AP_PASSWORD,
+    ], 40)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "hotspot failed")
+
+
+def stop_wifi_ap():
+    result = run_nmcli(["connection", "down", WIFI_AP_CONNECTION], 30)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "access point is not running")
+    run_nmcli(["connection", "delete", WIFI_AP_CONNECTION], 15)
+
+
+def local_ip_addresses():
+    addresses = []
+    try:
+        result = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=5, check=False)
+        addresses = [a for a in result.stdout.split() if "." in a]
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return addresses
+
+
+def wifi_ap_instructions():
+    user = getpass.getuser()
+    return (
+        f"Access point {WIFI_AP_SSID} started (password {WIFI_AP_PASSWORD}).\n"
+        f"1. Join that Wi-Fi on your device.\n"
+        f"2. SSH: ssh {user}@10.42.0.1\n"
+        f"3. VNC: send /tightvnc on, then open https://10.42.0.1:6080/vnc.html and accept the certificate warning."
+    )
+
+
 def wifi_status_text(tool, output):
     if tool == "nmcli":
         return output.strip().lower() == "enabled"
@@ -1825,7 +1886,13 @@ async def handle_slash_command(sender_id, prompt, allow_settings):
             )
         if action == "restart":
             return "TightVNC and noVNC restarted."
-        return f"TightVNC and noVNC turned {'off' if action == 'off' else 'on'}."
+        if action == "off":
+            return "TightVNC and noVNC turned off."
+        addresses = await asyncio.to_thread(local_ip_addresses)
+        if not addresses:
+            return "TightVNC and noVNC turned on. Open https://<ip>:6080/vnc.html (could not detect IP)."
+        urls = "\n".join(f"https://{a}:6080/vnc.html" for a in addresses[:3])
+        return (f"TightVNC and noVNC turned on. Open in a browser (accept the certificate warning):\n{urls}")
     if command == "syswifi":
         if not is_settings_admin(sender_id):
             log_to_dash(f"Rejected /syswifi from non-admin {sender_id}")
@@ -1860,8 +1927,27 @@ async def handle_slash_command(sender_id, prompt, allow_settings):
                 log_to_dash(f"/syswifi connect failed: {error}")
                 return "Wi-Fi failed"
             return "Wi-Fi connected" if connected else "Wi-Fi failed"
+        if action == "disconnect":
+            try:
+                await asyncio.to_thread(disconnect_wifi)
+            except Exception as error:
+                log_to_dash(f"/syswifi disconnect failed: {error}")
+                return f"Wi-Fi disconnect failed: {error}"[:120]
+            log_to_dash(f"Computer Wi-Fi disconnected by {sender_id}")
+            return "Wi-Fi disconnected."
+        if action == "ap":
+            stop = len(parts) > 1 and parts[1].lower() in {"off", "stop"}
+            try:
+                await asyncio.to_thread(stop_wifi_ap if stop else start_wifi_ap)
+            except Exception as error:
+                log_to_dash(f"/syswifi ap failed: {error}")
+                return f"Wi-Fi access point failed: {error}"[:120]
+            log_to_dash(f"Wi-Fi access point {'stopped' if stop else 'started'} by {sender_id}")
+            if stop:
+                return "Wi-Fi access point stopped."
+            return wifi_ap_instructions()
         if action not in {"status", "on", "off"}:
-            return "Usage: /syswifi status, on, off, scan, or connect <number> <password>"
+            return "Usage: /syswifi status, on, off, scan, connect <number> <password>, disconnect, or ap [off]"
         try:
             tool, output = await asyncio.to_thread(run_wifi_command, action)
             if action == "status":
