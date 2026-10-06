@@ -1714,27 +1714,43 @@ def start_wifi_ap():
     run_nmcli(["dev", "disconnect", interface], 30)
     run_nmcli(["connection", "delete", WIFI_AP_CONNECTION], 15)
     error = None
-    result = run_nmcli([
-        "connection", "add", "type", "wifi", "ifname", interface, "con-name", WIFI_AP_CONNECTION,
-        "autoconnect", "no", "ssid", WIFI_AP_SSID,
-        "802-11-wireless.mode", "ap", "802-11-wireless.band", "bg",
-        "ipv4.method", "shared", "ipv4.addresses", "10.42.0.1/24", "ipv6.method", "ignore",
-        "wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", WIFI_AP_PASSWORD,
-    ], 30)
-    if result.returncode != 0:
-        error = nmcli_error(result, "could not create the access point profile")
-    else:
+    ip_address = None
+    if not (shutil.which("dnsmasq") or Path("/usr/sbin/dnsmasq").exists()):
+        error = "dnsmasq is missing; run: sudo apt install dnsmasq-base"
+    # The default shared subnet can clash with another connection, so retry on a different one.
+    for address in ([] if error else [None, "192.168.77.1/24", "172.31.77.1/24"]):
+        run_nmcli(["connection", "down", WIFI_AP_CONNECTION], 15)
+        run_nmcli(["connection", "delete", WIFI_AP_CONNECTION], 15)
+        add = [
+            "connection", "add", "type", "wifi", "ifname", interface, "con-name", WIFI_AP_CONNECTION,
+            "autoconnect", "no", "ssid", WIFI_AP_SSID,
+            "802-11-wireless.mode", "ap", "802-11-wireless.band", "bg",
+            "ipv4.method", "shared", "ipv6.method", "ignore",
+            "wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", WIFI_AP_PASSWORD,
+        ]
+        if address:
+            add += ["ipv4.addresses", address]
+        result = run_nmcli(add, 30)
+        if result.returncode != 0:
+            error = nmcli_error(result, "could not create the access point profile")
+            break
         result = run_nmcli(["connection", "up", WIFI_AP_CONNECTION, "ifname", interface], 45)
         if result.returncode != 0:
             error = nmcli_error(result, "could not start the access point")
-        else:
-            time.sleep(4)
-            if not wifi_ap_active(interface):
-                error = "access point started but dropped (adapter may not support AP mode)"
+            continue
+        time.sleep(4)
+        if not wifi_ap_active(interface):
+            error = "access point started but dropped (adapter may not support AP mode)"
+            continue
+        error = None
+        info = run_nmcli(["-g", "IP4.ADDRESS", "dev", "show", interface], 15)
+        ip_address = info.stdout.strip().split("\n")[0].split("/")[0] or None
+        break
     if error:
         run_nmcli(["connection", "delete", WIFI_AP_CONNECTION], 15)
         restore_wifi_clients()
         raise RuntimeError(error)
+    return ip_address or "10.42.0.1"
 
 
 def restore_wifi_clients():
@@ -1765,13 +1781,13 @@ def local_ip_addresses():
     return addresses
 
 
-def wifi_ap_instructions():
+def wifi_ap_instructions(ip_address="10.42.0.1"):
     user = getpass.getuser()
     return (
         f"Access point {WIFI_AP_SSID} started (password {WIFI_AP_PASSWORD}).\n"
         f"1. Join that Wi-Fi on your device.\n"
-        f"2. SSH: ssh {user}@10.42.0.1\n"
-        f"3. VNC: send /tightvnc on, then open https://10.42.0.1:6080/vnc.html and accept the certificate warning."
+        f"2. SSH: ssh {user}@{ip_address}\n"
+        f"3. VNC: send /tightvnc on, then open https://{ip_address}:6080/vnc.html and accept the certificate warning."
     )
 
 
@@ -2001,14 +2017,14 @@ async def handle_slash_command(sender_id, prompt, allow_settings):
         if action == "ap":
             stop = len(parts) > 1 and parts[1].lower() in {"off", "stop"}
             try:
-                await asyncio.to_thread(stop_wifi_ap if stop else start_wifi_ap)
+                ap_ip = await asyncio.to_thread(stop_wifi_ap if stop else start_wifi_ap)
             except Exception as error:
                 log_to_dash(f"/syswifi ap failed: {error}")
                 return f"Wi-Fi access point failed: {error}"[:160]
             log_to_dash(f"Wi-Fi access point {'stopped' if stop else 'started'} by {sender_id}")
             if stop:
                 return "Wi-Fi access point stopped."
-            return wifi_ap_instructions()
+            return wifi_ap_instructions(ap_ip or "10.42.0.1")
         if action not in {"status", "on", "off"}:
             return "Usage: /syswifi status, on, off, scan, connect <number> <password>, disconnect, or ap [off]"
         try:
@@ -3077,6 +3093,7 @@ button:hover{transform:translateY(-1px);border-color:var(--accent);background:va
 .chat-header strong{color:var(--text);font-size:13px}
 .chat-header span{color:var(--muted);font-size:10px;overflow-wrap:anywhere}
 .peer-inline-detail{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px 10px;margin:4px 0 0;padding:0}
+.rail-peer-detail{grid-template-columns:repeat(auto-fit,minmax(110px,1fr));padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--log-bg)}
 .peer-inline-detail[hidden]{display:none}
 .peer-inline-detail div{min-width:0}
 .peer-inline-detail dt{color:var(--muted);font-size:9px}
@@ -3506,6 +3523,8 @@ function peerSummary(peer){if(!peer)return 'No peer selected';return peerTypeLab
 function peerPopupContent(peer){return popupContent(peer.name,peerSummary(peer))}
 function popupContent(title,detail){let content=document.createElement('div');let heading=document.createElement('strong');heading.textContent=title;content.appendChild(heading);if(detail){let line=document.createElement('div');line.textContent=detail;content.appendChild(line)}return content}
 function focusMapPoint(latitude,longitude){showView('map');if(dashboardMap&&Number.isFinite(latitude)&&Number.isFinite(longitude))dashboardMap.setView([latitude,longitude],12)}
+let nodePeerDetailsEl=null;
+function getNodePeerDetails(){if(!nodePeerDetailsEl){nodePeerDetailsEl=document.createElement('dl');nodePeerDetailsEl.className='peer-inline-detail rail-peer-detail';nodePeerDetailsEl.hidden=true;nodePeerDetailsEl.setAttribute('aria-live','polite')}return nodePeerDetailsEl}
 function appendPeerDetail(container,label,value){if(value===null||value===undefined||value==='')return;let field=document.createElement('div'),term=document.createElement('dt'),description=document.createElement('dd');term.textContent=label;description.textContent=value;field.append(term,description);container.appendChild(field)}
 async function renderPeerDetails(nodeId,container){if(!container)return;container.hidden=false;container.replaceChildren();appendPeerDetail(container,'Status','Requesting telemetry...');try{let response=await fetch('/api/peer-telemetry?node_id='+encodeURIComponent(nodeId)),data=await response.json();if(!response.ok)throw new Error(data.error||'Peer details could not be loaded');let node=data.node||{};container.replaceChildren();appendPeerDetail(container,'Type',peerTypeLabel(node.type));let heard=Number(node.last_heard);appendPeerDetail(container,'Last heard',heard>0?new Date(heard*1000).toLocaleString():'Not available');if(Number.isFinite(node.latitude)&&Number.isFinite(node.longitude))appendPeerDetail(container,'Location',node.latitude.toFixed(5)+', '+node.longitude.toFixed(5));let telemetry=data.telemetry||[];for(let item of telemetry){let label=String(item.type||'Telemetry');let value=item.value;if(value&&typeof value==='object')value=Object.entries(value).map(([key,entry])=>key+': '+entry).join(', ');if(value!==null&&value!==undefined)appendPeerDetail(container,label,value)}if(!container.children.length)appendPeerDetail(container,'Telemetry','No telemetry has been reported by this peer.')}catch(error){container.replaceChildren();appendPeerDetail(container,'Error',error.message)}}
 const peerMarkerSvgs={users:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 21a7 7 0 0 1 14 0"/></svg>',repeaters:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V8M8 20h8M6 11a8 8 0 0 1 12 0M3 8a12 12 0 0 1 18 0"/><circle cx="12" cy="5" r="1"/></svg>','room-servers':'<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="13" width="16" height="7" rx="1.5"/><path d="M8 7.5h.01M8 16.5h.01M12 7.5h5M12 16.5h5"/></svg>',sensors:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 14.76V5a3 3 0 0 0-6 0v9.76a5 5 0 1 0 6 0Z"/><path d="M11 11v6"/></svg>',unknown:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/></svg>'};
@@ -3519,8 +3538,8 @@ function updateMapPeerFilters(){renderKnownPeers();renderMapMarkers()}
 function expandKnownPeerRow(peerId){let row=document.querySelector('#map-node-list .map-node-row[data-peer-id="'+String(peerId).replace(/"/g,'')+'"]');if(!row)return;let target=row.querySelector('.map-peer-target');if(target)target.click()}
 function renderKnownPeers(){let list=document.getElementById('map-node-list');if(!list)return;let peers=sortedFilteredNodes('map-node-sort','map-node-type-filter','map-node-search');list.replaceChildren();if(!peers.length){let empty=document.createElement('p');empty.className='map-empty';empty.textContent=mapNodes.length?'No peers match this filter.':'No nodes found. Connect to a MeshCore radio to load contacts.';list.appendChild(empty);return}for(let peer of peers){let row=document.createElement('div');row.className='map-node-row';row.dataset.peerId=String(peer.id);let main=document.createElement('div');main.className='map-node-row-main';let target=document.createElement('button');target.type='button';target.className='map-peer-target';target.title=Number.isFinite(peer.latitude)&&Number.isFinite(peer.longitude)?'Center map and view peer details':'View peer details';let details=document.createElement('div');let name=document.createElement('strong');name.textContent=peer.name;let detailBox=document.createElement('dl');detailBox.className='peer-inline-detail';detailBox.hidden=true;details.append(name,detailBox);target.appendChild(details);target.onclick=()=>{if(Number.isFinite(peer.latitude)&&Number.isFinite(peer.longitude))focusMapPoint(peer.latitude,peer.longitude);let willOpen=detailBox.hidden;document.querySelectorAll('#map-node-list .peer-inline-detail').forEach(el=>{if(el!==detailBox)el.hidden=true});if(willOpen)renderPeerDetails(peer.id,detailBox);else detailBox.hidden=true};main.append(target,createNodeFavoriteButton(peer.id));row.appendChild(main);list.appendChild(row)}}
 function updateConversationMenu(type,metadata={}){let prefix=type==='node'?'node':'channel',clear=document.getElementById(prefix+'-clear-action'),archive=document.getElementById(prefix+'-archive-action'),pin=document.getElementById(prefix+'-pin-action'),enabled=Boolean(type==='node'?selectedNodeId:selectedChannelId);clear.disabled=!enabled;archive.disabled=!enabled;pin.disabled=!enabled;document.getElementById(prefix+'-delete-action').disabled=!enabled;archive.textContent=metadata.archived?'Unarchive chat':'Archive chat';pin.textContent=metadata.pinned?'Unpin chat':'Pin chat'}
-function renderConversationTargets(type){let isNode=type==='node',filter=document.getElementById(isNode?'node-chat-filter':'channel-chat-filter').value,query=isNode?'':document.getElementById('channel-search').value.trim().toLowerCase(),items=[...(isNode?sortedFilteredNodes():meshChannels)].filter(item=>(!query||String(item.name||'').toLowerCase().includes(query)||String(item.id).toLowerCase().includes(query))&&(filter==='all'||(filter==='archived'?Boolean(item.archived):!item.archived))),list=document.getElementById(isNode?'node-target-list':'channel-target-list'),selected=isNode?selectedNodeId:selectedChannelId;items.sort((left,right)=>Number(Boolean(left.archived))-Number(Boolean(right.archived))||Number(Boolean(right.pinned))-Number(Boolean(left.pinned)));list.replaceChildren();if(!items.length){let empty=document.createElement('p');empty.className='map-empty';empty.textContent=filter==='archived'?'No archived chats.':(isNode?(mapNodes.length?'No nodes match this filter.':'No nodes found. Connect to a MeshCore radio to load contacts.'):(query?'No channels match this search.':'No channels found on this device.'));list.appendChild(empty);return}for(let item of items){let button=document.createElement('button');button.type='button';button.className='conversation-target'+(selected===String(item.id)?' active':'');button.onclick=()=>selectConversation(type,item.id);let avatar=document.createElement('span');avatar.className='conversation-avatar';avatar.style.background=hashColor(item.id);avatar.textContent=String(item.name||'?').trim().charAt(0)||'?';let title=document.createElement('strong');title.textContent=item.name;let detail=document.createElement('small');detail.textContent=[item.pinned?'Pinned':'',item.archived?'Archived':''].filter(Boolean).join(' · ');button.append(avatar,title);if(detail.textContent)button.append(detail);if(isNode){let entry=document.createElement('div');entry.className='conversation-entry';entry.append(button,createNodeFavoriteButton(item.id));list.appendChild(entry)}else list.appendChild(button)}}
-function selectConversation(type,id){let normalized=String(id);if(type==='node'){let peer=mapNodes.find(item=>String(item.id)===normalized)||{id:normalized};selectedNodeId=normalized;document.getElementById('node-chat-title').textContent=peer.name||normalized;document.getElementById('node-chat-detail').textContent=peerSummary(peer);document.getElementById('node-send').disabled=false;updateConversationMenu('node',peer);renderConversationTargets('node');history('node',normalized,'node-chat-history');renderPeerDetails(normalized,document.getElementById('node-peer-details'))}else{let channel=meshChannels.find(item=>String(item.id)===normalized)||{id:normalized};selectedChannelId=normalized;document.getElementById('channel-chat-title').textContent=channel.name||'Channel '+normalized;document.getElementById('channel-chat-detail').textContent='Channel '+normalized;document.getElementById('channel-send').disabled=false;updateConversationMenu('channel',channel);renderConversationTargets('channel');history('channel',normalized,'channel-chat-history')}}
+function renderConversationTargets(type){let isNode=type==='node',filter=document.getElementById(isNode?'node-chat-filter':'channel-chat-filter').value,query=isNode?'':document.getElementById('channel-search').value.trim().toLowerCase(),items=[...(isNode?sortedFilteredNodes():meshChannels)].filter(item=>(!query||String(item.name||'').toLowerCase().includes(query)||String(item.id).toLowerCase().includes(query))&&(filter==='all'||(filter==='archived'?Boolean(item.archived):!item.archived))),list=document.getElementById(isNode?'node-target-list':'channel-target-list'),selected=isNode?selectedNodeId:selectedChannelId;items.sort((left,right)=>Number(Boolean(left.archived))-Number(Boolean(right.archived))||Number(Boolean(right.pinned))-Number(Boolean(left.pinned)));list.replaceChildren();if(!items.length){let empty=document.createElement('p');empty.className='map-empty';empty.textContent=filter==='archived'?'No archived chats.':(isNode?(mapNodes.length?'No nodes match this filter.':'No nodes found. Connect to a MeshCore radio to load contacts.'):(query?'No channels match this search.':'No channels found on this device.'));list.appendChild(empty);return}for(let item of items){let button=document.createElement('button');button.type='button';button.className='conversation-target'+(selected===String(item.id)?' active':'');button.onclick=()=>selectConversation(type,item.id);let avatar=document.createElement('span');avatar.className='conversation-avatar';avatar.style.background=hashColor(item.id);avatar.textContent=String(item.name||'?').trim().charAt(0)||'?';let title=document.createElement('strong');title.textContent=item.name;let detail=document.createElement('small');detail.textContent=[item.pinned?'Pinned':'',item.archived?'Archived':''].filter(Boolean).join(' · ');button.append(avatar,title);if(detail.textContent)button.append(detail);if(isNode){let entry=document.createElement('div');entry.className='conversation-entry';entry.append(button,createNodeFavoriteButton(item.id));list.appendChild(entry);if(selected===String(item.id)){let detailBox=getNodePeerDetails();detailBox.style.gridColumn='1 / -1';entry.appendChild(detailBox)}}else list.appendChild(button)}}
+function selectConversation(type,id){let normalized=String(id);if(type==='node'){let peer=mapNodes.find(item=>String(item.id)===normalized)||{id:normalized};selectedNodeId=normalized;document.getElementById('node-chat-title').textContent=peer.name||normalized;document.getElementById('node-chat-detail').textContent=peerSummary(peer);document.getElementById('node-send').disabled=false;updateConversationMenu('node',peer);renderConversationTargets('node');history('node',normalized,'node-chat-history');renderPeerDetails(normalized,getNodePeerDetails())}else{let channel=meshChannels.find(item=>String(item.id)===normalized)||{id:normalized};selectedChannelId=normalized;document.getElementById('channel-chat-title').textContent=channel.name||'Channel '+normalized;document.getElementById('channel-chat-detail').textContent='Channel '+normalized;document.getElementById('channel-send').disabled=false;updateConversationMenu('channel',channel);renderConversationTargets('channel');history('channel',normalized,'channel-chat-history')}}
 let incomingAdvertEvents=[];
 let incomingAdvertSnapshot=new Map();
 let incomingAdvertsInitialized=false;
@@ -3593,7 +3612,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <main id="nodes-view" class="view-panel page-view">
 <div class="messages-layout">
 <aside class="card conversation-rail"><div class="panel-heading"><div><span class="eyebrow">DIRECT MESSAGES</span><h2>Nodes</h2></div><span class="panel-index">02</span></div><div class="conversation-filters"><div class="node-search-label"><label for="node-search">Search</label><div class="search-input-row"><input type="search" id="node-search" placeholder="Filter by name or ID" oninput="renderConversationTargets('node')"><details class="search-filter-menu"><summary aria-label="Sort and type filters" title="Sort and type filters"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16l-6.5 7.5v5l-3 1.5v-6.5L4 5Z"/></svg></summary><div class="search-filter-panel"><label for="node-sort">Sort<select id="node-sort" onchange="renderConversationTargets('node')"><option value="az">A-Z</option><option value="heard">Heard recently</option><option value="messages">Latest messages</option></select></label><label for="node-type-filter">Type<select id="node-type-filter" onchange="renderConversationTargets('node')"><option value="all">All</option><option value="favorites">Favorites</option><option value="users">Users</option><option value="repeaters">Repeaters</option><option value="room-servers">Room servers</option><option value="sensors">Sensors</option></select></label></div></details></div></div><label for="node-chat-filter">Chats<select id="node-chat-filter" onchange="renderConversationTargets('node')"><option value="active">Active</option><option value="archived">Archived</option><option value="all">All</option></select></label></div><div class="conversation-target-list" id="node-target-list"><p class="map-empty">Waiting for nodes...</p></div></aside>
-<section class="card chat-panel"><div class="chat-header"><div class="chat-header-main"><div class="chat-header-copy"><strong id="node-chat-title">Select a node</strong><span id="node-chat-detail">Choose a node to view its conversation.</span></div><details class="chat-actions" id="node-chat-options"><summary aria-label="Node chat options">Options</summary><div class="chat-action-menu"><button id="node-clear-action" type="button" disabled onclick="manageConversation('node','clear')">Clear chat</button><button id="node-archive-action" type="button" disabled onclick="manageConversation('node','archive')">Archive chat</button><button id="node-pin-action" type="button" disabled onclick="manageConversation('node','pin')">Pin chat</button><button id="node-delete-action" type="button" disabled onclick="deleteTarget('node')">Delete node</button></div></details></div><dl id="node-peer-details" class="peer-inline-detail" hidden aria-live="polite"></dl></div><div id="node-chat-history"></div><form onsubmit="sendMessage(event,'node','node-message','node-chat-history')"><input id="node-message" maxlength="100" placeholder="Message selected node" required><button id="node-send" disabled>Send</button></form></section>
+<section class="card chat-panel"><div class="chat-header"><div class="chat-header-main"><div class="chat-header-copy"><strong id="node-chat-title">Select a node</strong><span id="node-chat-detail">Choose a node to view its conversation.</span></div><details class="chat-actions" id="node-chat-options"><summary aria-label="Node chat options">Options</summary><div class="chat-action-menu"><button id="node-clear-action" type="button" disabled onclick="manageConversation('node','clear')">Clear chat</button><button id="node-archive-action" type="button" disabled onclick="manageConversation('node','archive')">Archive chat</button><button id="node-pin-action" type="button" disabled onclick="manageConversation('node','pin')">Pin chat</button><button id="node-delete-action" type="button" disabled onclick="deleteTarget('node')">Delete node</button></div></details></div></div><div id="node-chat-history"></div><form onsubmit="sendMessage(event,'node','node-message','node-chat-history')"><input id="node-message" maxlength="100" placeholder="Message selected node" required><button id="node-send" disabled>Send</button></form></section>
 </div>
 </main>
 <main id="channels-view" class="view-panel page-view" hidden>
