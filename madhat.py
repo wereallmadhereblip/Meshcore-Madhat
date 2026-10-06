@@ -974,7 +974,7 @@ async def ollama_schedule_loop():
     while True:
         try:
             schedule = app_config["ollama"]
-            if schedule["schedule_enabled"]:
+            if schedule["schedule_enabled"] and not system_sleep_active():
                 start_time = datetime.strptime(schedule["start_time"], "%H:%M").time()
                 end_time = datetime.strptime(schedule["end_time"], "%H:%M").time()
                 should_run = _time_in_window(datetime.now().time(), start_time, end_time)
@@ -1414,7 +1414,7 @@ def update_greeting_setting_from_message(prompt, channel_id=None):
 
 
 HELP_TEXT = (
-    "Commands: /help, /help settings, /settings (show), /settings <name> <value>, /restart, /update, /syswifi status|on|off|scan|connect <n> <password>|disconnect|ap [off], /reboot, /sysreboot, /tightvnc on|off|restart, /power, /fastfetch, "
+    "Commands: /help, /help settings, /settings (show), /settings <name> <value>, /restart, /update, /syssleep, /syswakeup, /syswifi status|on|off|scan|connect <n> <password>|disconnect|ap [off], /reboot, /sysreboot, /tightvnc on|off|restart, /power, /fastfetch, "
     "wx <zip>, wx local, "
     "/greet on|off (in a channel), /bot <question> (in a channel). "
     "/settings works in direct messages from admins only."
@@ -1693,6 +1693,11 @@ def wifi_client_profiles():
     return names
 
 
+def wifi_ap_running():
+    result = run_nmcli(["-t", "-f", "NAME", "connection", "show", "--active"], 15)
+    return WIFI_AP_CONNECTION in result.stdout.splitlines()
+
+
 def wifi_ap_active(interface):
     result = run_nmcli(["-t", "-f", "GENERAL.CONNECTION,GENERAL.STATE", "dev", "show", interface], 15)
     return WIFI_AP_CONNECTION in result.stdout and "(connected)" in result.stdout
@@ -1809,6 +1814,113 @@ def wifi_ap_instructions(ip_address="10.42.0.1"):
     )
 
 
+SLEEP_STATE_PATH = TIGHTVNC_PID_PATH.with_name("sleep-state.json")
+sleep_lock = threading.Lock()
+
+
+def system_sleep_active():
+    return SLEEP_STATE_PATH.exists()
+
+
+def read_sleep_state():
+    try:
+        data = json.loads(SLEEP_STATE_PATH.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def set_screen_power(on):
+    for display in (os.environ.get("DISPLAY"), ":0"):
+        if not display:
+            continue
+        env = {**os.environ, "DISPLAY": display}
+        if shutil.which("xset"):
+            args = ["xset", "dpms", "force", "on"] if on else ["xset", "dpms", "force", "off"]
+            if subprocess.run(args, env=env, capture_output=True, timeout=10, check=False).returncode == 0:
+                return True
+    return False
+
+
+def cpu_governor_paths():
+    return sorted(Path("/sys/devices/system/cpu").glob("cpu[0-9]*/cpufreq/scaling_governor"))
+
+
+def set_cpu_governor(governor):
+    paths = [str(path) for path in cpu_governor_paths()]
+    if not paths:
+        return False
+    result = run_privileged("tee", *paths, input_text=governor + "\n")
+    return result.returncode == 0
+
+
+def current_cpu_governor():
+    paths = cpu_governor_paths()
+    try:
+        return paths[0].read_text().strip() if paths else None
+    except OSError:
+        return None
+
+
+def wifi_radio_enabled():
+    try:
+        tool, output = run_wifi_command("status")
+        return wifi_status_text(tool, output)
+    except Exception:
+        return None
+
+
+def enter_system_sleep(ollama_was_running):
+    """Low-power mode: the app keeps running so /syswakeup can still arrive over the mesh."""
+    with sleep_lock:
+        if system_sleep_active():
+            return []
+        state = {
+            "ollama": bool(ollama_was_running),
+            "governor": current_cpu_governor(),
+            "wifi": wifi_radio_enabled(),
+        }
+        try:
+            SLEEP_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            SLEEP_STATE_PATH.write_text(json.dumps(state))
+        except OSError as error:
+            raise RuntimeError(f"could not save sleep state: {error}")
+        steps = []
+        for name, action in (
+            ("access point", lambda: wifi_ap_running() and stop_wifi_ap()),
+            ("Wi-Fi", lambda: state["wifi"] is not False and run_wifi_command("off")),
+            ("CPU governor", lambda: state["governor"] and set_cpu_governor("powersave")),
+            ("screen", lambda: set_screen_power(False)),
+        ):
+            try:
+                action()
+            except Exception as error:
+                steps.append(f"{name}: {error}")
+        return steps
+
+
+def exit_system_sleep():
+    with sleep_lock:
+        if not system_sleep_active():
+            return None
+        state = read_sleep_state()
+        problems = []
+        for name, action in (
+            ("screen", lambda: set_screen_power(True)),
+            ("CPU governor", lambda: state.get("governor") and set_cpu_governor(state["governor"])),
+            ("Wi-Fi", lambda: state.get("wifi") is not False and run_wifi_command("on")),
+        ):
+            try:
+                action()
+            except Exception as error:
+                problems.append(f"{name}: {error}")
+        try:
+            SLEEP_STATE_PATH.unlink()
+        except OSError:
+            pass
+        return state, problems
+
+
 def wifi_status_text(tool, output):
     if tool == "nmcli":
         return output.strip().lower() == "enabled"
@@ -1890,7 +2002,7 @@ def system_fastfetch_info():
 
 
 async def handle_slash_command(sender_id, prompt, allow_settings):
-    match = re.fullmatch(r"\s*/(help|settings|restart|update|syswifi|reboot|sysreboot|tightvnc|power|fastfetch)\b\s*(.*)", prompt, re.IGNORECASE | re.DOTALL)
+    match = re.fullmatch(r"\s*/(help|settings|restart|update|syswifi|syssleep|syswakeup|reboot|sysreboot|tightvnc|power|fastfetch)\b\s*(.*)", prompt, re.IGNORECASE | re.DOTALL)
     if match is None:
         return None
     command, args = match.group(1).lower(), match.group(2).strip()
@@ -1990,6 +2102,44 @@ async def handle_slash_command(sender_id, prompt, allow_settings):
             return "TightVNC and noVNC turned on. Open https://<ip>:6080/vnc.html (could not detect IP)."
         urls = "\n".join(f"https://{a}:6080/vnc.html" for a in addresses[:3])
         return (f"TightVNC and noVNC turned on. Open in a browser (accept the certificate warning):\n{urls}")
+    if command in {"syssleep", "syswakeup"}:
+        if not is_settings_admin(sender_id):
+            log_to_dash(f"Rejected /{command} from non-admin {sender_id}")
+            return f"Not allowed. Add \"{str(sender_id)[:12]}\" to bot.admins in config.json."
+        if command == "syssleep":
+            if system_sleep_active():
+                return "Already asleep. Send /syswakeup to wake up."
+            log_to_dash(f"System sleep requested by {sender_id}")
+            was_running = app_state["ollama_running"]
+
+            async def go_to_sleep():
+                # Let the reply go out before the network and screen are turned off.
+                await asyncio.sleep(5)
+                try:
+                    if was_running:
+                        await stop_ollama_server()
+                    problems = await asyncio.to_thread(enter_system_sleep, was_running)
+                    if problems:
+                        log_to_dash("Sleep partly applied: " + "; ".join(problems)[:300])
+                    else:
+                        log_to_dash("System sleeping.")
+                except Exception as error:
+                    log_to_dash(f"/syssleep failed: {error}")
+
+            asyncio.create_task(go_to_sleep())
+            return "Going to sleep in a few seconds (screen, Wi-Fi, Ollama off, CPU low-power). Send /syswakeup to wake."
+        if not system_sleep_active():
+            return "Already awake."
+        try:
+            result = await asyncio.to_thread(exit_system_sleep)
+        except Exception as error:
+            log_to_dash(f"/syswakeup failed: {error}")
+            return f"Wake up failed: {error}"[:120]
+        state, problems = result if result else ({}, [])
+        if state.get("ollama"):
+            asyncio.create_task(update_available_models())
+        log_to_dash(f"System woken by {sender_id}" + (f" ({'; '.join(problems)[:200]})" if problems else ""))
+        return "Awake. Screen, Wi-Fi and CPU restored." + (" Some steps failed; see logs." if problems else "")
     if command == "syswifi":
         if not is_settings_admin(sender_id):
             log_to_dash(f"Rejected /syswifi from non-admin {sender_id}")
