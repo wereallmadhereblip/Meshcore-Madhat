@@ -1601,9 +1601,11 @@ def run_nmcli(args, timeout):
     for prefix in ([], ["sudo", "-n"]):
         if prefix and os.geteuid() == 0:
             continue
-        last = subprocess.run([*prefix, "nmcli", *args], capture_output=True, text=True, timeout=timeout, check=False)
-        if last.returncode == 0:
-            break
+        attempt = subprocess.run([*prefix, "nmcli", *args], capture_output=True, text=True, timeout=timeout, check=False)
+        if attempt.returncode == 0:
+            return attempt
+        if last is None:
+            last = attempt
     return last
 
 
@@ -1667,28 +1669,47 @@ def wifi_interface():
     raise RuntimeError("no Wi-Fi adapter found")
 
 
+def nmcli_error(result, fallback):
+    return (result.stderr.strip() or result.stdout.strip() or fallback)
+
+
 def disconnect_wifi():
     interface = wifi_interface()
     result = run_nmcli(["dev", "disconnect", interface], 30)
     if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "disconnect failed")
+        raise RuntimeError(nmcli_error(result, "disconnect failed"))
 
 
 def start_wifi_ap():
     interface = wifi_interface()
+    run_nmcli(["radio", "wifi", "on"], 15)
+    # Drop any current client connection and stale hotspot profile so the adapter is free.
+    run_nmcli(["connection", "down", WIFI_AP_CONNECTION], 15)
+    run_nmcli(["dev", "disconnect", interface], 30)
     run_nmcli(["connection", "delete", WIFI_AP_CONNECTION], 15)
     result = run_nmcli([
-        "dev", "wifi", "hotspot", "ifname", interface, "con-name", WIFI_AP_CONNECTION,
-        "ssid", WIFI_AP_SSID, "password", WIFI_AP_PASSWORD,
-    ], 40)
+        "connection", "add", "type", "wifi", "ifname", interface, "con-name", WIFI_AP_CONNECTION,
+        "autoconnect", "no", "ssid", WIFI_AP_SSID,
+        "802-11-wireless.mode", "ap", "802-11-wireless.band", "bg",
+        "ipv4.method", "shared", "ipv4.addresses", "10.42.0.1/24", "ipv6.method", "ignore",
+        "wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", WIFI_AP_PASSWORD,
+    ], 30)
     if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "hotspot failed")
+        raise RuntimeError(nmcli_error(result, "could not create the access point profile"))
+    result = run_nmcli(["connection", "up", WIFI_AP_CONNECTION, "ifname", interface], 45)
+    if result.returncode != 0:
+        error = nmcli_error(result, "could not start the access point")
+        run_nmcli(["connection", "delete", WIFI_AP_CONNECTION], 15)
+        raise RuntimeError(error)
+    check = run_nmcli(["-t", "-f", "NAME,DEVICE", "connection", "show", "--active"], 15)
+    if WIFI_AP_CONNECTION not in check.stdout:
+        raise RuntimeError("access point did not stay up")
 
 
 def stop_wifi_ap():
     result = run_nmcli(["connection", "down", WIFI_AP_CONNECTION], 30)
     if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "access point is not running")
+        raise RuntimeError(nmcli_error(result, "access point is not running"))
     run_nmcli(["connection", "delete", WIFI_AP_CONNECTION], 15)
 
 
@@ -1941,7 +1962,7 @@ async def handle_slash_command(sender_id, prompt, allow_settings):
                 await asyncio.to_thread(stop_wifi_ap if stop else start_wifi_ap)
             except Exception as error:
                 log_to_dash(f"/syswifi ap failed: {error}")
-                return f"Wi-Fi access point failed: {error}"[:120]
+                return f"Wi-Fi access point failed: {error}"[:160]
             log_to_dash(f"Wi-Fi access point {'stopped' if stop else 'started'} by {sender_id}")
             if stop:
                 return "Wi-Fi access point stopped."
