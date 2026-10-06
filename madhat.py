@@ -1414,7 +1414,7 @@ def update_greeting_setting_from_message(prompt, channel_id=None):
 
 
 HELP_TEXT = (
-    "Commands: /help, /help settings, /settings (show), /settings <name> <value>, /restart, /update, /syswifi status|on|off, /startota, /reboot, /sysreboot, /tightvnc on|off|restart, /power, /fastfetch, "
+    "Commands: /help, /help settings, /settings (show), /settings <name> <value>, /restart, /update, /syswifi status|on|off, /reboot, /sysreboot, /tightvnc on|off|restart, /power, /fastfetch, "
     "wx <zip>, wx local, "
     "/greet on|off (in a channel), /bot <question> (in a channel). "
     "/settings works in direct messages from admins only."
@@ -1426,11 +1426,6 @@ SETTINGS_HELP_TEXT = (
     "advert flood|zero, synctime, reboot confirm. System: startup on|off (start at boot)."
 )
 ON_VALUES = {"on", "true", "yes", "1"}
-OTA_INSTRUCTIONS = (
-    "OTA started. 1. Connect to OTA Network: join Wi-Fi MeshCore-OTA. "
-    "2. Upload the Firmware: go to http://192.168.4.1/update (or the IP shown in the CLI), "
-    "upload the .bin file and wait for the update to finish."
-)
 OFF_VALUES = {"off", "false", "no", "0"}
 
 
@@ -1676,7 +1671,7 @@ def system_fastfetch_info():
 
 
 async def handle_slash_command(sender_id, prompt, allow_settings):
-    match = re.fullmatch(r"\s*/(help|settings|restart|update|syswifi|startota|reboot|sysreboot|tightvnc|power|fastfetch)\b\s*(.*)", prompt, re.IGNORECASE | re.DOTALL)
+    match = re.fullmatch(r"\s*/(help|settings|restart|update|syswifi|reboot|sysreboot|tightvnc|power|fastfetch)\b\s*(.*)", prompt, re.IGNORECASE | re.DOTALL)
     if match is None:
         return None
     command, args = match.group(1).lower(), match.group(2).strip()
@@ -1729,7 +1724,7 @@ async def handle_slash_command(sender_id, prompt, allow_settings):
                 log_to_dash(f"Node reboot error: {error}")
 
         asyncio.create_task(reboot_node())
-        return "Rebooting the node in a few seconds. This also closes the OTA Wi-Fi access point."
+        return "Rebooting the node in a few seconds."
     if command == "sysreboot":
         if not is_settings_admin(sender_id):
             log_to_dash(f"Rejected /sysreboot from non-admin {sender_id}")
@@ -1770,30 +1765,6 @@ async def handle_slash_command(sender_id, prompt, allow_settings):
         if action == "restart":
             return "TightVNC and noVNC restarted."
         return f"TightVNC and noVNC turned {'off' if action == 'off' else 'on'}."
-    if command == "startota":
-        if not is_settings_admin(sender_id):
-            log_to_dash(f"Rejected /startota from non-admin {sender_id}")
-            return f"Not allowed. Add \"{str(sender_id)[:12]}\" to bot.admins in config.json."
-        if not meshcore_instance or not app_state["is_connected"]:
-            return "The device is not connected."
-        try:
-            async with paced_hardware_lock():
-                result = await meshcore_instance.commands.run_cli_command("start ota")
-        except Exception as error:
-            log_to_dash(f"/startota failed: {error}")
-            return f"Could not start OTA: {error}"[:120]
-        if result is None:
-            return "No response from the radio. It may already be in OTA mode: join Wi-Fi MeshCore-OTA and open http://192.168.4.1/update"
-        if result.type == EventType.ERROR:
-            if "UNSUPPORTED_CMD" in str(result.payload).upper():
-                return "This radio runs Companion firmware, which has no 'start ota' command (it exists only on Repeater/Room Server firmware). Update it with the MeshCore flasher or the app's firmware update instead."
-            return f"Could not start OTA: {result.payload}"[:120]
-        payload = result.payload
-        radio_text = str(payload.get("text", "") if isinstance(payload, dict) else payload).strip()
-        log_to_dash(f"OTA started by {sender_id}: {radio_text}")
-        if radio_text:
-            return f"Radio: {radio_text}. {OTA_INSTRUCTIONS}"
-        return OTA_INSTRUCTIONS
     if command == "syswifi":
         if not is_settings_admin(sender_id):
             log_to_dash(f"Rejected /syswifi from non-admin {sender_id}")
@@ -2954,6 +2925,7 @@ button:hover{transform:translateY(-1px);border-color:var(--accent);background:va
 .map-peer-icon-unknown{background:#e2e8f0;color:#334155}
 .map-surface{position:relative;min-width:0;min-height:0;margin:0;padding:0;overflow:hidden}
 #map-canvas{width:100%;height:100%;min-height:max(260px,calc(100vh - 230px));background:#d9e2df}
+.map-tiles-dark{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9) saturate(.6)}
 .map-message{position:absolute;z-index:500;top:14px;left:50%;max-width:calc(100% - 28px);padding:8px 12px;transform:translateX(-50%);border:1px solid var(--border);border-radius:5px;background:var(--panel-bg);color:var(--muted);font-size:11px;text-align:center;box-shadow:0 4px 14px rgba(0,0,0,.2)}
 .map-message[hidden]{display:none}
 .leaflet-container{font:12px/1.4 "Segoe UI",system-ui,sans-serif}
@@ -3282,7 +3254,7 @@ let lastSeenTraceEventId=0;
 let traceEventsInitialized=false;
 function hashColor(id){let str=String(id),hash=0;for(let i=0;i<str.length;i++){hash=(hash*31+str.charCodeAt(i))|0}return 'hsl('+(Math.abs(hash)%360)+',65%,50%)'}
 function showView(view){let target=document.getElementById(view+'-view');if(!target)return;let overviewViews=['nodes','channels','map','analyzer'];if(document.body.dataset.theme==='tron'&&overviewViews.includes(view)){activeView='tron-overview';document.body.classList.add('tron-overview');document.querySelectorAll('.view-panel').forEach(panel=>panel.hidden=!overviewViews.includes(panel.id.replace(/-view$/,'')));document.querySelectorAll('.nav-tab').forEach(tab=>tab.setAttribute('aria-pressed',String(tab.dataset.view===view)));openMap();renderAnalyzerStats();loadTronAnalyzerRadioStatus();return}document.body.classList.remove('tron-overview');activeView=view;document.querySelectorAll('.view-panel').forEach(panel=>panel.hidden=panel!==target);document.querySelectorAll('.nav-tab').forEach(tab=>tab.setAttribute('aria-pressed',String(tab.dataset.view===view)));if(view==='map')openMap();if(view==='live-trace')openLiveTrace();if(view==='analyzer'){renderAnalyzerStats();loadAnalyzerRadioStatus()}if(view==='device-settings'&&!deviceSettingsLoaded)loadDeviceSettings()}
-const MAP_STYLES={standard:['https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}],dark:['https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19,subdomains:'abcd',attribution:'&copy; OpenStreetMap contributors &copy; CARTO'}],terrain:['https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',{maxZoom:17,attribution:'&copy; OpenStreetMap contributors, SRTM | &copy; OpenTopoMap (CC-BY-SA)'}]};
+const MAP_STYLES={standard:['https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}],dark:['https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,className:'map-tiles-dark',attribution:'&copy; OpenStreetMap contributors'}],terrain:['https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',{maxZoom:17,attribution:'&copy; OpenStreetMap contributors, SRTM | &copy; OpenTopoMap (CC-BY-SA)'}]};
 let mapTileLayer=null;
 function applyMapStyle(){let select=document.getElementById('map-style-select');if(!select||!dashboardMap)return;let key=MAP_STYLES[select.value]?select.value:'standard';try{localStorage.setItem('meshcore-map-style',key)}catch(e){}if(mapTileLayer)dashboardMap.removeLayer(mapTileLayer);mapTileLayer=L.tileLayer(MAP_STYLES[key][0],MAP_STYLES[key][1]).addTo(dashboardMap);mapTileLayer.bringToBack()}
 function initMapStyle(){let select=document.getElementById('map-style-select');if(!select)return;try{let saved=localStorage.getItem('meshcore-map-style');if(MAP_STYLES[saved])select.value=saved}catch(e){}}
