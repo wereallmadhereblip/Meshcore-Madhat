@@ -2779,8 +2779,8 @@ async def telemetry_loop():
 PAGE = r'''<!DOCTYPE html>
 <html><head><title>MeshCore AI Bot</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="/assets/leaflet/leaflet.css">
+<script defer src="/assets/leaflet/leaflet.js"></script>
 <style>
 :root{color-scheme:dark;--page-bg:#0d1117;--panel-bg:#161b22;--panel-raised:#21262d;--text:#c9d1d9;--muted:#8b949e;--accent:#4ade80;--accent-dim:#1a3a25;--border:#30363d;--input-bg:#0d1117;--input-border:#3b444e;--button-text:#07130b;--log-bg:#0b1016;--danger:#f85149}
 *{box-sizing:border-box}
@@ -3344,12 +3344,12 @@ let lastSeenTraceEventId=0;
 let traceEventsInitialized=false;
 function hashColor(id){let str=String(id),hash=0;for(let i=0;i<str.length;i++){hash=(hash*31+str.charCodeAt(i))|0}return 'hsl('+(Math.abs(hash)%360)+',65%,50%)'}
 function showView(view){let target=document.getElementById(view+'-view');if(!target)return;let overviewViews=['nodes','channels','map','analyzer'];if(document.body.dataset.theme==='tron'&&overviewViews.includes(view)){activeView='tron-overview';document.body.classList.add('tron-overview');document.querySelectorAll('.view-panel').forEach(panel=>panel.hidden=!overviewViews.includes(panel.id.replace(/-view$/,'')));document.querySelectorAll('.nav-tab').forEach(tab=>tab.setAttribute('aria-pressed',String(tab.dataset.view===view)));openMap();renderAnalyzerStats();loadTronAnalyzerRadioStatus();return}document.body.classList.remove('tron-overview');activeView=view;document.querySelectorAll('.view-panel').forEach(panel=>panel.hidden=panel!==target);document.querySelectorAll('.nav-tab').forEach(tab=>tab.setAttribute('aria-pressed',String(tab.dataset.view===view)));if(view==='map')openMap();if(view==='live-trace')openLiveTrace();if(view==='analyzer'){renderAnalyzerStats();loadAnalyzerRadioStatus()}if(view==='device-settings'&&!deviceSettingsLoaded)loadDeviceSettings()}
-const MAP_STYLES={standard:['https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}],dark:['https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,className:'map-tiles-dark',attribution:'&copy; OpenStreetMap contributors'}],terrain:['https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',{maxZoom:17,attribution:'&copy; OpenStreetMap contributors, SRTM | &copy; OpenTopoMap (CC-BY-SA)'}]};
+const MAP_STYLES={standard:['/tiles/osm/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}],dark:['/tiles/osm/{z}/{x}/{y}.png',{maxZoom:19,className:'map-tiles-dark',attribution:'&copy; OpenStreetMap contributors'}],terrain:['/tiles/topo/{z}/{x}/{y}.png',{maxZoom:17,attribution:'&copy; OpenStreetMap contributors, SRTM | &copy; OpenTopoMap (CC-BY-SA)'}]};
 let mapTileLayer=null;
 function applyMapStyle(){let select=document.getElementById('map-style-select');if(!select||!dashboardMap)return;let key=MAP_STYLES[select.value]?select.value:'standard';try{localStorage.setItem('meshcore-map-style',key)}catch(e){}if(mapTileLayer)dashboardMap.removeLayer(mapTileLayer);mapTileLayer=L.tileLayer(MAP_STYLES[key][0],MAP_STYLES[key][1]).addTo(dashboardMap);mapTileLayer.bringToBack()}
 function initMapStyle(){let select=document.getElementById('map-style-select');if(!select)return;try{let saved=localStorage.getItem('meshcore-map-style');if(MAP_STYLES[saved])select.value=saved}catch(e){}}
 function openMap(){initMapStyle();if(!window.L){document.getElementById('map-message').textContent='Map library unavailable. Check your internet connection and reload.';return}if(!dashboardMap){dashboardMap=L.map('map-canvas',{zoomControl:true}).setView([20,0],2);mapMarkers=L.layerGroup().addTo(dashboardMap);applyMapStyle()}setTimeout(()=>dashboardMap.invalidateSize(),80);renderMapMarkers()}
-function openLiveTrace(){if(!window.L)return;if(!liveTraceMap){liveTraceMap=L.map('live-trace-canvas',{zoomControl:true}).setView([20,0],2);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(liveTraceMap);liveTraceMarkers=L.layerGroup().addTo(liveTraceMap)}setTimeout(()=>liveTraceMap.invalidateSize(),80);renderLiveTraceMarkers()}
+function openLiveTrace(){if(!window.L)return;if(!liveTraceMap){liveTraceMap=L.map('live-trace-canvas',{zoomControl:true}).setView([20,0],2);L.tileLayer('/tiles/osm/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(liveTraceMap);liveTraceMarkers=L.layerGroup().addTo(liveTraceMap)}setTimeout(()=>liveTraceMap.invalidateSize(),80);renderLiveTraceMarkers()}
 function renderLiveTraceMarkers(){if(!liveTraceMap||!liveTraceMarkers)return;liveTraceMarkers.clearLayers();liveTraceMarkerById=new Map();let bounds=[],located=0;for(let peer of mapNodes){if(!Number.isFinite(peer.latitude)||!Number.isFinite(peer.longitude))continue;let point=[peer.latitude,peer.longitude],marker=L.marker(point,{icon:peerMarkerIcon(peer),title:peer.name}).bindPopup(peerPopupContent(peer)).addTo(liveTraceMarkers);liveTraceMarkerById.set(String(peer.id),{marker,point});bounds.push(point);located++}if(Number.isFinite(gatewayTelemetry.latitude)&&Number.isFinite(gatewayTelemetry.longitude)){let point=[gatewayTelemetry.latitude,gatewayTelemetry.longitude];L.circleMarker(point,{radius:9,color:'#0d1117',weight:2,fillColor:'#36d1dc',fillOpacity:1}).bindPopup(popupContent('This gateway','Current radio location')).addTo(liveTraceMarkers);liveTraceMarkerById.set('gateway',{marker:null,point});bounds.push(point);located++}if(bounds.length)liveTraceMap.fitBounds(bounds,{padding:[36,36],maxZoom:12});let countLabel=document.getElementById('live-trace-count');if(countLabel)countLabel.textContent=String(located)}
 function pulseTrace(nodeId,direction){if(!liveTraceMap)return;let id=String(nodeId),target=liveTraceMarkerById.get(id);if(!target){let match=[...liveTraceMarkerById.entries()].find(([peerId])=>peerId!=='gateway'&&(peerId.startsWith(id)||id.startsWith(peerId)));if(match)target=match[1]}let gateway=liveTraceMarkerById.get('gateway');if(!target)return;if(target.marker){let element=target.marker.getElement();if(element){element.classList.remove('trace-pulse-marker');void element.offsetWidth;element.classList.add('trace-pulse-marker')}}if(!gateway)return;let points=direction==='inbound'?[target.point,gateway.point]:[gateway.point,target.point];let line=L.polyline(points,{color:'#4ade80',weight:2,opacity:.85,dashArray:'4 6'}).addTo(liveTraceMap);let dot=L.circleMarker(points[0],{radius:5,color:'#4ade80',weight:1,fillColor:'#4ade80',fillOpacity:1,className:'trace-pulse-dot'}).addTo(liveTraceMap);let start=performance.now(),duration=900;function animate(now){let t=Math.min(1,(now-start)/duration),lat=points[0][0]+(points[1][0]-points[0][0])*t,lng=points[0][1]+(points[1][1]-points[0][1])*t;dot.setLatLng([lat,lng]);if(t<1)requestAnimationFrame(animate);else setTimeout(()=>{liveTraceMap.removeLayer(line);liveTraceMap.removeLayer(dot)},400)}requestAnimationFrame(animate)}
 function peerTypeLabel(type){return ({1:'User',2:'Repeater',3:'Room server',4:'Sensor'})[Number(type)]||'Unknown'}
@@ -3629,6 +3629,69 @@ async def index_handler(request):
         text=PAGE.replace("{{MODEL_OPTIONS}}", options),
         content_type="text/html",
     )
+
+
+TILE_SOURCES = {
+    "osm": ("https://tile.openstreetmap.org/{z}/{x}/{y}.png", 19),
+    "topo": ("https://tile.opentopomap.org/{z}/{x}/{y}.png", 17),
+}
+TILE_CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "meshcore-madhat" / "tiles"
+TILE_USER_AGENT = "Meshcore-Madhat/1.0 (local dashboard tile cache)"
+# 1x1 transparent PNG, served when a tile is neither cached nor reachable.
+def _blank_png():
+    import struct
+    import zlib
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+    row = b"\x00" + b"\x00\x00\x00\x00"
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(row)) + chunk(b"IEND", b"")
+
+
+BLANK_TILE = _blank_png()
+TILE_OFFLINE_RETRY_SECONDS = 60
+tile_offline_until = 0.0
+
+
+async def tile_handler(request):
+    global tile_offline_until
+    source = TILE_SOURCES.get(request.match_info["source"])
+    try:
+        z, x, y = (int(request.match_info[k]) for k in ("z", "x", "y"))
+    except ValueError:
+        raise web.HTTPBadRequest()
+    if source is None or not 0 <= z <= source[1] or not (0 <= x < 2 ** z and 0 <= y < 2 ** z):
+        raise web.HTTPNotFound()
+    name = request.match_info["source"]
+    path = TILE_CACHE_DIR / name / str(z) / str(x) / f"{y}.png"
+    headers = {"Cache-Control": "public, max-age=86400"}
+    try:
+        if path.is_file():
+            return web.Response(body=await asyncio.to_thread(path.read_bytes), content_type="image/png", headers=headers)
+    except OSError:
+        pass
+    if time.monotonic() >= tile_offline_until:
+        try:
+            async with ClientSession(timeout=ClientTimeout(total=8), headers={"User-Agent": TILE_USER_AGENT}) as session:
+                async with session.get(source[0].format(z=z, x=x, y=y)) as response:
+                    if response.status == 200:
+                        data = await response.read()
+                        if data[:4] == b"\x89PNG":
+                            def store():
+                                path.parent.mkdir(parents=True, exist_ok=True)
+                                tmp = path.with_suffix(".tmp")
+                                tmp.write_bytes(data)
+                                tmp.replace(path)
+                            try:
+                                await asyncio.to_thread(store)
+                            except OSError:
+                                pass
+                            return web.Response(body=data, content_type="image/png", headers=headers)
+        except Exception as error:
+            tile_offline_until = time.monotonic() + TILE_OFFLINE_RETRY_SECONDS
+            log_to_dash(f"Map tiles unavailable, using cache only: {type(error).__name__}")
+    return web.Response(body=BLANK_TILE, content_type="image/png", headers={"Cache-Control": "no-store"})
 
 
 async def dashboard_logo_handler(request):
@@ -4873,6 +4936,8 @@ def create_app():
     app = web.Application()
     app.router.add_get("/", index_handler)
     app.router.add_get("/dashboard-logo.png", dashboard_logo_handler)
+    app.router.add_get("/tiles/{source}/{z}/{x}/{y}.png", tile_handler)
+    app.router.add_static("/assets/leaflet/", Path(__file__).resolve().parent / "assets" / "leaflet")
     app.router.add_get("/api/status", status_handler)
     app.router.add_get("/api/config", config_handler)
     app.router.add_patch("/api/config", update_config_handler)
