@@ -3763,9 +3763,9 @@ html[data-device="mobile"] .top-nav{overflow-x:auto;-webkit-overflow-scrolling:t
 html[data-device="mobile"] .dashboard-header{position:static}
 html[data-device="mobile"] .header-meta{gap:8px}
 html[data-device="mobile"] #nodes-view .messages-layout,html[data-device="mobile"] #channels-view .messages-layout{display:flex;flex-direction:column;height:auto;overflow:visible}
-html[data-device="mobile"] #nodes-view .conversation-rail,html[data-device="mobile"] #channels-view .conversation-rail{flex:none;max-height:38dvh;min-height:180px}
+html[data-device="mobile"] #nodes-view .conversation-rail,html[data-device="mobile"] #channels-view .conversation-rail{flex:none;max-height:70dvh;min-height:180px}
 html[data-device="mobile"] #nodes-view .chat-panel,html[data-device="mobile"] #channels-view .chat-panel{flex:none;min-height:60dvh;max-height:none;overflow:visible}
-html[data-device="mobile"] .conversation-target-list{overflow-y:auto;-webkit-overflow-scrolling:touch}
+html[data-device="mobile"] .conversation-target-list{grid-auto-rows:max-content;min-height:120px;overflow-y:auto;-webkit-overflow-scrolling:touch}
 html[data-device="mobile"] .chat-panel form{position:sticky;bottom:0;padding:8px 0;background:var(--panel-bg)}
 html[data-device="mobile"] .map-layout{grid-template-columns:minmax(0,1fr)!important}
 html[data-device="mobile"] #map-canvas{height:55dvh;min-height:300px}
