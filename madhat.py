@@ -1,12 +1,14 @@
 import asyncio
 import getpass
 import hashlib
+import hmac
 import html
 import inspect
 import json
 import math
 import os
 import re
+import secrets
 import signal
 import shutil
 import socket
@@ -689,7 +691,9 @@ def split_reply_into_messages(reply, prefix="", max_parts=None):
     while remaining:
         split_at = min(content_length, len(remaining))
         if split_at < len(remaining):
-            word_boundary = remaining.rfind(" ", 0, split_at)
+            word_boundary = remaining.rfind("\n", 0, split_at)
+            if word_boundary <= 0:
+                word_boundary = remaining.rfind(" ", 0, split_at)
             if word_boundary > 0:
                 boundary_split = word_boundary + 1
                 parts_after_boundary = math.ceil(
@@ -698,8 +702,8 @@ def split_reply_into_messages(reply, prefix="", max_parts=None):
                 available_parts = None if max_parts is None else max_parts - len(parts) - 1
                 if available_parts is None or parts_after_boundary <= available_parts:
                     split_at = boundary_split
-        parts.append(remaining[:split_at])
-        remaining = remaining[split_at:]
+        parts.append(remaining[:split_at].strip())
+        remaining = remaining[split_at:].lstrip()
 
     part_count = len(parts)
     return [
@@ -1348,7 +1352,7 @@ async def fetch_weather_response(prompt, sender_id=None):
 
 
 def sync_generate(messages, model, max_chars=None):
-    options = {"temperature": 0.2}
+    options = {"temperature": 0.2, "num_ctx": 2048, "repeat_penalty": 1.1}
     if max_chars:
         # Keep generation within Ollama's former default while avoiding excess output.
         options["num_predict"] = min(128, max(48, max_chars // 6 + 16))
@@ -1359,6 +1363,16 @@ def sync_generate(messages, model, max_chars=None):
         keep_alive="30m",
     )
     return result["message"]["content"]
+
+
+def looks_like_gibberish(text):
+    letters = [char for char in text if char.isalpha()]
+    if len(letters) < 20:
+        return False
+    foreign = sum(1 for char in letters if ord(char) > 0x24F)
+    words = text.split()
+    camel_mix = sum(1 for word in words if re.search(r"[a-z][A-Z]|[A-Za-z][^\x00-\x7f]", word))
+    return foreign / len(letters) > 0.05 or (len(words) > 8 and camel_mix / len(words) > 0.25)
 
 
 def clear_chat_memory_reply(sender_id, prompt):
@@ -1818,9 +1832,9 @@ def wifi_ap_instructions(ip_address="10.42.0.1"):
     user = getpass.getuser()
     return (
         f"Access point {WIFI_AP_SSID} started (password {WIFI_AP_PASSWORD}).\n"
-        f"1. Join that Wi-Fi on your device.\n"
+        f"1. Join that Wi-Fi.\n"
         f"2. SSH: ssh {user}@{ip_address}\n"
-        f"3. VNC: send /tightvnc on, then open https://{ip_address}:6080/vnc.html and accept the certificate warning."
+        f"3. VNC: /tightvnc on, then https://{ip_address}:6080/vnc.html"
     )
 
 
@@ -2326,6 +2340,21 @@ async def generate_ai_response(sender_id, prompt, allow_settings_update=True):
             app_state["selected_model"],
             reply_limit,
         )
+        if looks_like_gibberish(reply):
+            log_to_dash("Model returned garbled text; retrying with a fresh conversation.")
+            conversation_history.pop(sender_id, None)
+            history = conversation_history[sender_id]
+            history.append({"role": "user", "content": prompt})
+            reply = await loop.run_in_executor(
+                executor,
+                sync_generate,
+                [{"role": "system", "content": system}, *history],
+                app_state["selected_model"],
+                reply_limit,
+            )
+            if looks_like_gibberish(reply):
+                history.pop()
+                return "Sorry, I couldn't generate a clear answer. Please try again."
         reply = limit_ai_reply(reply.strip(), reply_limit)
         history.append({"role": "assistant", "content": reply})
         return reply
@@ -5319,8 +5348,198 @@ async def on_cleanup(app):
     executor.shutdown(wait=False)
 
 
+AUTH_PATH = CONFIG_DIR / "meshcore-ollama-bot" / "dashboard_auth.json"
+DEFAULT_DASHBOARD_PASSWORD = "orange pi"
+AUTH_COOKIE = "madhat_session"
+AUTH_SESSION_SECONDS = 30 * 24 * 3600
+AUTH_PUBLIC_PATHS = {"/login", "/api/login", "/api/forgot", "/api/reset"}
+RESET_CODE_SECONDS = 600
+RESET_CODE_ATTEMPTS = 5
+auth_failures = defaultdict(list)
+reset_state = {"code": None, "expires": 0.0, "attempts": 0, "requested": 0.0}
+
+
+def hash_password(password, salt):
+    return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt), 200_000).hex()
+
+
+def save_auth(password):
+    salt = secrets.token_hex(16)
+    auth = {"salt": salt, "hash": hash_password(password, salt), "secret": secrets.token_hex(32)}
+    AUTH_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = AUTH_PATH.with_suffix(".tmp")
+    fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(auth, handle)
+    os.replace(temp_path, AUTH_PATH)
+    return auth
+
+
+def load_auth():
+    try:
+        auth = json.loads(AUTH_PATH.read_text(encoding="utf-8"))
+        if all(isinstance(auth.get(key), str) for key in ("salt", "hash", "secret")):
+            return auth
+    except (OSError, json.JSONDecodeError, AttributeError):
+        pass
+    return save_auth(DEFAULT_DASHBOARD_PASSWORD)
+
+
+def check_password(password):
+    auth = load_auth()
+    return hmac.compare_digest(hash_password(password, auth["salt"]), auth["hash"])
+
+
+def make_session_token():
+    expires = str(int(time.time()) + AUTH_SESSION_SECONDS)
+    signature = hmac.new(load_auth()["secret"].encode(), expires.encode(), hashlib.sha256).hexdigest()
+    return f"{expires}.{signature}"
+
+
+def valid_session_token(token):
+    expires, _, signature = (token or "").partition(".")
+    if not expires.isdigit() or int(expires) < time.time():
+        return False
+    expected = hmac.new(load_auth()["secret"].encode(), expires.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(signature, expected)
+
+
+def auth_rate_limited(request, record=False):
+    now = time.time()
+    attempts = [stamp for stamp in auth_failures[request.remote] if now - stamp < 300]
+    auth_failures[request.remote] = attempts
+    if record:
+        attempts.append(now)
+    return len(attempts) >= 5
+
+
+def login_response(token):
+    response = web.json_response({"ok": True})
+    response.set_cookie(
+        AUTH_COOKIE, token, max_age=AUTH_SESSION_SECONDS, httponly=True, samesite="Strict", path="/"
+    )
+    return response
+
+
+@web.middleware
+async def auth_middleware(request, handler):
+    if request.path in AUTH_PUBLIC_PATHS or valid_session_token(request.cookies.get(AUTH_COOKIE)):
+        return await handler(request)
+    if request.path.startswith("/api/"):
+        return web.json_response({"error": "Login required"}, status=401)
+    raise web.HTTPFound("/login")
+
+
+async def read_auth_json(request):
+    try:
+        data = await request.json()
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+async def login_page_handler(request):
+    return web.Response(text=LOGIN_PAGE, content_type="text/html")
+
+
+async def login_handler(request):
+    if auth_rate_limited(request):
+        return web.json_response({"error": "Too many attempts. Try again in a few minutes."}, status=429)
+    data = await read_auth_json(request)
+    password = data.get("password")
+    if not isinstance(password, str) or not check_password(password):
+        auth_rate_limited(request, record=True)
+        return web.json_response({"error": "Wrong password"}, status=401)
+    auth_failures.pop(request.remote, None)
+    return login_response(make_session_token())
+
+
+async def logout_handler(request):
+    response = web.HTTPFound("/login")
+    response.del_cookie(AUTH_COOKIE, path="/")
+    raise response
+
+
+async def forgot_password_handler(request):
+    now = time.time()
+    if now - reset_state["requested"] < 60:
+        return web.json_response({"error": "Wait a minute before requesting another code."}, status=429)
+    if not meshcore_instance or not app_state["is_connected"]:
+        return web.json_response({"error": "MeshCore is not connected, so the code cannot be sent."}, status=503)
+    admins = app_config["bot"].get("admins", [])
+    if not admins:
+        return web.json_response({"error": "No bot.admins configured to receive the code."}, status=400)
+    reset_state["requested"] = now
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    message = f"Dashboard password reset code: {code} (valid 10 min). Enter it on the login page with a new password."
+    sent = 0
+    for admin in admins:
+        target = resolve_contact_id(admin)
+        try:
+            async with paced_hardware_lock():
+                result = await send_to_target(target, "node", message)
+            if result.type != EventType.ERROR:
+                sent += 1
+        except Exception as error:
+            log_to_dash(f"Password reset DM to {admin} failed: {error}")
+    if not sent:
+        return web.json_response({"error": "Could not send the code to any admin."}, status=502)
+    reset_state.update(code=code, expires=now + RESET_CODE_SECONDS, attempts=0)
+    log_to_dash("Dashboard password reset code sent to admins")
+    return web.json_response({"ok": True})
+
+
+async def reset_password_handler(request):
+    data = await read_auth_json(request)
+    code = data.get("code")
+    password = data.get("password")
+    if not isinstance(code, str) or not isinstance(password, str):
+        return web.json_response({"error": "Code and new password are required"}, status=400)
+    if len(password) < 4 or len(password) > 128:
+        return web.json_response({"error": "Password must be 4-128 characters"}, status=400)
+    if not reset_state["code"] or time.time() > reset_state["expires"]:
+        return web.json_response({"error": "No valid reset code. Request a new one."}, status=400)
+    reset_state["attempts"] += 1
+    if not hmac.compare_digest(code.strip(), reset_state["code"]):
+        if reset_state["attempts"] >= RESET_CODE_ATTEMPTS:
+            reset_state["code"] = None
+        return web.json_response({"error": "Wrong code"}, status=401)
+    reset_state["code"] = None
+    save_auth(password)
+    log_to_dash("Dashboard password was reset")
+    return login_response(make_session_token())
+
+
+LOGIN_PAGE = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MadHat Login</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1020;color:#e6e9f2;font:16px system-ui,sans-serif}
+form{width:min(340px,90vw);padding:24px;border:1px solid #2b3556;border-radius:12px;background:#121a33;display:grid;gap:12px}
+input,button{padding:10px;border-radius:8px;border:1px solid #2b3556;background:#0b1020;color:inherit;font:inherit}
+button{background:#3b6cf6;border:0;cursor:pointer}a{color:#8fb0ff;cursor:pointer;font-size:14px}#msg{min-height:1.2em;font-size:14px;color:#ffb4b4}</style></head><body>
+<form id="login"><h2 style="margin:0">MadHat Dashboard</h2>
+<input id="pw" type="password" placeholder="Password" autocomplete="current-password" autofocus>
+<button>Log in</button><a id="forgot">Forgot password?</a><div id="msg"></div></form>
+<form id="reset" hidden><h2 style="margin:0">Reset password</h2>
+<div style="font-size:14px">A code was sent to the admin over the mesh. Enter it with a new password.</div>
+<input id="code" placeholder="Reset code" inputmode="numeric" autocomplete="one-time-code">
+<input id="npw" type="password" placeholder="New password" autocomplete="new-password">
+<button>Set password</button><a id="back">Back to login</a><div id="msg2"></div></form>
+<script>
+const post=(u,b)=>fetch(u,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)}).then(async r=>({ok:r.ok,d:await r.json().catch(()=>({}))}));
+const $=i=>document.getElementById(i);
+$("login").onsubmit=async e=>{e.preventDefault();const r=await post("/api/login",{password:$("pw").value});if(r.ok)location="/";else $("msg").textContent=r.d.error||"Login failed"};
+$("forgot").onclick=async()=>{$("msg").textContent="Sending code...";const r=await post("/api/forgot",{});if(r.ok){$("login").hidden=true;$("reset").hidden=false}else $("msg").textContent=r.d.error||"Failed"};
+$("back").onclick=()=>{$("reset").hidden=true;$("login").hidden=false};
+$("reset").onsubmit=async e=>{e.preventDefault();const r=await post("/api/reset",{code:$("code").value,password:$("npw").value});if(r.ok)location="/";else $("msg2").textContent=r.d.error||"Reset failed"};
+</script></body></html>"""
+
+
 def create_app():
-    app = web.Application()
+    app = web.Application(middlewares=[auth_middleware])
+    app.router.add_get("/login", login_page_handler)
+    app.router.add_post("/api/login", login_handler)
+    app.router.add_post("/api/forgot", forgot_password_handler)
+    app.router.add_post("/api/reset", reset_password_handler)
+    app.router.add_get("/logout", logout_handler)
     app.router.add_get("/", index_handler)
     app.router.add_get("/dashboard-logo.png", dashboard_logo_handler)
     app.router.add_get("/tiles/{source}/{z}/{x}/{y}.png", tile_handler)
