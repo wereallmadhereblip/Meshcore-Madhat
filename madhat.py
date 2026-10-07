@@ -460,6 +460,7 @@ chat_metadata = {}
 blocked_senders = set()
 processed_messages = set()
 announced_contact_adverts = {}
+advert_seen_at = {}
 meshcore_instance = None
 ollama_process = None
 
@@ -2785,13 +2786,23 @@ async def handle_incoming_channel_message(event):
             log_to_dash(f"Channel message send error: {error}")
 
 
+async def handle_advertisement(event):
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    public_key = payload.get("public_key")
+    if not public_key:
+        return
+    advert_seen_at[str(public_key)] = int(time.time())
+
+
 async def handle_new_contact(event):
+    contact = event.payload or {}
+    if contact.get("public_key"):
+        advert_seen_at[str(contact["public_key"])] = int(time.time())
     if not meshcore_instance or not app_state["is_connected"]:
         return
     if not app_config["bot"]["greet_new_users"]:
         return
 
-    contact = event.payload or {}
     public_key = contact.get("public_key")
     if not public_key:
         return
@@ -3421,6 +3432,7 @@ async def connect_hardware():
             await refresh_contacts()
             await refresh_channels()
             meshcore_instance.subscribe(EventType.NEW_CONTACT, handle_new_contact)
+            meshcore_instance.subscribe(EventType.ADVERTISEMENT, handle_advertisement)
             log_to_dash("Hardware interface successfully linked and active.")
         except Exception as error:
             meshcore_instance = None
@@ -3913,13 +3925,14 @@ body[data-theme="tron"].tron-overview{background-color:#000}
 .incoming-adverts-heading{display:flex;flex:none;flex-direction:column;align-items:flex-start;gap:1px;margin:0}
 .incoming-adverts-heading h3{margin:0;color:var(--muted);font-size:8px;font-weight:700;text-transform:uppercase;white-space:nowrap}
 .incoming-adverts-count{color:var(--muted);font:8px ui-monospace,monospace}
-.incoming-adverts-list{position:relative;display:block;flex:1;align-self:stretch;min-width:0;overflow:hidden;-webkit-mask-image:linear-gradient(180deg,transparent,#000 18%,#000 82%,transparent);mask-image:linear-gradient(180deg,transparent,#000 18%,#000 82%,transparent)}
+.incoming-adverts-list{position:relative;display:block;flex:1;align-self:stretch;min-width:0;overflow-x:hidden;overflow-y:auto;scrollbar-width:none;overscroll-behavior:contain;-webkit-mask-image:linear-gradient(180deg,transparent,#000 18%,#000 82%,transparent);mask-image:linear-gradient(180deg,transparent,#000 18%,#000 82%,transparent)}
 .incoming-advert-empty{margin:0;color:var(--muted);font-size:8px;line-height:1.3}
 .incoming-advert-track{display:block}
 .incoming-advert-group{display:flex;flex-direction:column;gap:1px;padding-bottom:6px}
 .incoming-advert-row{display:flex;align-items:center;justify-content:flex-start;gap:6px;width:fit-content;max-width:100%;min-width:0;min-height:11px;padding:0 4px;border-left:1px solid var(--border);background:transparent}
 .incoming-advert-name{min-width:0;overflow:hidden;color:var(--text);font:9px ui-monospace,monospace;text-overflow:ellipsis;white-space:nowrap}
 .incoming-advert-meta{flex:none;color:var(--muted);font:8px ui-monospace,monospace;white-space:nowrap}
+body[data-theme="tron"] .incoming-adverts-list::-webkit-scrollbar,.incoming-adverts-list::-webkit-scrollbar{display:none}
 body[data-theme="tron"] .incoming-adverts{flex:0 0 auto;width:min(33%,300px);min-width:0;max-width:33%;height:30px;border-left-color:#00d8ff;background:rgba(0,0,0,.45)}
 body[data-theme="tron"] .incoming-adverts-heading h3{color:#58dff7;font:600 9px "IBM Plex Mono","Cascadia Code",ui-monospace,monospace}
 body[data-theme="tron"] .incoming-adverts-count{font-size:9px}
@@ -4509,40 +4522,21 @@ function showPaths(message,sender){
   sheet.querySelector('.sheet-paths')?.remove();sheet.append(box);
 }
 window.openNodeActions=function(peer){
-  let id=String(peer.id),name=String(peer.name||id);
-  sheet.replaceChildren();
-  let head=document.createElement('div'),closeButton=document.createElement('button'),title=document.createElement('span');
-  head.className='sheet-head';closeButton.type='button';closeButton.textContent='\u00d7';closeButton.setAttribute('aria-label','Close');closeButton.onclick=close;title.textContent='Node Actions';head.append(closeButton,title);
-  let preview=document.createElement('div');preview.className='sheet-preview';preview.textContent=name+' · '+peerTypeLabel(peer.type);
-  sheet.append(head,preview);
-  sheet.append(action('Open Chat','reply',()=>{close();showView('nodes');selectConversation('node',id)}));
-  sheet.append(action(peer.archived?'Unarchive Chat':'Archive Chat','path',async()=>{
-    let response=await fetch('/api/chat-management',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_type:'node',target:id,action:'archive'})});
-    let data=await response.json();
-    close();if(!response.ok){showToast('Error',data.error||'Chat could not be updated');return}
-    await peers();if(selectedNodeId===id)await history('node',id,'node-chat-history');
-  }));
-  sheet.append(action('Delete Node','trash',async()=>{
-    if(!confirm('Delete '+name+' from the device? This cannot be undone.'))return;
-    let response=await fetch('/api/delete-target',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_type:'node',target:id})});
-    let data=await response.json().catch(()=>({}));
-    close();if(!response.ok){showToast('Error',data.error||'Node could not be deleted');return}
-    if(selectedNodeId===id){selectedNodeId='';document.getElementById('node-chat-title').textContent='Select a node';document.getElementById('node-chat-detail').textContent='Choose a node to view its conversation.';document.getElementById('node-send').disabled=true;document.getElementById('node-message').disabled=false;document.querySelector('#nodes-view .chat-panel form').hidden=false;document.getElementById('node-chat-history').replaceChildren();updateConversationMenu('node')}
-    showToast('Removed',name);await peers();
-  },true));
-  overlay.classList.add('open');
+  window.openMessageActions('node',String(peer.id),{text:String(peer.name||peer.id)+' \u00b7 '+peerTypeLabel(peer.type),direction:'incoming'},'',[],peer);
 };
-window.openMessageActions=function(type,id,message,sender,blocked){
+window.openMessageActions=function(type,id,message,sender,blocked,nodePeer){
+  let nodeMode=!!nodePeer;
   sheet.replaceChildren();
   let head=document.createElement('div'),closeButton=document.createElement('button'),title=document.createElement('span');
-  head.className='sheet-head';closeButton.type='button';closeButton.textContent='\u00d7';closeButton.setAttribute('aria-label','Close');closeButton.onclick=close;title.textContent='Message Actions';head.append(closeButton,title);
+  head.className='sheet-head';closeButton.type='button';closeButton.textContent='\u00d7';closeButton.setAttribute('aria-label','Close');closeButton.onclick=close;title.textContent=nodeMode?'Node Actions':'Message Actions';head.append(closeButton,title);
   let preview=document.createElement('div');preview.className='sheet-preview';preview.textContent=message.text;
   sheet.append(head,preview);
   let text=bodyText(type,message.text),incoming=message.direction!=='outgoing',channelSender=type==='channel'&&incoming?sender:'';
+  if(nodeMode)nodePeer=mapNodes.find(item=>String(item.id)===String(id))||nodePeer;
   let peerId=type==='node'?String(id):'',peerName=type==='channel'&&message.direction!=='outgoing'?String(sender||''):'';
   let knownPeer=type==='node'?mapNodes.find(item=>String(item.id)===peerId):(peerName?mapNodes.find(item=>String(item.name||'').trim().toLowerCase()===peerName.trim().toLowerCase()):null);
-  let isRepeater=Number(knownPeer?.type)===2;
-  sheet.append(action('Copy Text','copy',async()=>{let ok=await copyText(text);close();showToast(ok?'Copied':'Copy failed',ok?'Message text copied.':'Your browser blocked copying.')}));
+  let isRepeater=!nodeMode&&Number(knownPeer?.type)===2;
+  if(!nodeMode)sheet.append(action('Copy Text','copy',async()=>{let ok=await copyText(text);close();showToast(ok?'Copied':'Copy failed',ok?'Message text copied.':'Your browser blocked copying.')}));
   if(type==='channel'&&!isRepeater){
     if(channelSender)sheet.append(action('Reply','reply',()=>{close();let input=document.getElementById('channel-message');input.value='@['+channelSender+'] ';input.focus()}));
     if(incoming)sheet.append(action('View Message Paths','path',()=>showPaths(message,channelSender)));
@@ -4593,6 +4587,15 @@ window.openMessageActions=function(type,id,message,sender,blocked){
       let response=await fetch('/api/contacts/add-heard',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:peerId,name:peerName})}),data=await response.json().catch(()=>({}));
       close();if(response.status===404&&typeof window.openAddDialog==='function'){showToast('Not heard yet','Add this contact with its link or public key.');window.openAddDialog('node');return}if(!response.ok){showToast('Error',data.error||'Could not add contact');return}
       showToast('Added',data.name||peerName||peerId);if(typeof peers==='function')peers()}));
+  }
+  if(nodeMode){
+    sheet.append(action(nodePeer.archived?'Unarchive Chat':'Archive Chat','path',async()=>{
+      let response=await fetch('/api/chat-management',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_type:'node',target:id,action:'archive'})});
+      let data=await response.json();
+      close();if(!response.ok){showToast('Error',data.error||'Chat could not be updated');return}
+      await peers();if(selectedNodeId===id)await history('node',id,'node-chat-history');
+    }));
+    overlay.classList.add('open');return;
   }
   sheet.append(action('Delete','trash',async()=>{
     if(!confirm('Delete this message from the dashboard?'))return;
@@ -5225,7 +5228,7 @@ async def peers_handler(request):
             **get_chat_metadata("node", str(node_id)),
             "public_key": contact.get("public_key", str(node_id)),
             "type": contact.get("type", entry.get("type") if isinstance(entry, dict) else None),
-            "last_heard": contact.get("last_advert", contact.get("last_heard", 0)),
+            "last_heard": max(int(contact.get("last_advert") or contact.get("last_heard") or 0), advert_seen_at.get(str(contact.get("public_key", node_id)), 0)),
             "hops": contact.get("out_path_len"),
             "last_message_at": latest_message.get("sort_timestamp", 0),
             "latitude": coordinates[0] if coordinates else None,
