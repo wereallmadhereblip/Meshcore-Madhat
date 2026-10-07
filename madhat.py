@@ -5987,6 +5987,7 @@ async def reset_password_handler(request):
 
 LOGIN_PAGE = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MadHat Login</title>
 <style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1020;color:#e6e9f2;font:16px system-ui,sans-serif}
+form[hidden]{display:none}
 form{width:min(340px,90vw);padding:24px;border:1px solid #2b3556;border-radius:12px;background:#121a33;display:grid;gap:12px}
 input,button{padding:10px;border-radius:8px;border:1px solid #2b3556;background:#0b1020;color:inherit;font:inherit}
 button{background:#3b6cf6;border:0;cursor:pointer}a{color:#8fb0ff;cursor:pointer;font-size:14px}#msg{min-height:1.2em;font-size:14px;color:#ffb4b4}</style></head><body>
