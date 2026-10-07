@@ -5988,20 +5988,22 @@ async def reset_password_handler(request):
 LOGIN_PAGE = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MadHat Login</title>
 <style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1020;color:#e6e9f2;font:16px system-ui,sans-serif}
 form[hidden]{display:none}
+.pwrap{position:relative;display:grid}.pwrap input{padding-right:44px}.eye{position:absolute;right:2px;top:2px;bottom:2px;width:40px;padding:0;background:none;border:0;color:#8fb0ff;font-size:18px;cursor:pointer}.eye.on{opacity:.6;text-decoration:line-through}
 form{width:min(340px,90vw);padding:24px;border:1px solid #2b3556;border-radius:12px;background:#121a33;display:grid;gap:12px}
 input,button{padding:10px;border-radius:8px;border:1px solid #2b3556;background:#0b1020;color:inherit;font:inherit}
 button{background:#3b6cf6;border:0;cursor:pointer}a{color:#8fb0ff;cursor:pointer;font-size:14px}#msg{min-height:1.2em;font-size:14px;color:#ffb4b4}</style></head><body>
 <form id="login"><h2 style="margin:0">MadHat Dashboard</h2>
-<input id="pw" type="password" placeholder="Password" autocomplete="current-password" autofocus>
+<div class="pwrap"><input id="pw" type="password" placeholder="Password" autocomplete="current-password" autofocus><button type="button" class="eye" aria-label="Show password" aria-pressed="false">&#128065;</button></div>
 <button>Log in</button><a id="forgot">Forgot password?</a><div id="msg"></div></form>
 <form id="reset" hidden><h2 style="margin:0">Reset password</h2>
 <div style="font-size:14px">A code was sent to the admin over the mesh. Enter it with a new password.</div>
 <input id="code" placeholder="Reset code" inputmode="numeric" autocomplete="one-time-code">
-<input id="npw" type="password" placeholder="New password" autocomplete="new-password">
+<div class="pwrap"><input id="npw" type="password" placeholder="New password" autocomplete="new-password"><button type="button" class="eye" aria-label="Show password" aria-pressed="false">&#128065;</button></div>
 <button>Set password</button><a id="back">Back to login</a><div id="msg2"></div></form>
 <script>
 const post=(u,b)=>fetch(u,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)}).then(async r=>({ok:r.ok,d:await r.json().catch(()=>({}))}));
 const $=i=>document.getElementById(i);
+document.querySelectorAll(".eye").forEach(b=>b.onclick=()=>{const i=b.previousElementSibling,show=i.type==="password";i.type=show?"text":"password";b.classList.toggle("on",show);b.setAttribute("aria-pressed",show);b.setAttribute("aria-label",show?"Hide password":"Show password")});
 $("login").onsubmit=async e=>{e.preventDefault();const r=await post("/api/login",{password:$("pw").value});if(r.ok)location="/";else $("msg").textContent=r.d.error||"Login failed"};
 $("forgot").onclick=async()=>{$("msg").textContent="Sending code...";const r=await post("/api/forgot",{});if(r.ok){$("login").hidden=true;$("reset").hidden=false}else $("msg").textContent=r.d.error||"Failed"};
 $("back").onclick=()=>{$("reset").hidden=true;$("login").hidden=false};
