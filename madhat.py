@@ -3388,7 +3388,7 @@ button:hover{transform:translateY(-1px);border-color:var(--accent);background:va
 .conversation-rail{min-height:360px;margin:0;display:flex;flex-direction:column}
 #nodes-view .messages-layout,#channels-view .messages-layout{height:100%;min-height:0;overflow:hidden}
 #nodes-view .conversation-rail,#nodes-view .chat-panel,#channels-view .conversation-rail,#channels-view .chat-panel{min-height:0;overflow:hidden}
-.conversation-target-list{display:grid;align-content:start;gap:6px;min-height:0;overflow:auto}
+.conversation-target-list{display:grid;grid-auto-rows:max-content;align-content:start;gap:6px;min-height:0;overflow:auto}
 .conversation-filters{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:8px}
 .conversation-filters label{min-width:0;margin:0;font-size:10px}
 .conversation-filters select{margin-top:4px;padding:7px 20px 7px 7px;font-size:10px}
@@ -3614,7 +3614,7 @@ body[data-theme="tron"].tron-overview #map-view #map-node-list:has(>.map-empty){
 body[data-theme="tron"].tron-overview #map-view #map-node-list>.map-empty{width:310px;height:76px;min-width:310px;max-width:none;box-sizing:border-box;margin:0;justify-self:start}
 body[data-theme="tron"].tron-overview #map-view .map-peer-target{min-height:32px;padding:5px 7px;font-size:10px}
 body[data-theme="tron"].tron-overview #map-view .map-surface{min-height:0}
-body[data-theme="tron"] #map-view #map-node-list{display:grid;grid-template-columns:minmax(0,1fr);align-content:start;gap:6px;padding:6px;box-sizing:border-box}
+body[data-theme="tron"] #map-view #map-node-list{display:grid;grid-template-columns:minmax(0,1fr);grid-auto-rows:max-content;align-content:start;gap:6px;padding:6px;box-sizing:border-box}
 body[data-theme="tron"] #map-view #map-node-list:has(>.map-empty){height:auto;max-height:none;overflow:visible;padding:0}
 body[data-theme="tron"] #map-view .map-node-row{padding:0;border:0;gap:0}
 body[data-theme="tron"] #map-view .map-node-row-main{width:100%;gap:0;align-items:stretch;border:1px solid var(--border);border-radius:2px;background:#0b171d;box-sizing:border-box}
