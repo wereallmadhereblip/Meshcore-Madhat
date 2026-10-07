@@ -413,6 +413,7 @@ app_state = {
     "model_progress": None,
     "contacts": {},
     "channels": {},
+    "limits": {"max_contacts": None, "max_channels": MAX_CHANNELS},
     "gateway_telemetry": {},
     "ollama_running": False,
     "incoming_message_count": 0,
@@ -453,6 +454,7 @@ conversation_history = defaultdict(list)
 MAX_HISTORY_MESSAGES = 6
 chat_history = defaultdict(list)
 chat_metadata = {}
+blocked_senders = set()
 processed_messages = set()
 announced_contact_adverts = {}
 meshcore_instance = None
@@ -480,8 +482,17 @@ def load_chat_store():
                 and message.get("direction") in {"incoming", "outgoing"}
                 and isinstance(message.get("text"), str)
             ]
+            for message in valid_messages:
+                if not isinstance(message.get("id"), str):
+                    message["id"] = secrets.token_hex(6)
             if valid_messages:
                 chat_history[key] = valid_messages
+
+    saved_blocked = saved_store.get("blocked", [])
+    if isinstance(saved_blocked, list):
+        blocked_senders.update(
+            name.casefold() for name in saved_blocked if isinstance(name, str) and name.strip()
+        )
 
     saved_metadata = saved_store.get("metadata", {})
     if isinstance(saved_metadata, dict):
@@ -502,6 +513,7 @@ def save_chat_store():
     store = {
         "chats": dict(chat_history),
         "metadata": chat_metadata,
+        "blocked": sorted(blocked_senders),
     }
     try:
         CHAT_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -725,10 +737,28 @@ def limit_ai_reply(reply, max_length):
     return shortened.rstrip(" ,;:") + "..."
 
 
-def add_chat_message(target_type, target, direction, text):
+def parse_channel_sender(text):
+    match = re.match(r"^\s*(?:\[([^\]]{1,40})\]|([^:\r\n\[]{1,40}):)\s", text)
+    return (match.group(1) or match.group(2)).strip() if match else ""
+
+
+def reception_info(packet):
+    info = {}
+    path_len = packet.get("path_len")
+    if isinstance(path_len, int) and 0 <= path_len < 64:
+        info["path_len"] = path_len
+    snr = packet.get("SNR")
+    if isinstance(snr, (int, float)):
+        info["snr"] = snr
+    return info
+
+
+def add_chat_message(target_type, target, direction, text, info=None):
     key = chat_key(target_type, target)
     now = datetime.now()
     message = {
+        "id": secrets.token_hex(6),
+        **(info or {}),
         "direction": direction,
         "text": text,
         "status": "sent" if direction == "outgoing" else "received",
@@ -1021,6 +1051,25 @@ def is_private_mesh_channel(channel_name, channel_secret):
         return False
     public_secret = hashlib.sha256(channel_name.encode("utf-8")).digest()[:16]
     return bytes(channel_secret) != public_secret
+
+
+async def refresh_device_limits():
+    if not meshcore_instance or not app_state["is_connected"]:
+        return
+    query = getattr(meshcore_instance.commands, "send_device_query", None)
+    if query is None:
+        return
+    try:
+        async with paced_hardware_lock():
+            result = await query()
+        if result.type == EventType.ERROR or not isinstance(result.payload, dict):
+            return
+        for key in ("max_contacts", "max_channels"):
+            value = result.payload.get(key)
+            if isinstance(value, int) and value > 0:
+                app_state["limits"][key] = value
+    except Exception as error:
+        log_to_dash(f"Could not read device limits: {error}")
 
 
 async def refresh_channels():
@@ -2495,7 +2544,7 @@ async def handle_incoming_message(event):
         return
     processed_messages.add(message_id)
     resolved_sender = resolve_contact_id(sender)
-    add_chat_message("node", resolved_sender, "incoming", text)
+    add_chat_message("node", resolved_sender, "incoming", text, reception_info(packet))
     record_trace_event("direct", "inbound", resolved_sender)
     log_to_dash(f"Received DM from {sender}: {text}")
 
@@ -2557,7 +2606,9 @@ async def handle_incoming_channel_message(event):
     if message_id in processed_messages:
         return
     processed_messages.add(message_id)
-    add_chat_message("channel", channel_target, "incoming", text)
+    if parse_channel_sender(text).casefold() in blocked_senders:
+        return
+    add_chat_message("channel", channel_target, "incoming", text, reception_info(packet))
     record_trace_event("channel", "inbound", channel_target)
     log_to_dash(f"Received channel {channel_target} message: {text}")
 
@@ -3147,6 +3198,7 @@ async def connect_hardware():
                 handle_incoming_channel_message,
             )
             app_state["is_connected"] = True
+            await refresh_device_limits()
             await refresh_contacts()
             await refresh_channels()
             meshcore_instance.subscribe(EventType.NEW_CONTACT, handle_new_contact)
@@ -3177,7 +3229,40 @@ async def telemetry_loop():
 
 PAGE = r'''<!DOCTYPE html>
 <html><head><title>MeshCore AI Bot</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0d1117">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<script>
+(function(){
+const root=document.documentElement,ua=navigator.userAgent||'',uaData=navigator.userAgentData||null,platform=(uaData&&uaData.platform)||navigator.platform||'';
+const touchMac=/Mac/.test(platform)&&navigator.maxTouchPoints>1;
+let os='other';
+if(/Android/i.test(ua))os='android';else if(/iPhone|iPad|iPod/i.test(ua)||touchMac)os='ios';else if(/Win/i.test(platform))os='windows';else if(/Mac/i.test(platform))os='macos';else if(/CrOS/i.test(ua))os='chromeos';else if(/Linux/i.test(platform+ua))os='linux';
+let browser='other';
+if(/Edg\//.test(ua))browser='edge';else if(/OPR\/|Opera/.test(ua))browser='opera';else if(/SamsungBrowser/.test(ua))browser='samsung';else if(/Firefox|FxiOS/.test(ua))browser='firefox';else if(/Chrome|CriOS/.test(ua))browser='chrome';else if(/Safari/.test(ua))browser='safari';
+function classify(){
+  const coarse=window.matchMedia&&matchMedia('(pointer:coarse)').matches,short=Math.min(screen.width,screen.height),width=window.innerWidth;
+  const phoneUa=/Mobi|iPhone|iPod|Android.*Mobile/i.test(ua);
+  const tabletUa=/iPad|Android(?!.*Mobile)|Tablet/i.test(ua)||touchMac;
+  let device='desktop';
+  if(phoneUa||(coarse&&short<600))device='mobile';else if(tabletUa||(coarse&&short<1100))device='tablet';
+  if(device==='desktop'&&width<720)device='mobile';
+  return device;
+}
+function apply(){
+  const device=classify();
+  root.dataset.device=device;root.dataset.os=os;root.dataset.browser=browser;
+  root.dataset.orientation=window.innerHeight>window.innerWidth?'portrait':'landscape';
+  window.isMobileDevice=()=>root.dataset.device==='mobile';
+  window.isCompactDevice=()=>root.dataset.device!=='desktop';
+}
+apply();
+window.addEventListener('resize',()=>{const before=root.dataset.device;apply();if(before!==root.dataset.device&&typeof showView==='function'&&typeof activeView!=='undefined')showView(activeView==='tron-overview'?'nodes':activeView)});
+window.addEventListener('orientationchange',apply);
+window.mobileDeviceInfo=()=>({device:root.dataset.device,os,browser});
+})();
+</script>
 <link rel="stylesheet" href="/assets/leaflet/leaflet.css">
 <script defer src="/assets/leaflet/leaflet.js"></script>
 <style>
@@ -3657,10 +3742,63 @@ body[data-theme="tron"].tron-overview .analyzer-radio-list dt,body[data-theme="t
 @media(max-width:640px){body[data-theme="tron"] .dashboard-header{gap:4px;padding:4px 6px}body[data-theme="tron"] .incoming-adverts{order:0;flex-basis:100%;max-width:none;height:30px}body[data-theme="tron"] .header-meta{flex-wrap:wrap;justify-content:flex-start;gap:0}body[data-theme="tron"] .header-meta-item{padding:2px 5px}body[data-theme="tron"] .top-nav{flex-basis:100%;order:2}body[data-theme="tron"] .tron-quick-tabs{order:3;margin-left:0}body[data-theme="tron"] .console-toggle{order:4}}
 .tron-settings-back{display:none}
 body[data-theme="tron"] #settings-view .tron-settings-back{display:inline-flex;align-self:flex-start;min-height:28px;margin:0 0 8px;padding:4px 8px;border:1px solid rgba(0,190,235,.42);border-radius:1px;background:rgba(0,45,62,.28);color:#78ddf4;font:9px "IBM Plex Mono","Cascadia Code",ui-monospace,monospace}
+.add-btn{margin-left:8px;padding:3px 9px;border:1px solid var(--accent);border-radius:6px;background:var(--accent-dim);color:var(--accent);font:600 11px inherit;cursor:pointer;white-space:nowrap}
+.rail-capacity{display:block;margin:2px 0 0;color:var(--muted);font:11px ui-monospace,monospace}
+.rail-capacity[data-full="true"]{color:var(--danger)}
+.panel-heading .heading-tools{display:flex;align-items:center;gap:4px}
+#add-dialog{width:min(420px,94vw);padding:16px;border:1px solid var(--border);border-radius:10px;background:var(--panel-bg);color:var(--text)}
+#add-dialog::backdrop{background:rgba(0,0,0,.6)}
+#add-dialog h3{margin:0 0 4px;font-size:16px}
+#add-dialog textarea{width:100%;min-height:70px}
+#add-dialog .add-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
+#add-dialog .add-note{margin:6px 0 0;color:var(--muted);font-size:11px}
+#add-dialog .add-status{min-height:1.3em;margin-top:8px;font-size:12px;word-break:break-all}
+#add-dialog .add-status[data-state="error"]{color:var(--danger)}
+#add-dialog .add-status[data-state="success"]{color:var(--accent)}
+html[data-device="mobile"] body,html[data-device="tablet"] body{-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent;padding-left:max(8px,env(safe-area-inset-left));padding-right:max(8px,env(safe-area-inset-right));padding-bottom:max(8px,env(safe-area-inset-bottom))}
+html[data-device="mobile"] input,html[data-device="mobile"] select,html[data-device="mobile"] textarea{font-size:16px}
+html[data-device="mobile"] button,html[data-device="mobile"] select,html[data-device="mobile"] input:not([type=checkbox]):not([type=radio]){min-height:44px}
+html[data-device="mobile"] .nav-tab{min-height:44px;padding:0 14px}
+html[data-device="mobile"] .top-nav{overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+html[data-device="mobile"] .dashboard-header{position:static}
+html[data-device="mobile"] .header-meta{gap:8px}
+html[data-device="mobile"] #nodes-view .messages-layout,html[data-device="mobile"] #channels-view .messages-layout{display:flex;flex-direction:column;height:auto;overflow:visible}
+html[data-device="mobile"] #nodes-view .conversation-rail,html[data-device="mobile"] #channels-view .conversation-rail{flex:none;max-height:38dvh;min-height:180px}
+html[data-device="mobile"] #nodes-view .chat-panel,html[data-device="mobile"] #channels-view .chat-panel{flex:none;min-height:60dvh;max-height:none;overflow:visible}
+html[data-device="mobile"] .conversation-target-list{overflow-y:auto;-webkit-overflow-scrolling:touch}
+html[data-device="mobile"] .chat-panel form{position:sticky;bottom:0;padding:8px 0;background:var(--panel-bg)}
+html[data-device="mobile"] .map-layout{grid-template-columns:minmax(0,1fr)!important}
+html[data-device="mobile"] #map-canvas{height:55dvh;min-height:300px}
+html[data-device="mobile"] .map-rail{max-height:none;min-height:0}
+html[data-device="mobile"] #map-node-list{max-height:32dvh;overflow-y:auto}
+html[data-device="mobile"] .leaflet-control-zoom a{width:40px;height:40px;line-height:40px;font-size:20px}
+html[data-device="mobile"] .console-dock{max-height:50dvh}
+html[data-device="mobile"] #add-dialog{width:calc(100vw - 20px);max-height:90dvh;overflow:auto}
+html[data-device="mobile"] .analyzer-table-wrap,html[data-device="mobile"] .analyzer-main{overflow-x:auto}
+html[data-device="tablet"] .conversation-rail{min-height:300px}
+html[data-device="tablet"] button,html[data-device="tablet"] select{min-height:40px}
+html[data-device="tablet"] input,html[data-device="tablet"] select,html[data-device="tablet"] textarea{font-size:16px}
+@media(hover:none){.conversation-entry button,.map-node-row,.nav-tab{min-height:44px}}
+.chat-message{cursor:pointer}
+#msg-actions{position:fixed;inset:0;z-index:1200;display:none;align-items:flex-end;justify-content:center;background:rgba(0,0,0,.55)}
+#msg-actions.open{display:flex}
+#msg-actions .sheet{width:min(520px,100%);max-height:80dvh;overflow:auto;border:1px solid var(--border);border-radius:12px 12px 0 0;background:var(--panel-bg);padding-bottom:max(12px,env(safe-area-inset-bottom))}
+@media(min-width:721px){#msg-actions{align-items:center}#msg-actions .sheet{border-radius:12px}}
+#msg-actions .sheet-head{display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--panel-raised);font-weight:600}
+#msg-actions .sheet-head button{min-width:0;padding:2px 8px;font-size:18px;line-height:1}
+#msg-actions .sheet-preview{margin:10px 12px 0;padding:8px 10px;border-radius:8px;background:var(--input-bg);color:var(--muted);font-size:12px;overflow-wrap:anywhere;max-height:84px;overflow:hidden}
+#msg-actions .sheet-action{display:flex;align-items:center;gap:12px;width:calc(100% - 16px);margin:8px;padding:13px 14px;border:1px solid var(--border);border-radius:10px;background:var(--panel-raised);color:var(--text);font-size:14px;text-align:left;cursor:pointer}
+#msg-actions .sheet-action.danger{color:var(--danger)}
+#msg-actions .sheet-action svg{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+#msg-actions .sheet-action span{flex:1}
+#msg-actions .sheet-paths{margin:8px 12px;padding:10px;border-radius:8px;background:var(--input-bg);font-size:12px;line-height:1.7}
+#msg-actions .sheet-paths div{display:flex;justify-content:space-between;gap:12px}
+#msg-actions .sheet-paths .muted{color:var(--muted);margin-top:6px;font-size:11px}
 </style>
 <script>
 let gatewayTelemetry={};
 let meshChannels=[];
+let peerLimits={};
 let selectedNodeId='';
 let selectedChannelId='';
 let activeView='nodes';
@@ -3752,7 +3890,7 @@ let liveTraceMarkerById=new Map();
 let lastSeenTraceEventId=0;
 let traceEventsInitialized=false;
 function hashColor(id){let str=String(id),hash=0;for(let i=0;i<str.length;i++){hash=(hash*31+str.charCodeAt(i))|0}return 'hsl('+(Math.abs(hash)%360)+',65%,50%)'}
-function showView(view){let target=document.getElementById(view+'-view');if(!target)return;let overviewViews=['nodes','channels','map','analyzer'];if(document.body.dataset.theme==='tron'&&overviewViews.includes(view)){activeView='tron-overview';document.body.classList.add('tron-overview');document.querySelectorAll('.view-panel').forEach(panel=>panel.hidden=!overviewViews.includes(panel.id.replace(/-view$/,'')));document.querySelectorAll('.nav-tab').forEach(tab=>tab.setAttribute('aria-pressed',String(tab.dataset.view===view)));openMap();renderAnalyzerStats();loadTronAnalyzerRadioStatus();return}document.body.classList.remove('tron-overview');activeView=view;document.querySelectorAll('.view-panel').forEach(panel=>panel.hidden=panel!==target);document.querySelectorAll('.nav-tab').forEach(tab=>tab.setAttribute('aria-pressed',String(tab.dataset.view===view)));if(view==='map')openMap();if(view==='live-trace')openLiveTrace();if(view==='analyzer'){renderAnalyzerStats();loadAnalyzerRadioStatus()}if(view==='device-settings'&&!deviceSettingsLoaded)loadDeviceSettings()}
+function showView(view){let target=document.getElementById(view+'-view');if(!target)return;let overviewViews=['nodes','channels','map','analyzer'];if(document.body.dataset.theme==='tron'&&!(window.isMobileDevice&&window.isMobileDevice())&&overviewViews.includes(view)){activeView='tron-overview';document.body.classList.add('tron-overview');document.querySelectorAll('.view-panel').forEach(panel=>panel.hidden=!overviewViews.includes(panel.id.replace(/-view$/,'')));document.querySelectorAll('.nav-tab').forEach(tab=>tab.setAttribute('aria-pressed',String(tab.dataset.view===view)));openMap();renderAnalyzerStats();loadTronAnalyzerRadioStatus();return}document.body.classList.remove('tron-overview');activeView=view;document.querySelectorAll('.view-panel').forEach(panel=>panel.hidden=panel!==target);document.querySelectorAll('.nav-tab').forEach(tab=>tab.setAttribute('aria-pressed',String(tab.dataset.view===view)));if(view==='map')openMap();if(view==='live-trace')openLiveTrace();if(view==='analyzer'){renderAnalyzerStats();loadAnalyzerRadioStatus()}if(view==='device-settings'&&!deviceSettingsLoaded)loadDeviceSettings()}
 const MAP_STYLES={standard:['/tiles/osm/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}],dark:['/tiles/osm/{z}/{x}/{y}.png',{maxZoom:19,className:'map-tiles-dark',attribution:'&copy; OpenStreetMap contributors'}],terrain:['/tiles/topo/{z}/{x}/{y}.png',{maxZoom:17,attribution:'&copy; OpenStreetMap contributors, SRTM | &copy; OpenTopoMap (CC-BY-SA)'}]};
 let mapTileLayer=null;
 function applyMapStyle(){let select=document.getElementById('map-style-select');if(!select||!dashboardMap)return;let key=MAP_STYLES[select.value]?select.value:'standard';try{localStorage.setItem('meshcore-map-style',key)}catch(e){}if(mapTileLayer)dashboardMap.removeLayer(mapTileLayer);mapTileLayer=L.tileLayer(MAP_STYLES[key][0],MAP_STYLES[key][1]).addTo(dashboardMap);mapTileLayer.bringToBack()}
@@ -3795,9 +3933,9 @@ async function loadAnalyzerRadioStatus(){let panel=document.getElementById('anal
 async function loadTronAnalyzerRadioStatus(){let panel=document.getElementById('analyzer-radio-status');if(!panel||activeView!=='tron-overview'||analyzerRadioStatusLoading)return;analyzerRadioStatusLoading=true;let groups=[['Radio','radio'],['Core','core'],['Packets','packets']],labels={noise_floor:['Noise floor','dBm'],last_rssi:['Last RSSI','dBm'],last_snr:['Last SNR','dB'],tx_air_secs:['TX airtime','s'],rx_air_secs:['RX airtime','s'],battery_mv:['Battery voltage','mV'],uptime_secs:['Uptime','s'],errors:['Errors',''],queue_len:['Transmit queue',''],recv:['Received packets',''],sent:['Sent packets',''],flood_tx:['Flood TX',''],direct_tx:['Direct TX',''],flood_rx:['Flood RX',''],direct_rx:['Direct RX',''],recv_errors:['Receive errors','']};let state=panel.querySelector('.analyzer-radio-state');if(!state){state=panel.querySelector('.analyzer-detail');if(state)state.className='analyzer-radio-state analyzer-detail'}let contentReady=Boolean(panel.querySelector('[data-stat-key]')),issues=[];try{for(let [title,statsType] of groups){try{let response=await fetch('/api/device-settings/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'stats',stats_type:statsType})}),data=await response.json();if(!response.ok){if(response.status===503){if(state)state.textContent='Connect to a MeshCore radio to view live statistics.';return}throw new Error(data.error||'Statistics unavailable')}let values=data.result&&typeof data.result==='object'&&!Array.isArray(data.result)?data.result:{};let section=panel.querySelector('[data-radio-group="'+statsType+'"]'),list;if(!section){if(!contentReady){panel.replaceChildren();contentReady=true;state=document.createElement('p');state.className='analyzer-radio-state';panel.appendChild(state)}section=document.createElement('section');section.className='analyzer-radio-group';section.dataset.radioGroup=statsType;let heading=document.createElement('h4');heading.textContent=title;list=document.createElement('dl');list.className='analyzer-radio-list';list.dataset.radioGroup=statsType;section.append(heading,list);panel.appendChild(section)}else list=section.querySelector('.analyzer-radio-list');for(let [key,value] of Object.entries(values)){let detail=[...list.querySelectorAll('[data-stat-key]')].find(item=>item.dataset.statKey===key);if(!detail){let term=document.createElement('dt');term.textContent=(labels[key]||[key.replaceAll('_',' ').replace(/\b\w/g,char=>char.toUpperCase()),''])[0];detail=document.createElement('dd');detail.dataset.statKey=key;list.append(term,detail)}let unit=(labels[key]||['',''])[1];detail.textContent=value===null||value===undefined?'Unavailable':String(value)+(unit?' '+unit:'')}}catch(error){issues.push(title)}}let timestamp=panel.querySelector('.analyzer-radio-updated');if(!timestamp){timestamp=document.createElement('p');timestamp.className='analyzer-radio-updated';panel.appendChild(timestamp)}timestamp.textContent='Updated '+new Date().toLocaleTimeString();if(state)state.textContent=issues.length?'Some readings did not refresh; previous values are retained.':'LIVE'}finally{analyzerRadioStatusLoading=false}}
 setInterval(()=>{if(activeView==='analyzer')loadAnalyzerRadioStatus();else if(activeView==='tron-overview')loadTronAnalyzerRadioStatus()},15000);
 function updateSearchPlaceholders(){let contactPlaceholder='Search '+mapNodes.length+' contacts';for(let id of ['node-search','map-node-search']){let input=document.getElementById(id);if(input)input.placeholder=contactPlaceholder}let channelSearch=document.getElementById('channel-search');if(channelSearch)channelSearch.placeholder='Search '+meshChannels.length+' channels'}
-async function peers(){let r=await fetch('/api/peers'),d=await r.json();gatewayTelemetry=d.gateway_telemetry||{};mapNodes=d.nodes||[];meshChannels=d.channels||[];updateSearchPlaceholders();gateway_battery.textContent=gatewayTelemetry.battery!=null?gatewayTelemetry.battery+'%':'Unavailable';system_battery.textContent=d.system_battery!=null?d.system_battery+'%':'Unavailable';if(!mapNodes.some(item=>String(item.id)===selectedNodeId))selectedNodeId='';if(!meshChannels.some(item=>String(item.id)===selectedChannelId))selectedChannelId='';renderConversationTargets('node');renderConversationTargets('channel');renderKnownPeers();renderMapMarkers();renderAnalyzerStats();renderIncomingAdverts();if(liveTraceMap)renderLiveTraceMarkers()}
+async function peers(){let r=await fetch('/api/peers'),d=await r.json();gatewayTelemetry=d.gateway_telemetry||{};mapNodes=d.nodes||[];meshChannels=d.channels||[];peerLimits=d.limits||{};updateAddCapacity();updateSearchPlaceholders();gateway_battery.textContent=gatewayTelemetry.battery!=null?gatewayTelemetry.battery+'%':'Unavailable';system_battery.textContent=d.system_battery!=null?d.system_battery+'%':'Unavailable';if(!mapNodes.some(item=>String(item.id)===selectedNodeId))selectedNodeId='';if(!meshChannels.some(item=>String(item.id)===selectedChannelId))selectedChannelId='';renderConversationTargets('node');renderConversationTargets('channel');renderKnownPeers();renderMapMarkers();renderAnalyzerStats();renderIncomingAdverts();if(liveTraceMap)renderLiveTraceMarkers()}
 function parseChannelSender(text){let bracket=text.match(/^\[([^\]]{1,24})\]\s*/);if(bracket)return bracket[1];let colon=text.match(/^([A-Za-z0-9 _-]{1,24}):\s/);if(colon)return colon[1];return null}
-async function history(type,id,boxId,scrollToLatest=false){let box=document.getElementById(boxId);if(!id){box.replaceChildren();updateConversationMenu(type);return}try{let response=await fetch('/api/chat-history?target_type='+encodeURIComponent(type)+'&target='+encodeURIComponent(id)),data=await response.json();if(!response.ok)throw new Error(data.error||'Message history could not be loaded');updateConversationMenu(type,data.metadata||{});let wasAtLatest=box.scrollHeight-box.clientHeight-box.scrollTop<=40;box.replaceChildren();let peerName=type==='node'?(mapNodes.find(item=>String(item.id)===id)?.name||id):(meshChannels.find(item=>String(item.id)===id)?.name||('Channel '+id));for(let message of data.messages||[]){let outgoing=message.direction==='outgoing';let item=document.createElement('div');item.className='chat-message '+(outgoing?'outgoing':'incoming');let sender=outgoing?'You':(type==='channel'?(parseChannelSender(message.text)||peerName):peerName);let meta=document.createElement('div');meta.className='chat-message-meta';let avatar=document.createElement('span');avatar.className='chat-avatar';avatar.style.background=hashColor(outgoing?'you':id);avatar.textContent=sender.charAt(0)||'?';let senderLabel=document.createElement('span');senderLabel.className='chat-sender';senderLabel.textContent=sender;let time=document.createElement('span');time.className='chat-time';time.textContent=message.timestamp;let status=document.createElement('span');status.className='chat-status';let statusLabels={sent:'Sent',delivered:'Delivered',unconfirmed:'Sent (not confirmed)',received:'Received'},hopCount=Number(message.hops);status.textContent=message.status==='delivered'&&Number.isInteger(hopCount)&&hopCount>=0?'Delivered · '+hopCount+' hop'+(hopCount===1?'':'s'):statusLabels[message.status]||statusLabels[outgoing?'sent':'received'];meta.append(avatar,senderLabel,time,status);let body=document.createElement('div');body.className='chat-message-body';body.textContent=message.text;item.append(meta,body);box.appendChild(item)}box.scrollTop=scrollToLatest||wasAtLatest?box.scrollHeight:box.scrollTop}catch(error){box.textContent=error.message}}
+async function history(type,id,boxId,scrollToLatest=false){let box=document.getElementById(boxId);if(!id){box.replaceChildren();updateConversationMenu(type);return}try{let response=await fetch('/api/chat-history?target_type='+encodeURIComponent(type)+'&target='+encodeURIComponent(id)),data=await response.json();if(!response.ok)throw new Error(data.error||'Message history could not be loaded');updateConversationMenu(type,data.metadata||{});let wasAtLatest=box.scrollHeight-box.clientHeight-box.scrollTop<=40;box.replaceChildren();let peerName=type==='node'?(mapNodes.find(item=>String(item.id)===id)?.name||id):(meshChannels.find(item=>String(item.id)===id)?.name||('Channel '+id));for(let message of data.messages||[]){let outgoing=message.direction==='outgoing';let item=document.createElement('div');item.className='chat-message '+(outgoing?'outgoing':'incoming');let sender=outgoing?'You':(type==='channel'?(parseChannelSender(message.text)||peerName):peerName);let meta=document.createElement('div');meta.className='chat-message-meta';let avatar=document.createElement('span');avatar.className='chat-avatar';avatar.style.background=hashColor(outgoing?'you':id);avatar.textContent=sender.charAt(0)||'?';let senderLabel=document.createElement('span');senderLabel.className='chat-sender';senderLabel.textContent=sender;let time=document.createElement('span');time.className='chat-time';time.textContent=message.timestamp;let status=document.createElement('span');status.className='chat-status';let statusLabels={sent:'Sent',delivered:'Delivered',unconfirmed:'Sent (not confirmed)',received:'Received'},hopCount=Number(message.hops);status.textContent=message.status==='delivered'&&Number.isInteger(hopCount)&&hopCount>=0?'Delivered · '+hopCount+' hop'+(hopCount===1?'':'s'):statusLabels[message.status]||statusLabels[outgoing?'sent':'received'];meta.append(avatar,senderLabel,time,status);let body=document.createElement('div');body.className='chat-message-body';body.textContent=message.text;item.append(meta,body);item.tabIndex=0;item.setAttribute('role','button');item.onclick=()=>openMessageActions(type,id,message,sender,data.blocked||[]);item.onkeydown=event=>{if(event.key==='Enter')item.click()};box.appendChild(item)}box.scrollTop=scrollToLatest||wasAtLatest?box.scrollHeight:box.scrollTop}catch(error){box.textContent=error.message}}
 async function deleteTarget(type){let selected=type==='node'?selectedNodeId:selectedChannelId;if(!selected)return;if(!confirm('Delete this '+type+' from the device? This cannot be undone.'))return;let response=await fetch('/api/delete-target',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_type:type,target:selected})}),data=await response.json();if(!response.ok){alert(data.error||'Delete failed');return}if(type==='node'){selectedNodeId=null;document.getElementById('node-chat-title').textContent='Select a node';document.getElementById('node-chat-detail').textContent='Choose a node to view its conversation.';document.getElementById('node-send').disabled=true;document.getElementById('node-chat-history').replaceChildren()}else{selectedChannelId=null;document.getElementById('channel-chat-title').textContent='Select a channel';document.getElementById('channel-chat-detail').textContent='Choose a channel to view its conversation.';document.getElementById('channel-send').disabled=true;document.getElementById('channel-chat-history').replaceChildren()}updateConversationMenu(type);let menu=document.getElementById(type+'-chat-options');if(menu)menu.open=false;await peers()}
 async function manageConversation(type,action){let selected=type==='node'?selectedNodeId:selectedChannelId;if(!selected)return;if(action==='clear'&&!confirm('Clear this conversation history? This cannot be undone.'))return;let response=await fetch('/api/chat-management',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_type:type,target:selected,action})}),data=await response.json();if(!response.ok){alert(data.error||'Conversation could not be updated');return}let menu=document.querySelector('#'+(type==='node'?'node':'channel')+'-chat-options');if(menu)menu.open=false;await history(type,selected,type==='node'?'node-chat-history':'channel-chat-history');await peers()}
 function selectNode(id){selectConversation('node',id)}
@@ -4023,6 +4161,136 @@ loadDeviceSettings=async function(){await loadDeviceSettingsWithLimits();if(!loa
 const saveDeviceSettingsWithLimits=saveDeviceSettings;
 saveDeviceSettings=async function(event){let pathHash=document.getElementById('path-hash-mode'),wasDisabled=pathHash.disabled;pathHash.disabled=false;try{return await saveDeviceSettingsWithLimits(event)}finally{pathHash.disabled=wasDisabled}}
 window.addEventListener('DOMContentLoaded',()=>{initializeRadioPresets();renderLocalRegions()});
+</script>
+<dialog id="add-dialog"><form id="add-form" method="dialog"><h3 id="add-title"></h3><p class="add-note" id="add-capacity"></p><div id="add-fields"></div><div class="add-status" id="add-status" role="status"></div><div class="add-actions"><button type="button" id="add-cancel">Close</button><button type="submit" id="add-submit">Add</button></div></form></dialog>
+<script>
+(function(){
+let mode='node';
+const dlg=document.getElementById('add-dialog'),form=document.getElementById('add-form'),fields=document.getElementById('add-fields'),statusBox=document.getElementById('add-status');
+const field=(id,label,type,extra)=>'<label for="'+id+'">'+label+'</label><input id="'+id+'" type="'+(type||'text')+'" autocomplete="off" '+(extra||'')+'>';
+function capacityText(kind){
+  let used=kind==='node'?mapNodes.length:meshChannels.length,max=kind==='node'?peerLimits.max_contacts:peerLimits.max_channels;
+  return {text:(kind==='node'?'Contacts ':'Channels ')+used+(max?' / '+max:''),full:Boolean(max)&&used>=max};
+}
+window.updateAddCapacity=function(){
+  for(let el of document.querySelectorAll('.rail-capacity')){let c=capacityText(el.dataset.kind);el.textContent=c.text;el.dataset.full=String(c.full)}
+  for(let btn of document.querySelectorAll('.add-btn')){let c=capacityText(btn.dataset.kind);btn.disabled=c.full;btn.title=c.full?'Limit reached on this device':'Add'}
+};
+function renderFields(){
+  if(mode==='channel'){
+    fields.innerHTML='<label for="add-kind">Channel type</label><select id="add-kind"><option value="public">Public channel</option><option value="private">Private channel</option><option value="hashtag">Hashtag channel</option></select><div id="add-channel-extra"></div>';
+    const kind=document.getElementById('add-kind'),extra=document.getElementById('add-channel-extra');
+    const draw=()=>{
+      if(kind.value==='public')extra.innerHTML='<p class="add-note">Joins the standard MeshCore Public channel.</p>';
+      else if(kind.value==='private')extra.innerHTML=field('add-name','Channel name','text','maxlength="32"')+field('add-secret','Secret key (optional, 32 hex)','text','maxlength="32" spellcheck="false"')+'<p class="add-note">Leave the key blank to generate a new random one. Share the key with people you want in the channel.</p>';
+      else extra.innerHTML=field('add-name','Hashtag name','text','maxlength="31" placeholder="#example"')+'<p class="add-note">Anyone who joins the same hashtag name can talk in it. Letters, numbers and dashes only.</p>';
+    };
+    kind.onchange=draw;draw();
+  }else{
+    fields.innerHTML='<label for="add-method">Add using</label><select id="add-method"><option value="manual">Public key</option><option value="card">Contact link</option></select><div id="add-node-extra"></div>';
+    const method=document.getElementById('add-method'),extra=document.getElementById('add-node-extra');
+    const draw=()=>{
+      if(method.value==='card')extra.innerHTML='<label for="add-card">meshcore:// contact link</label><textarea id="add-card" spellcheck="false" placeholder="meshcore://..."></textarea>';
+      else extra.innerHTML='<label for="add-node-type">Type</label><select id="add-node-type"><option value="repeater">Repeater</option><option value="companion">Companion / chat node</option><option value="room">Room server</option><option value="sensor">Sensor</option></select>'+field('add-name','Name','text','maxlength="31"')+field('add-key','Public key (64 hex)','text','maxlength="64" spellcheck="false"')+field('add-lat','Latitude (optional)','number','step="any" min="-90" max="90"')+field('add-lon','Longitude (optional)','number','step="any" min="-180" max="180"');
+    };
+    method.onchange=draw;draw();
+  }
+}
+window.openAddDialog=function(kind){
+  mode=kind;
+  document.getElementById('add-title').textContent=kind==='channel'?'Add channel':'Add node / repeater';
+  let c=capacityText(kind);document.getElementById('add-capacity').textContent=c.text+(c.full?' - limit reached':'');
+  statusBox.textContent='';statusBox.dataset.state='';
+  renderFields();
+  dlg.showModal();
+};
+document.getElementById('add-cancel').onclick=()=>dlg.close();
+const value=id=>{let el=document.getElementById(id);return el?el.value.trim():''};
+form.onsubmit=async event=>{
+  event.preventDefault();
+  let url,body;
+  if(mode==='channel'){url='/api/channels/add';body={type:value('add-kind'),name:value('add-name'),secret:value('add-secret')}}
+  else if(value('add-method')==='card'){url='/api/contacts/add';body={card:value('add-card')}}
+  else{url='/api/contacts/add';body={node_type:value('add-node-type'),name:value('add-name'),public_key:value('add-key'),latitude:value('add-lat'),longitude:value('add-lon')}}
+  let submit=document.getElementById('add-submit');submit.disabled=true;statusBox.dataset.state='';statusBox.textContent='Sending to device...';
+  try{
+    let response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),data=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(data.error||'Request failed');
+    statusBox.dataset.state='success';
+    statusBox.textContent=data.secret?'Added '+data.name+'. Secret key: '+data.secret:'Added.';
+    if(typeof peers==='function')await peers();
+    if(!data.secret)setTimeout(()=>{if(dlg.open)dlg.close()},900);
+  }catch(error){statusBox.dataset.state='error';statusBox.textContent=error.message}
+  finally{submit.disabled=false}
+};
+function installButtons(){
+  const spots=[['#nodes-view .conversation-rail','node'],['#channels-view .conversation-rail','channel'],['#map-view .map-rail','node']];
+  for(let [selector,kind] of spots){
+    let heading=document.querySelector(selector+' .panel-heading');
+    if(!heading||heading.querySelector('.add-btn'))continue;
+    let tools=document.createElement('div'),btn=document.createElement('button'),cap=document.createElement('span');
+    tools.className='heading-tools';btn.type='button';btn.className='add-btn';btn.dataset.kind=kind;btn.textContent='+ Add';btn.onclick=()=>openAddDialog(kind);
+    cap.className='rail-capacity';cap.dataset.kind=kind;
+    heading.firstElementChild.append(cap);
+    while(heading.children.length>1)tools.append(heading.children[1]);
+    tools.prepend(btn);heading.append(tools);
+  }
+  updateAddCapacity();
+}
+installButtons();
+})();
+</script>
+<div id="msg-actions" role="dialog" aria-modal="true" aria-label="Message Actions"><div class="sheet" id="msg-sheet"></div></div>
+<script>
+(function(){
+const overlay=document.getElementById('msg-actions'),sheet=document.getElementById('msg-sheet');
+const ICONS={copy:'<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/>',reply:'<path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 6 6v3"/>',path:'<circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M6 16V8a2 2 0 0 1 2-2h8M18 8v8"/>',block:'<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>',trash:'<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>'};
+function close(){overlay.classList.remove('open')}
+overlay.addEventListener('click',event=>{if(event.target===overlay)close()});
+document.addEventListener('keydown',event=>{if(event.key==='Escape')close()});
+function bodyText(type,text){if(type!=='channel')return text;return text.replace(/^\s*(?:\[[^\]]{1,40}\]|[^:\r\n\[]{1,40}:)\s+/,'')}
+async function copyText(text){
+  try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(text);return true}}catch(e){}
+  let area=document.createElement('textarea');area.value=text;area.style.cssText='position:fixed;opacity:0;top:0;left:0';document.body.append(area);area.focus();area.select();
+  let ok=false;try{ok=document.execCommand('copy')}catch(e){}area.remove();return ok;
+}
+function action(label,icon,handler,danger){
+  let button=document.createElement('button');button.type='button';button.className='sheet-action'+(danger?' danger':'');
+  button.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true">'+ICONS[icon]+'</svg><span></span>';button.querySelector('span').textContent=label;
+  button.onclick=handler;return button;
+}
+function showPaths(message,sender){
+  let rows=[['Sender',sender||'Unknown'],['Received',message.timestamp||'Unknown'],['Hops',Number.isInteger(message.path_len)?(message.path_len===0?'Direct (0 hops)':message.path_len+' hop'+(message.path_len===1?'':'s')):'Not reported'],['Signal (SNR)',typeof message.snr==='number'?message.snr.toFixed(2)+' dB':'Not reported']];
+  let box=document.createElement('div');box.className='sheet-paths';
+  for(let [label,value] of rows){let row=document.createElement('div'),a=document.createElement('span'),b=document.createElement('strong');a.textContent=label;b.textContent=value;row.append(a,b);box.append(row)}
+  let note=document.createElement('div');note.className='muted';note.textContent='The radio reports the hop count and signal for each message, not the repeaters it passed through.';box.append(note);
+  sheet.querySelector('.sheet-paths')?.remove();sheet.append(box);
+}
+window.openMessageActions=function(type,id,message,sender,blocked){
+  sheet.replaceChildren();
+  let head=document.createElement('div'),closeButton=document.createElement('button'),title=document.createElement('span');
+  head.className='sheet-head';closeButton.type='button';closeButton.textContent='\u00d7';closeButton.setAttribute('aria-label','Close');closeButton.onclick=close;title.textContent='Message Actions';head.append(closeButton,title);
+  let preview=document.createElement('div');preview.className='sheet-preview';preview.textContent=message.text;
+  sheet.append(head,preview);
+  let text=bodyText(type,message.text),incoming=message.direction!=='outgoing',channelSender=type==='channel'&&incoming?sender:'';
+  sheet.append(action('Copy Text','copy',async()=>{let ok=await copyText(text);close();showToast(ok?'Copied':'Copy failed',ok?'Message text copied.':'Your browser blocked copying.')}));
+  if(type==='channel'){
+    if(channelSender)sheet.append(action('Reply','reply',()=>{close();let input=document.getElementById('channel-message');input.value='@['+channelSender+'] ';input.focus()}));
+    if(incoming)sheet.append(action('View Message Paths','path',()=>showPaths(message,channelSender)));
+    if(channelSender){let isBlocked=blocked.includes(channelSender.toLowerCase());sheet.append(action(isBlocked?'Unblock Sender':'Block Sender','block',async()=>{
+      if(!isBlocked&&!confirm('Block '+channelSender+'? Their messages will be hidden and ignored.'))return;
+      let response=await fetch('/api/block-sender',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:channelSender,blocked:!isBlocked})});
+      close();if(!response.ok){showToast('Error','Could not update block list.');return}
+      showToast(isBlocked?'Unblocked':'Blocked',channelSender);history('channel',id,'channel-chat-history')}))}
+  }
+  sheet.append(action('Delete','trash',async()=>{
+    if(!confirm('Delete this message from the dashboard?'))return;
+    let response=await fetch('/api/delete-message',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_type:type,target:id,id:message.id})});
+    close();if(!response.ok){let data=await response.json().catch(()=>({}));showToast('Error',data.error||'Delete failed');return}
+    history(type,id,type==='channel'?'channel-chat-history':'node-chat-history')},true));
+  overlay.classList.add('open');
+};
+})();
 </script>
 </body></html>'''
 
@@ -4655,6 +4923,10 @@ async def peers_handler(request):
             }
             for i, value in app_state["channels"].items()
         ],
+        "limits": {
+            "max_contacts": app_state["limits"]["max_contacts"],
+            "max_channels": app_state["limits"]["max_channels"],
+        },
         "gateway_telemetry": app_state["gateway_telemetry"],
         "system_battery": system_battery_percentage(),
     })
@@ -4720,10 +4992,53 @@ async def chat_history_handler(request):
     target = request.query.get("target", "")
     if target_type not in {"node", "channel"} or not target:
         return web.json_response({"error": "A valid conversation target is required"}, status=400)
+    messages = chat_history.get(chat_key(target_type, target), [])
+    if target_type == "channel":
+        messages = [
+            message for message in messages
+            if message.get("direction") == "outgoing"
+            or parse_channel_sender(message.get("text", "")).casefold() not in blocked_senders
+        ]
     return web.json_response({
-        "messages": chat_history.get(chat_key(target_type, target), []),
+        "messages": messages,
         "metadata": get_chat_metadata(target_type, target),
+        "blocked": sorted(blocked_senders),
     })
+
+
+async def delete_message_handler(request):
+    data = await read_json_object(request)
+    if data is None:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+    target_type = data.get("target_type")
+    target = str(data.get("target", "")).strip()
+    message_id = data.get("id")
+    if target_type not in {"node", "channel"} or not target or not isinstance(message_id, str):
+        return web.json_response({"error": "A valid message is required"}, status=400)
+    key = chat_key(target_type, target)
+    remaining = [message for message in chat_history.get(key, []) if message.get("id") != message_id]
+    if len(remaining) == len(chat_history.get(key, [])):
+        return web.json_response({"error": "Message not found"}, status=404)
+    chat_history[key] = remaining
+    if not save_chat_store():
+        return web.json_response({"error": "Chat changes could not be saved"}, status=500)
+    return web.json_response({"ok": True})
+
+
+async def block_sender_handler(request):
+    data = await read_json_object(request)
+    if data is None:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+    name = str(data.get("name", "")).strip()
+    if not name or len(name) > 40:
+        return web.json_response({"error": "A sender name is required"}, status=400)
+    if data.get("blocked", True) is False:
+        blocked_senders.discard(name.casefold())
+    else:
+        blocked_senders.add(name.casefold())
+    if not save_chat_store():
+        return web.json_response({"error": "Block list could not be saved"}, status=500)
+    return web.json_response({"ok": True, "blocked": sorted(blocked_senders)})
 
 
 async def manage_chat_handler(request):
@@ -4756,6 +5071,166 @@ async def manage_chat_handler(request):
         "messages": chat_history.get(key, []),
         "metadata": get_chat_metadata(target_type, target),
     })
+
+
+PUBLIC_CHANNEL_SECRET = bytes.fromhex("8b3387e9c5cdea6ac9e5edbaa115cd72")
+CONTACT_ADD_TYPES = {"companion": 1, "repeater": 2, "room": 3, "sensor": 4}
+HEX_KEY_PATTERN = re.compile(r"[0-9a-fA-F]{64}")
+
+
+async def read_json_object(request):
+    try:
+        data = await request.json()
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+async def add_channel_handler(request):
+    data = await read_json_object(request)
+    if data is None:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+    if not meshcore_instance or not app_state["is_connected"]:
+        return web.json_response({"error": "MeshCore is not connected"}, status=503)
+
+    kind = str(data.get("type", "")).strip().lower()
+    name = str(data.get("name", "")).strip()
+    max_channels = app_state["limits"]["max_channels"]
+    if len(app_state["channels"]) >= max_channels:
+        return web.json_response(
+            {"error": f"Channel limit reached ({len(app_state['channels'])}/{max_channels})."}, status=409
+        )
+
+    if kind == "public":
+        name, secret = "Public", PUBLIC_CHANNEL_SECRET
+    elif kind == "hashtag":
+        name = "#" + name.lstrip("#").strip().lower()
+        if not re.fullmatch(r"#[a-z0-9-]{1,31}", name):
+            return web.json_response(
+                {"error": "Hashtag channels use letters, numbers and dashes only (max 31)."}, status=400
+            )
+        secret = None
+    elif kind == "private":
+        if not name or len(name.encode("utf-8")) > 32 or name.startswith("#"):
+            return web.json_response(
+                {"error": "Enter a channel name up to 32 bytes that does not start with #."}, status=400
+            )
+        raw_secret = str(data.get("secret", "")).strip().lower()
+        if raw_secret:
+            if not re.fullmatch(r"[0-9a-f]{32}", raw_secret):
+                return web.json_response({"error": "Secret key must be 32 hex characters."}, status=400)
+            secret = bytes.fromhex(raw_secret)
+        else:
+            secret = secrets.token_bytes(16)
+    else:
+        return web.json_response({"error": "Channel type must be public, private or hashtag."}, status=400)
+
+    if any(
+        str(entry.get("name", "")).casefold() == name.casefold()
+        for entry in app_state["channels"].values()
+    ):
+        return web.json_response({"error": f"A channel named {name} already exists."}, status=409)
+
+    try:
+        used = {int(entry["channel_idx"]) for entry in app_state["channels"].values()}
+        commands = meshcore_instance.commands
+        index = None
+        for candidate in range(max_channels):
+            if candidate in used:
+                continue
+            # The scan hides duplicate entries, so confirm the slot is really empty.
+            async with paced_hardware_lock():
+                try:
+                    existing = await asyncio.wait_for(commands.get_channel(candidate), timeout=3.0)
+                except asyncio.TimeoutError:
+                    existing = None
+            payload = existing.payload if existing is not None and existing.type != EventType.ERROR else None
+            if not payload or not str(payload.get("channel_name", "")).strip("\x00 "):
+                index = candidate
+                break
+        if index is None:
+            return web.json_response({"error": "No free channel slot on the device."}, status=409)
+        async with paced_hardware_lock():
+            result = await commands.set_channel(index, name, secret)
+        if result.type == EventType.ERROR:
+            return web.json_response({"error": f"Device rejected channel: {result.payload}"}, status=502)
+    except Exception as error:
+        return web.json_response({"error": f"Could not add channel: {error}"}, status=500)
+
+    log_to_dash(f"Added {kind} channel {name} at slot {index}")
+    await refresh_channels()
+    response = {"ok": True, "name": name, "index": index}
+    if kind == "private":
+        response["secret"] = secret.hex()
+    return web.json_response(response)
+
+
+async def add_contact_handler(request):
+    data = await read_json_object(request)
+    if data is None:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+    if not meshcore_instance or not app_state["is_connected"]:
+        return web.json_response({"error": "MeshCore is not connected"}, status=503)
+
+    max_contacts = app_state["limits"]["max_contacts"]
+    count = len(app_state["contacts"])
+    if max_contacts and count >= max_contacts:
+        return web.json_response({"error": f"Contact limit reached ({count}/{max_contacts})."}, status=409)
+
+    commands = meshcore_instance.commands
+    card = str(data.get("card", "")).strip()
+    try:
+        if card:
+            card_hex = re.sub(r"^meshcore://", "", card, flags=re.IGNORECASE).strip()
+            if not re.fullmatch(r"(?:[0-9a-fA-F]{2})+", card_hex):
+                return web.json_response({"error": "Paste a meshcore:// contact link or its hex data."}, status=400)
+            async with paced_hardware_lock():
+                result = await commands.import_contact(bytes.fromhex(card_hex))
+        else:
+            public_key = str(data.get("public_key", "")).strip().lower()
+            name = str(data.get("name", "")).strip()
+            node_type = CONTACT_ADD_TYPES.get(str(data.get("node_type", "repeater")).strip().lower())
+            if not HEX_KEY_PATTERN.fullmatch(public_key):
+                return web.json_response({"error": "Public key must be 64 hex characters."}, status=400)
+            if not name or len(name.encode("utf-8")) > 31:
+                return web.json_response({"error": "Enter a name up to 31 bytes."}, status=400)
+            if node_type is None:
+                return web.json_response({"error": "Unknown node type."}, status=400)
+            if any(
+                str((entry.get("contact", entry) if isinstance(entry, dict) else {}).get("public_key", key)).lower()
+                == public_key
+                for key, entry in app_state["contacts"].items()
+            ):
+                return web.json_response({"error": "That node is already in your contacts."}, status=409)
+            try:
+                latitude = float(data.get("latitude") or 0)
+                longitude = float(data.get("longitude") or 0)
+            except (TypeError, ValueError):
+                return web.json_response({"error": "Latitude and longitude must be numbers."}, status=400)
+            if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+                return web.json_response({"error": "Latitude or longitude is out of range."}, status=400)
+            contact = {
+                "public_key": public_key,
+                "type": node_type,
+                "flags": 0,
+                "out_path_len": -1,
+                "out_path": "",
+                "out_path_hash_mode": 0,
+                "adv_name": name,
+                "last_advert": int(time.time()),
+                "adv_lat": latitude,
+                "adv_lon": longitude,
+            }
+            async with paced_hardware_lock():
+                result = await commands.add_contact(contact)
+        if result.type == EventType.ERROR:
+            return web.json_response({"error": f"Device rejected contact: {result.payload}"}, status=502)
+    except Exception as error:
+        return web.json_response({"error": f"Could not add contact: {error}"}, status=500)
+
+    log_to_dash("Contact added from dashboard")
+    await refresh_contacts()
+    return web.json_response({"ok": True})
 
 
 async def delete_target_handler(request):
@@ -5572,6 +6047,10 @@ def create_app():
     app.router.add_get("/api/cpu-temp", cpu_temp_handler)
     app.router.add_post("/api/chat-management", manage_chat_handler)
     app.router.add_post("/api/delete-target", delete_target_handler)
+    app.router.add_post("/api/delete-message", delete_message_handler)
+    app.router.add_post("/api/block-sender", block_sender_handler)
+    app.router.add_post("/api/channels/add", add_channel_handler)
+    app.router.add_post("/api/contacts/add", add_contact_handler)
     app.router.add_get("/api/device-settings", device_settings_handler)
     app.router.add_post("/api/device-settings/action", device_action_handler)
     app.router.add_get("/api/device-settings/export", device_gpx_export_handler)
