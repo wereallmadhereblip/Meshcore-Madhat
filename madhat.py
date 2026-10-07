@@ -4532,6 +4532,13 @@ window.openMessageActions=function(type,id,message,sender,blocked){
   if(knownPeer){
     sheet.append(action('View on Map','map',()=>{let lat=Number(knownPeer.latitude),lon=Number(knownPeer.longitude);if(!Number.isFinite(lat)||!Number.isFinite(lon)||(lat===0&&lon===0)){showToast('No location',(knownPeer.name||'This node')+' has not reported a location.');return}close();focusMapPoint(lat,lon);setTimeout(()=>{if(dashboardMap)dashboardMap.invalidateSize();focusMapPoint(lat,lon)},250)}));
     let post=async(url,body)=>{let r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});let d=await r.json().catch(()=>({}));d._status=r.status;return d};
+    sheet.append(action('Set Path','path',()=>{
+      sheet.querySelector('.sheet-setpath')?.remove();let box=document.createElement('div');box.className='sheet-paths sheet-setpath';
+      let inp=document.createElement('input');inp.placeholder='Repeater hashes in order, e.g. a1,b2,c3';
+      let save=document.createElement('button');save.type='button';save.textContent='Save path';
+      save.onclick=async()=>{let d=await post('/api/contacts/path',{target:String(knownPeer.id),action:'set',path:inp.value});if(d._status===200){close();showToast('Path set',(knownPeer.name||knownPeer.id)+': route saved');if(typeof peers==='function')peers()}else showToast('Error',d.error||'Could not set path')};
+      box.append(inp,save);sheet.append(box);inp.focus()}));
+    sheet.append(action('Reset Path','path',async()=>{if(!confirm('Reset the route to '+(knownPeer.name||knownPeer.id)+'? The next message will use flood routing.'))return;let d=await post('/api/contacts/path',{target:String(knownPeer.id),action:'reset'});close();if(d._status===200){showToast('Path reset',(knownPeer.name||knownPeer.id)+' will be re-discovered');if(typeof peers==='function')peers()}else showToast('Error',d.error||'Could not reset path')}));
     if(Number(knownPeer.type)===2)sheet.append(action('Ping','signal',async()=>{showToast('Ping','Pinging '+(knownPeer.name||knownPeer.id)+'...');let d=await post('/api/contacts/ping',{target:String(knownPeer.id)});close();if(d.ok)showToast('Ping reply',(knownPeer.name||knownPeer.id)+': '+d.rtt_ms+' ms'+(Number.isInteger(d.hops)&&d.hops>=0?', '+d.hops+' hop'+(d.hops===1?'':'s'):''));else showToast('Ping failed',d.error||'No reply')}));
     if([2,3].includes(Number(knownPeer.type)))sheet.append(action('Manage','user',()=>{
       sheet.querySelector('.sheet-manage')?.remove();let box=document.createElement('div');box.className='sheet-paths sheet-manage';
@@ -5698,6 +5705,46 @@ async def remove_contact_handler(request):
     return web.json_response({"ok": True})
 
 
+async def contact_path_handler(request):
+    data = await read_json_object(request)
+    if data is None:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+    if not meshcore_instance or not app_state["is_connected"]:
+        return web.json_response({"error": "MeshCore is not connected"}, status=503)
+    entry, contact = find_contact_entry(data.get("target", ""))
+    if contact is None:
+        return web.json_response({"error": "Peer is not in the contact list"}, status=404)
+    action = str(data.get("action", "")).strip()
+    commands = meshcore_instance.commands
+    name = display_name(data.get("target"), entry)
+    try:
+        if action == "reset":
+            async with paced_hardware_lock():
+                result = await commands.reset_path(contact["public_key"])
+            if result.type == EventType.ERROR:
+                return web.json_response({"error": f"Device rejected reset: {result.payload}"}, status=502)
+            log_to_dash(f"Path reset for {name}")
+        elif action == "set":
+            tokens = [t for t in re.split(r"[\s,>:-]+", str(data.get("path", "")).strip().lower()) if t]
+            if not tokens or len(tokens) > 63:
+                return web.json_response({"error": "Enter 1-63 repeater hashes, e.g. a1,b2,c3"}, status=400)
+            size = len(tokens[0])
+            if size not in (2, 4, 6) or any(len(t) != size or not re.fullmatch(r"[0-9a-f]+", t) for t in tokens):
+                return web.json_response({"error": "Each hash must be 2, 4 or 6 hex characters, all the same length"}, status=400)
+            async with paced_hardware_lock():
+                result = await commands.change_contact_path(contact, "".join(tokens), path_hash_mode=size // 2 - 1)
+            if result.type == EventType.ERROR:
+                return web.json_response({"error": f"Device rejected path: {result.payload}"}, status=502)
+            log_to_dash(f"Path set for {name}: {len(tokens)} hop(s)")
+        else:
+            return web.json_response({"error": "action must be set or reset"}, status=400)
+    except Exception as error:
+        log_to_dash(f"Path update failed for {name}: {error}")
+        return web.json_response({"error": "Path update failed"}, status=502)
+    await refresh_contacts()
+    return web.json_response({"ok": True})
+
+
 async def delete_target_handler(request):
     try:
         data = await request.json()
@@ -6524,6 +6571,7 @@ def create_app():
     app.router.add_post("/api/contacts/add-heard", add_heard_contact_handler)
     app.router.add_post("/api/contacts/remove", remove_contact_handler)
     app.router.add_post("/api/contacts/ping", ping_contact_handler)
+    app.router.add_post("/api/contacts/path", contact_path_handler)
     app.router.add_post("/api/contacts/manage", manage_contact_handler)
     app.router.add_get("/api/device-settings", device_settings_handler)
     app.router.add_post("/api/device-settings/action", device_action_handler)
