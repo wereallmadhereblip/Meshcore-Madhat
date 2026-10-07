@@ -3801,6 +3801,8 @@ body[data-theme="tron"] .map-search-overlay #map-node-list,body[data-theme="tron
 body[data-theme="tron"] .map-search-overlay .search-input-row{background:rgba(0,18,26,.94);border:1px solid var(--border)}
 .map-search-overlay .add-btn{flex:none}
 body[data-theme="tron"] #map-view .map-search-overlay:not(.open) #map-node-list{display:none}
+#map-view .map-layout,body[data-theme="tron"].tron-overview #map-view .map-layout{grid-template-columns:minmax(0,1fr)!important}
+#map-view .map-surface,#map-view #map-canvas{width:100%}
 </style>
 <script>
 let gatewayTelemetry={};
