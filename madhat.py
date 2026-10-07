@@ -4514,8 +4514,11 @@ window.openMessageActions=function(type,id,message,sender,blocked){
   let preview=document.createElement('div');preview.className='sheet-preview';preview.textContent=message.text;
   sheet.append(head,preview);
   let text=bodyText(type,message.text),incoming=message.direction!=='outgoing',channelSender=type==='channel'&&incoming?sender:'';
+  let peerId=type==='node'?String(id):'',peerName=type==='channel'&&message.direction!=='outgoing'?String(sender||''):'';
+  let knownPeer=type==='node'?mapNodes.find(item=>String(item.id)===peerId):(peerName?mapNodes.find(item=>String(item.name||'').trim().toLowerCase()===peerName.trim().toLowerCase()):null);
+  let isRepeater=Number(knownPeer?.type)===2;
   sheet.append(action('Copy Text','copy',async()=>{let ok=await copyText(text);close();showToast(ok?'Copied':'Copy failed',ok?'Message text copied.':'Your browser blocked copying.')}));
-  if(type==='channel'){
+  if(type==='channel'&&!isRepeater){
     if(channelSender)sheet.append(action('Reply','reply',()=>{close();let input=document.getElementById('channel-message');input.value='@['+channelSender+'] ';input.focus()}));
     if(incoming)sheet.append(action('View Message Paths','path',()=>showPaths(message,channelSender)));
     if(channelSender){let isBlocked=blocked.includes(channelSender.toLowerCase());sheet.append(action(isBlocked?'Unblock Sender':'Block Sender','block',async()=>{
@@ -4524,11 +4527,10 @@ window.openMessageActions=function(type,id,message,sender,blocked){
       close();if(!response.ok){showToast('Error','Could not update block list.');return}
       showToast(isBlocked?'Unblocked':'Blocked',channelSender);history('channel',id,'channel-chat-history')}))}
   }
-  let peerId=type==='node'?String(id):'',peerName=type==='channel'&&message.direction!=='outgoing'?String(sender||''):'';
-  let knownPeer=type==='node'?mapNodes.find(item=>String(item.id)===peerId):(peerName?mapNodes.find(item=>String(item.name||'').trim().toLowerCase()===peerName.trim().toLowerCase()):null);
-  sheet.append(action('Node Telemetry','signal',()=>{
-    if(!knownPeer){showToast('Telemetry','Add this sender as a contact first.');return}
-    sheet.querySelector('.sheet-paths')?.remove();let box=document.createElement('div');box.className='sheet-paths';let list=document.createElement('dl');list.className='peer-inline-detail';box.append(list);sheet.append(box);renderPeerDetails(String(knownPeer.id),list)}));
+  if(!isRepeater){
+    sheet.append(action('Node Telemetry','signal',()=>{
+      if(!knownPeer){showToast('Telemetry','Add this sender as a contact first.');return}
+      sheet.querySelector('.sheet-paths')?.remove();let box=document.createElement('div');box.className='sheet-paths';let list=document.createElement('dl');list.className='peer-inline-detail';box.append(list);sheet.append(box);renderPeerDetails(String(knownPeer.id),list)}));
   if(knownPeer){
     sheet.append(action('View on Map','map',()=>{let lat=Number(knownPeer.latitude),lon=Number(knownPeer.longitude);if(!Number.isFinite(lat)||!Number.isFinite(lon)||(lat===0&&lon===0)){showToast('No location',(knownPeer.name||'This node')+' has not reported a location.');return}close();focusMapPoint(lat,lon);setTimeout(()=>{if(dashboardMap)dashboardMap.invalidateSize();focusMapPoint(lat,lon)},250)}));
     let post=async(url,body)=>{let r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});let d=await r.json().catch(()=>({}));d._status=r.status;return d};
@@ -4555,7 +4557,8 @@ window.openMessageActions=function(type,id,message,sender,blocked){
       send.onclick=()=>{let t=cmd.value.trim();cmd.value='';run(t)};cmd.onkeydown=e=>{if(e.key==='Enter')send.click()};
       box.append(pw,login,quick,cmd,send,out);sheet.append(box);pw.focus()}));
   }
-  if(type==='node'||peerName){
+  }
+  if((type==='node'||peerName)&&!isRepeater){
     if(knownPeer)sheet.append(action('Remove Contact','trash',async()=>{
       if(!confirm('Remove '+(knownPeer.name||knownPeer.id)+' from your contacts?'))return;
       let response=await fetch('/api/contacts/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:String(knownPeer.id)})}),data=await response.json().catch(()=>({}));
