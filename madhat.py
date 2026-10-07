@@ -58,6 +58,9 @@ AUTOSTART_UNIT_PATH = CONFIG_DIR / "systemd" / "user" / AUTOSTART_UNIT_NAME
 TIGHTVNC_CERT_PATH = Path.home() / "novnc.pem"
 TIGHTVNC_PID_PATH = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "meshcore-madhat" / "websockify.pid"
 TIGHTVNC_LOG_PATH = TIGHTVNC_PID_PATH.with_name("websockify.log")
+SSH_TERMINAL_PORT = 7681
+SSH_TERMINAL_PID_PATH = TIGHTVNC_PID_PATH.with_name("ttyd.pid")
+SSH_TERMINAL_LOG_PATH = TIGHTVNC_PID_PATH.with_name("ttyd.log")
 NOVNC_WEB_PATH = Path("/usr/share/novnc")
 AVAILABLE_THEMES = {"midnight", "light", "ocean", "amber", "linux", "macos", "cyberpunk", "tron"}
 ADMIN_KEY_PATTERN = re.compile(r"^[0-9a-fA-F]{6,64}$")
@@ -550,11 +553,11 @@ def read_log_file():
 
 
 def log_to_dash(message):
-    formatted = f"[{datetime.now():%H:%M:%S}] {message}"
+    formatted = f"[{datetime.now():%I:%M:%S %p}] {message}"
     print(formatted)
     app_state["logs"].append(formatted)
     app_state["logs"] = app_state["logs"][-50:]
-    write_log_file(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {message}")
+    write_log_file(f"[{datetime.now():%Y-%m-%d %I:%M:%S %p}] {message}")
 
 
 def record_trace_event(kind, direction, target_id):
@@ -579,7 +582,7 @@ def record_trace_event(kind, direction, target_id):
     event_id = trace_events[-1]["id"] + 1 if trace_events else 1
     trace_events.append({
         "id": event_id,
-        "timestamp": datetime.now().strftime("%H:%M:%S"),
+        "timestamp": datetime.now().strftime("%I:%M:%S %p"),
         "kind": kind,
         "direction": direction,
         "target_id": target_id,
@@ -750,6 +753,14 @@ def reception_info(packet):
     snr = packet.get("SNR")
     if isinstance(snr, (int, float)):
         info["snr"] = snr
+    if "path_len" in info:
+        nodes = path_nodes(
+            packet.get("path"),
+            info["path_len"],
+            packet.get("path_hash_mode") + 1 if isinstance(packet.get("path_hash_mode"), int) else None,
+        )
+        if nodes:
+            info["path_nodes"] = nodes
     return info
 
 
@@ -762,7 +773,7 @@ def add_chat_message(target_type, target, direction, text, info=None):
         "direction": direction,
         "text": text,
         "status": "sent" if direction == "outgoing" else "received",
-        "timestamp": now.strftime("%H:%M:%S"),
+        "timestamp": now.strftime("%I:%M:%S %p"),
         "sort_timestamp": now.timestamp(),
     }
     chat_history[key].append(message)
@@ -1401,7 +1412,7 @@ async def fetch_weather_response(prompt, sender_id=None):
 
 
 def sync_generate(messages, model, max_chars=None):
-    options = {"temperature": 0.2, "num_ctx": 2048, "repeat_penalty": 1.1}
+    options = {"temperature": 0.2, "num_ctx": 4096, "repeat_penalty": 1.0}
     if max_chars:
         # Keep generation within Ollama's former default while avoiding excess output.
         options["num_predict"] = min(128, max(48, max_chars // 6 + 16))
@@ -1414,14 +1425,24 @@ def sync_generate(messages, model, max_chars=None):
     return result["message"]["content"]
 
 
-def looks_like_gibberish(text):
+def looks_like_gibberish(text, prompt=""):
     letters = [char for char in text if char.isalpha()]
-    if len(letters) < 20:
+    if len(letters) < 12:
         return False
+    prompt_has_foreign = any(char.isalpha() and ord(char) > 0x24F for char in prompt)
     foreign = sum(1 for char in letters if ord(char) > 0x24F)
-    words = text.split()
-    camel_mix = sum(1 for word in words if re.search(r"[a-z][A-Z]|[A-Za-z][^\x00-\x7f]", word))
-    return foreign / len(letters) > 0.05 or (len(words) > 8 and camel_mix / len(words) > 0.25)
+    if foreign and not prompt_has_foreign:
+        return True
+    words = re.findall(r"[^\W\d_]+", text.lower())
+    if len(words) >= 8:
+        counts = {}
+        for word in words:
+            counts[word] = counts.get(word, 0) + 1
+        if len(counts) / len(words) < 0.5 or max(counts.values()) / len(words) > 0.25:
+            return True
+    raw_words = text.split()
+    camel_mix = sum(1 for word in raw_words if re.search(r"[a-z][A-Z]|[A-Za-z][^\x00-\x7f]", word))
+    return len(raw_words) > 8 and camel_mix / len(raw_words) > 0.25
 
 
 def clear_chat_memory_reply(sender_id, prompt):
@@ -1477,7 +1498,7 @@ def update_greeting_setting_from_message(prompt, channel_id=None):
 
 
 HELP_TEXT = (
-    "Commands: /help, /help settings, /settings (show), /settings <name> <value>, /restart, /update, /syssleep, /syswakeup, /syswifi status|on|off|scan|connect <SSID> <password>|disconnect|ap [off], /reboot, /sysreboot, /sysshutdown, /tightvnc on|off|restart, /power, /fastfetch, "
+    "Commands: /help, /help settings, /clearmemory, /settings (show), /settings <name> <value>, /restart, /update, /syssleep, /syswakeup, /syswifi status|on|off|scan|connect <SSID> [password]|disconnect|ap [off], /reboot, /sysreboot, /sysshutdown, /tightvnc on|off|restart, /power, /fastfetch, "
     "wx <zip>, wx local, "
     "/greet on|off (in a channel), /bot <question> (in a channel). "
     "/settings works in direct messages from admins only."
@@ -1706,6 +1727,23 @@ def scan_wifi_networks():
         if ssid not in best or signal_pct > best[ssid]["signal"]:
             best[ssid] = {"ssid": ssid, "signal": signal_pct, "secured": bool(fields[2].strip() and fields[2].strip() != "--")}
     return sorted(best.values(), key=lambda n: -n["signal"])[:WIFI_SCAN_LIMIT]
+
+
+def saved_wifi_connections():
+    result = run_nmcli(["-t", "-f", "NAME,TYPE", "connection", "show"], 15)
+    if result is None or result.returncode != 0:
+        return []
+    names = []
+    for line in result.stdout.splitlines():
+        fields = split_nmcli_fields(line)
+        if len(fields) >= 2 and fields[1] == "802-11-wireless" and fields[0] != WIFI_AP_CONNECTION:
+            names.append(fields[0])
+    return names
+
+
+def connect_saved_wifi(name):
+    result = run_nmcli(["-w", "30", "connection", "up", "id", name], 45)
+    return result is not None and result.returncode == 0
 
 
 def match_wifi_network(connection, networks):
@@ -2081,12 +2119,15 @@ def system_fastfetch_info():
 
 
 async def handle_slash_command(sender_id, prompt, allow_settings):
-    match = re.fullmatch(r"\s*/(help|settings|restart|update|syswifi|syssleep|syswakeup|reboot|sysreboot|sysshutdown|tightvnc|power|fastfetch)\b\s*(.*)", prompt, re.IGNORECASE | re.DOTALL)
+    match = re.fullmatch(r"\s*/(help|clearmemory|settings|restart|update|syswifi|syssleep|syswakeup|reboot|sysreboot|sysshutdown|tightvnc|power|fastfetch)\b\s*(.*)", prompt, re.IGNORECASE | re.DOTALL)
     if match is None:
         return None
     command, args = match.group(1).lower(), match.group(2).strip()
     if command == "help":
         return SETTINGS_HELP_TEXT if args.lower() == "settings" else HELP_TEXT
+    if command == "clearmemory":
+        conversation_history.pop(sender_id, None)
+        return "Done. I've cleared our chat memory."
     if not allow_settings:
         return "Send /settings in a direct message to me."
     if command == "restart":
@@ -2254,8 +2295,26 @@ async def handle_slash_command(sender_id, prompt, allow_settings):
             if not networks:
                 return "No Wi-Fi access points found."
             lines = [f"{n['ssid'][:32]} ({n['signal']}%{'' if n['secured'] else ', open'})" for n in networks]
-            return "Wi-Fi networks:\n" + "\n".join(lines) + "\nReply: /syswifi connect <SSID> <password>"
+            return "Wi-Fi networks:\n" + "\n".join(lines) + "\nReply: /syswifi connect <SSID> [password] (no password needed for saved networks)"
         if action == "connect":
+            if len(parts) >= 2:
+                try:
+                    saved = await asyncio.to_thread(saved_wifi_connections)
+                except Exception:
+                    saved = []
+                request_text = parts[1].strip()
+                saved_match = max(
+                    (name for name in saved if request_text.lower() == name.lower()),
+                    key=len, default=None,
+                )
+                if saved_match is not None:
+                    log_to_dash(f"/syswifi connect to saved network {saved_match} requested by {sender_id}")
+                    try:
+                        connected = await asyncio.to_thread(connect_saved_wifi, saved_match)
+                    except Exception as error:
+                        log_to_dash(f"/syswifi saved connect failed: {error}")
+                        return "Wi-Fi failed"
+                    return "Wi-Fi connected" if connected else "Wi-Fi failed"
             networks = wifi_scan_results.get(sender_id)
             if not networks:
                 return "Run /syswifi scan first."
@@ -2389,7 +2448,7 @@ async def generate_ai_response(sender_id, prompt, allow_settings_update=True):
             app_state["selected_model"],
             reply_limit,
         )
-        if looks_like_gibberish(reply):
+        if looks_like_gibberish(reply, prompt):
             log_to_dash("Model returned garbled text; retrying with a fresh conversation.")
             conversation_history.pop(sender_id, None)
             history = conversation_history[sender_id]
@@ -2401,7 +2460,7 @@ async def generate_ai_response(sender_id, prompt, allow_settings_update=True):
                 app_state["selected_model"],
                 reply_limit,
             )
-            if looks_like_gibberish(reply):
+            if looks_like_gibberish(reply, prompt):
                 history.pop()
                 return "Sorry, I couldn't generate a clear answer. Please try again."
         reply = limit_ai_reply(reply.strip(), reply_limit)
@@ -2414,7 +2473,7 @@ async def generate_ai_response(sender_id, prompt, allow_settings_update=True):
         return "I could not process that message."
 
 
-async def send_to_target(target, target_type, message):
+async def send_to_target(target, target_type, message, timestamp=None):
     if target_type == "node":
         return await meshcore_instance.commands.send_msg(target, message)
 
@@ -2426,106 +2485,145 @@ async def send_to_target(target, target_type, message):
     for name in ("send_chan_msg", "send_channel_msg", "send_channel_message"):
         method = getattr(meshcore_instance.commands, name, None)
         if method:
+            if timestamp is not None and name == "send_chan_msg":
+                return await method(channel_index, message, timestamp)
             return await method(channel_index, message)
     raise RuntimeError("This MeshCore version has no channel-send method")
 
 
-async def confirm_delivery(result, early_ack_codes=()):
-    if result.type == EventType.ERROR or not isinstance(result.payload, dict):
-        return False
-
-    expected_ack = result.payload.get("expected_ack")
-    wait_for_event = getattr(meshcore_instance, "wait_for_event", None)
-    ack_type = getattr(EventType, "ACK", None)
-    if expected_ack is None or not wait_for_event or ack_type is None:
-        return False
-
-    ack_code = expected_ack.hex() if hasattr(expected_ack, "hex") else str(expected_ack)
-    if ack_code in early_ack_codes:
-        return True
-    try:
-        acknowledgement = await wait_for_event(
-            ack_type,
-            attribute_filters={"code": ack_code},
-            timeout=10.0,
-        )
-        return acknowledgement is not None
-    except Exception as error:
-        log_to_dash(f"Delivery confirmation unavailable: {error}")
-        return False
+def echo_hop_key(log_data):
+    path = str(log_data.get("path") or "")
+    size = log_data.get("path_hash_size") or 1
+    if log_data.get("path_len", 0) > 0 and path:
+        return path[-size * 2:]
+    return "direct"
 
 
-def target_hop_count(target, target_type):
-    if target_type != "node":
-        return None
+def repeater_name_for_hash(hash_hex):
+    if hash_hex == "direct":
+        return "Direct"
+    for contact_id, entry in app_state["contacts"].items():
+        contact = entry.get("contact", entry) if isinstance(entry, dict) else {}
+        public_key = str(contact.get("public_key", "")) if isinstance(contact, dict) else ""
+        if public_key.lower().startswith(hash_hex.lower()):
+            return display_name(contact_id, contact)
+    return ""
 
-    if isinstance(target, dict):
-        entry = target
-    else:
-        contact_id = resolve_contact_id(str(target))
-        entry = app_state["contacts"].get(contact_id)
-    if not isinstance(entry, dict):
-        return None
 
-    contact = entry.get("contact", entry)
-    if not isinstance(contact, dict):
-        contact = entry
-    try:
-        hops = int(contact.get("out_path_len", entry.get("out_path_len")))
-    except (TypeError, ValueError):
-        return None
-    return hops if hops >= 0 else None
+def path_nodes(path_hex, path_len, path_hash_size=None):
+    if not isinstance(path_hex, str) or not isinstance(path_len, int) or path_len <= 0:
+        return []
+    size = path_hash_size or max(1, len(path_hex) // 2 // path_len)
+    step = size * 2
+    hashes = [path_hex[i:i + step] for i in range(0, path_len * step, step)]
+    return [{"hash": h, "name": repeater_name_for_hash(h)} for h in hashes if h]
 
 
 async def send_to_target_with_pending_confirmation(target, target_type, message):
     early_ack_codes = set()
-    ack_type = getattr(EventType, "ACK", None)
+    echoes = []
+    subscriptions = []
     subscribe = getattr(meshcore_instance, "subscribe", None)
-    ack_subscription = None
-    if ack_type is not None and subscribe:
-        ack_subscription = subscribe(
-            ack_type,
-            lambda event: early_ack_codes.add(event.attributes.get("code")),
+    ack_type = getattr(EventType, "ACK", None)
+    if subscribe and ack_type is not None:
+        subscriptions.append(
+            subscribe(ack_type, lambda event: early_ack_codes.add(event.attributes.get("code")))
         )
+    # Repeater re-broadcasts show up in the RX log; channel text (5) or the DM ACK (3).
+    echo_payload_type = 5 if target_type == "channel" else 3
+    if subscribe and hasattr(EventType, "RX_LOG_DATA"):
+        subscriptions.append(
+            subscribe(
+                EventType.RX_LOG_DATA,
+                lambda event: echoes.append(event.payload)
+                if isinstance(event.payload, dict)
+                and event.payload.get("payload_type") == echo_payload_type
+                else None,
+            )
+        )
+    send_timestamp = int(time.time()) if target_type == "channel" else None
+
+    def cleanup():
+        for subscription in subscriptions:
+            subscription.unsubscribe()
 
     try:
-        result = await send_to_target(target, target_type, message)
+        result = await send_to_target(target, target_type, message, send_timestamp)
     except Exception:
-        if ack_subscription is not None:
-            ack_subscription.unsubscribe()
+        cleanup()
         raise
 
     if result.type == EventType.ERROR:
-        if ack_subscription is not None:
-            ack_subscription.unsubscribe()
+        cleanup()
         return result, None, None
 
-    hops = target_hop_count(target, target_type)
+    ack_code = None
+    if isinstance(result.payload, dict):
+        expected_ack = result.payload.get("expected_ack")
+        if expected_ack is not None:
+            ack_code = expected_ack.hex() if hasattr(expected_ack, "hex") else str(expected_ack)
 
-    async def wait_for_confirmation():
+    def matching_echoes():
+        if target_type == "channel":
+            return [
+                log for log in echoes
+                if log.get("sender_timestamp") == send_timestamp
+                and str(log.get("message", "")).endswith(message)
+            ]
+        if ack_code is None:
+            return []
+        return [
+            log for log in echoes
+            if isinstance(log.get("pkt_payload"), (bytes, bytearray))
+            and bytes(log["pkt_payload"][:4]).hex() == ack_code
+        ]
+
+    async def wait_for_confirmation(chat_message):
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 15.0
+        delivered = False
         try:
-            return await confirm_delivery(result, early_ack_codes)
+            while loop.time() < deadline:
+                matched = matching_echoes()
+                acked = target_type == "node" and ack_code in early_ack_codes
+                if matched or acked:
+                    if not delivered:
+                        delivered = True
+                        # Keep listening briefly so late repeaters are counted too.
+                        deadline = loop.time() + 8.0
+                    repeaters = {}
+                    for log in matched:
+                        repeaters.setdefault(echo_hop_key(log), log)
+                    heard = max(len(repeaters), 1)
+                    if chat_message.get("heard") != heard or chat_message.get("status") != "delivered":
+                        chat_message["heard"] = heard
+                        chat_message["heard_repeaters"] = [
+                            {"hash": key, "name": repeater_name_for_hash(key)}
+                            for key in repeaters
+                        ]
+                        update_chat_message_status(chat_message, "delivered")
+                await asyncio.sleep(0.5)
+            if not delivered:
+                update_chat_message_status(chat_message, "failed")
         finally:
-            if ack_subscription is not None:
-                ack_subscription.unsubscribe()
+            cleanup()
 
-    return result, wait_for_confirmation(), hops
+    return result, wait_for_confirmation, None
 
 
-def schedule_delivery_status_update(message, pending_confirmation, hops):
+def schedule_delivery_status_update(message, pending_confirmation, _unused=None):
     if pending_confirmation is None:
+        update_chat_message_status(message, "failed")
         return
 
-    async def update_after_confirmation():
+    async def run():
         try:
-            if await pending_confirmation:
-                if hops is not None:
-                    message["hops"] = hops
-                update_chat_message_status(message, "delivered")
+            await pending_confirmation(message)
         except Exception as error:
             log_to_dash(f"Delivery confirmation unavailable: {error}")
+            update_chat_message_status(message, "failed")
 
-    return asyncio.create_task(update_after_confirmation())
+    return asyncio.create_task(run())
 
 
 async def handle_incoming_message(event):
@@ -2544,7 +2642,16 @@ async def handle_incoming_message(event):
         return
     processed_messages.add(message_id)
     resolved_sender = resolve_contact_id(sender)
-    add_chat_message("node", resolved_sender, "incoming", text, reception_info(packet))
+    info = reception_info(packet)
+    if "path_nodes" not in info:
+        # DM frames carry no repeater list, so fall back to the route stored for this contact.
+        entry = app_state["contacts"].get(resolved_sender)
+        contact = entry.get("contact", entry) if isinstance(entry, dict) else {}
+        if isinstance(contact, dict) and isinstance(contact.get("out_path_len"), int):
+            nodes = path_nodes(contact.get("out_path"), contact["out_path_len"])
+            if nodes:
+                info["path_nodes"] = nodes
+    add_chat_message("node", resolved_sender, "incoming", text, info)
     record_trace_event("direct", "inbound", resolved_sender)
     log_to_dash(f"Received DM from {sender}: {text}")
 
@@ -2571,7 +2678,7 @@ async def handle_incoming_message(event):
                     )
                     return
                 sent_message = add_chat_message("node", resolved_sender, "outgoing", part)
-                update_chat_message_status(sent_message, "unconfirmed")
+                update_chat_message_status(sent_message, "sent")
                 schedule_delivery_status_update(sent_message, pending_delivery, hops)
                 record_trace_event("direct", "outbound", resolved_sender)
             log_to_dash(
@@ -2659,7 +2766,7 @@ async def handle_incoming_channel_message(event):
                 sent_message = add_chat_message(
                     "channel", channel_target, "outgoing", part
                 )
-                update_chat_message_status(sent_message, "unconfirmed")
+                update_chat_message_status(sent_message, "sent")
                 schedule_delivery_status_update(sent_message, pending_delivery, hops)
                 record_trace_event("channel", "outbound", channel_target)
             log_to_dash(
@@ -2709,7 +2816,7 @@ async def handle_new_contact(event):
                     log_to_dash(f"Channel {channel} peer greeting rejected: {result.payload}")
                     return
                 sent_message = add_chat_message("channel", channel, "outgoing", part)
-                update_chat_message_status(sent_message, "unconfirmed")
+                update_chat_message_status(sent_message, "sent")
                 schedule_delivery_status_update(sent_message, pending_delivery, hops)
             except Exception as error:
                 log_to_dash(f"Channel {channel} peer greeting failed: {error}")
@@ -2982,6 +3089,87 @@ def set_tightvnc(action):
         return _tightvnc_start()
 
 
+def _ssh_terminal_pid():
+    try:
+        pid = int(SSH_TERMINAL_PID_PATH.read_text(encoding="ascii").strip())
+        command_line = Path(f"/proc/{pid}/cmdline").read_bytes()
+        state = Path(f"/proc/{pid}/stat").read_text(encoding="ascii").split(") ", 1)[1][0]
+        if state != "Z" and b"ttyd" in command_line:
+            return pid
+    except (OSError, ValueError, IndexError):
+        pass
+    SSH_TERMINAL_PID_PATH.unlink(missing_ok=True)
+    return None
+
+
+def ssh_terminal_status():
+    return {
+        "running": _ssh_terminal_pid() is not None,
+        "installed": shutil.which("ttyd") is not None and shutil.which("ssh") is not None,
+        "url": f"https://<host>:{SSH_TERMINAL_PORT}/",
+        "user": getpass.getuser(),
+    }
+
+
+def _ssh_terminal_start():
+    if shutil.which("ttyd") is None or shutil.which("ssh") is None:
+        raise RuntimeError("ttyd or an SSH client is not installed. Run setup.sh to install them.")
+    if _ssh_terminal_pid() is not None:
+        return ssh_terminal_status()
+    _ensure_novnc_certificate()
+    help_text = subprocess.run(["ttyd", "--help"], capture_output=True, text=True, check=False)
+    command = ["ttyd", "-p", str(SSH_TERMINAL_PORT), "--ssl",
+               "--ssl-cert", str(TIGHTVNC_CERT_PATH), "--ssl-key", str(TIGHTVNC_CERT_PATH)]
+    if "--writable" in help_text.stdout + help_text.stderr:
+        command.append("--writable")
+    # The session is an ordinary SSH login to this machine, so the Pi's own credentials gate access.
+    command += ["ssh", "-o", "StrictHostKeyChecking=accept-new", f"{getpass.getuser()}@localhost"]
+    SSH_TERMINAL_PID_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with SSH_TERMINAL_LOG_PATH.open("ab") as log_file:
+        process = subprocess.Popen(
+            command, stdin=subprocess.DEVNULL, stdout=log_file,
+            stderr=subprocess.STDOUT, start_new_session=True,
+        )
+    SSH_TERMINAL_PID_PATH.write_text(f"{process.pid}\n", encoding="ascii")
+    for _ in range(20):
+        if process.poll() is not None:
+            SSH_TERMINAL_PID_PATH.unlink(missing_ok=True)
+            tail = SSH_TERMINAL_LOG_PATH.read_text(encoding="utf-8", errors="replace")[-500:].strip()
+            raise RuntimeError(tail or "ttyd exited during startup")
+        try:
+            with socket.create_connection(("127.0.0.1", SSH_TERMINAL_PORT), timeout=0.2):
+                return ssh_terminal_status()
+        except OSError:
+            time.sleep(0.25)
+    process.terminate()
+    SSH_TERMINAL_PID_PATH.unlink(missing_ok=True)
+    raise RuntimeError(f"ttyd did not start on port {SSH_TERMINAL_PORT}")
+
+
+def _ssh_terminal_stop():
+    pid = _ssh_terminal_pid()
+    if pid is not None:
+        os.kill(pid, signal.SIGTERM)
+        for _ in range(20):
+            if _ssh_terminal_pid() is None:
+                break
+            time.sleep(0.25)
+        else:
+            raise RuntimeError("ttyd did not stop after SIGTERM")
+    return ssh_terminal_status()
+
+
+def set_ssh_terminal(action):
+    if action not in {"on", "off", "restart"}:
+        raise ValueError("action must be on, off, or restart")
+    with _tightvnc_lock:
+        if action == "off":
+            return _ssh_terminal_stop()
+        if action == "restart":
+            _ssh_terminal_stop()
+        return _ssh_terminal_start()
+
+
 def can_use_system_service():
     if not Path("/run/systemd/system").is_dir():
         return False
@@ -3125,6 +3313,27 @@ async def update_tightvnc_handler(request):
     return web.json_response(status)
 
 
+async def ssh_terminal_handler(request):
+    return web.json_response(await asyncio.to_thread(ssh_terminal_status))
+
+
+async def update_ssh_terminal_handler(request):
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+    action = payload.get("action") if isinstance(payload, dict) else None
+    if action not in {"on", "off", "restart"}:
+        return web.json_response({"error": "action must be on, off, or restart"}, status=400)
+    try:
+        status = await asyncio.to_thread(set_ssh_terminal, action)
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        log_to_dash(f"SSH terminal {action} failed: {error}")
+        return web.json_response({"error": str(error)}, status=500)
+    log_to_dash(f"SSH terminal {action} completed")
+    return web.json_response(status)
+
+
 async def serial_scan_handler(request):
     try:
         ports = list_ports.comports()
@@ -3192,6 +3401,7 @@ async def connect_hardware():
             meshcore_instance.commands.get_msg = locked_get_msg
 
             await meshcore_instance.start_auto_message_fetching()
+            meshcore_instance.set_decrypt_channel_logs(True)
             meshcore_instance.subscribe(EventType.CONTACT_MSG_RECV, handle_incoming_message)
             meshcore_instance.subscribe(
                 EventType.CHANNEL_MSG_RECV,
@@ -3710,6 +3920,8 @@ body[data-theme="tron"] .incoming-advert-name{font-size:10px}
 body[data-theme="tron"] .incoming-advert-meta{color:#75b4c8;font-size:9px}
 #toast-stack{position:fixed;top:70px;right:16px;z-index:1100;display:flex;flex-direction:column;gap:8px;width:min(320px,calc(100vw - 32px));pointer-events:none}
 .toast{padding:9px 12px;background:var(--panel-raised,var(--panel-bg));color:var(--text);border:1px solid var(--accent);border-left-width:4px;border-radius:6px;box-shadow:0 6px 24px rgba(0,0,0,.4);font-size:12px;line-height:1.35;opacity:0;transform:translateX(16px);transition:opacity .25s ease,transform .25s ease}
+.toast.clickable{pointer-events:auto;cursor:pointer}
+.toast.clickable:hover{filter:brightness(1.15)}
 .toast.show{opacity:1;transform:translateX(0)}
 .toast strong{display:block;margin-bottom:2px;color:var(--accent);font-size:10px;letter-spacing:.08em;text-transform:uppercase}
 .toast span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -3820,11 +4032,16 @@ const commonRadioProfiles={balanced:{radio_bw:125,radio_sf:7,radio_cr:5},long_ra
 function applyTheme(theme,persist=true){let previousTheme=document.body.dataset.theme,wasOverview=document.body.classList.contains('tron-overview');document.body.dataset.theme=theme;let modeSelect=document.getElementById('theme-mode-select'),colorSelect=document.getElementById('theme-select'),colorControl=document.getElementById('classic-theme-control');if(modeSelect)modeSelect.value=theme==='tron'?'tron':'classic';if(colorSelect&&theme!=='tron')colorSelect.value=theme;if(colorControl)colorControl.hidden=theme==='tron';let sessionTitle=document.getElementById('analyzer-session-title');if(sessionTitle)sessionTitle.textContent=theme==='tron'?'MeshCore Live Statistics':'Session';if(theme==='tron'&&previousTheme!=='tron'||theme!=='tron'&&wasOverview)showView('nodes');if(persist)saveAppConfig({...appConfig,theme})}
 function selectThemeMode(mode){if(mode==='tron'){applyTheme('tron');return}let colorTheme=document.getElementById('theme-select').value;applyTheme(colorTheme==='tron'?'midnight':colorTheme)}
 function selectClassicTheme(theme){try{localStorage.setItem('meshcore-classic-theme',theme)}catch(error){}applyTheme(theme)}
-function showSettingsTab(tab){document.querySelectorAll('.settings-tab').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.settingsTab===tab)));for(let panel of document.querySelectorAll('.settings-tab-panel'))panel.hidden=panel.id!=='settings-'+tab+'-panel';if(tab==='config'){if(!configEditorLoaded)loadConfigEditor();loadAutostart()}if(tab==='ollama')loadOllamaModels();if(tab==='tightvnc')loadTightvnc();if(tab==='logs')loadAppLogs()}
+function showSettingsTab(tab){document.querySelectorAll('.settings-tab').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.settingsTab===tab)));for(let panel of document.querySelectorAll('.settings-tab-panel'))panel.hidden=panel.id!=='settings-'+tab+'-panel';if(tab==='config'){if(!configEditorLoaded)loadConfigEditor();loadAutostart()}if(tab==='ollama')loadOllamaModels();if(tab==='tightvnc'){loadTightvnc();loadSshTerminal()}if(tab==='logs')loadAppLogs()}
 async function loadAutostart(){let box=document.getElementById('autostart-enabled');try{let response=await fetch('/api/autostart'),data=await response.json();box.checked=!!data.enabled}catch(error){}}
 async function saveAutostart(){let box=document.getElementById('autostart-enabled'),status=document.getElementById('autostart-status'),wanted=box.checked;try{let response=await fetch('/api/autostart',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:wanted})}),data=await response.json();if(!response.ok)throw new Error(data.error||'Failed');status.textContent=wanted?'Enabled':'Disabled'}catch(error){box.checked=!wanted;status.textContent=error.message}}
 async function loadTightvnc(){let status=document.getElementById('tightvnc-status');try{let response=await fetch('/api/tightvnc'),data=await response.json();if(!response.ok)throw new Error(data.error||'Status unavailable');status.textContent=`TightVNC: ${data.vnc_running?'on':'off'} · noVNC: ${data.novnc_running?'on':'off'} · ${data.url}`;status.dataset.state=data.vnc_running&&data.novnc_running?'success':''}catch(error){status.textContent=error.message;status.dataset.state='error'}}
 async function setTightvnc(action){let status=document.getElementById('tightvnc-status');status.textContent=`${action==='restart'?'Restarting':'Turning '+action} TightVNC...`;status.dataset.state='';for(let button of document.querySelectorAll('[data-tightvnc-action]'))button.disabled=true;try{let response=await fetch('/api/tightvnc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})}),data=await response.json();if(!response.ok)throw new Error(data.error||'TightVNC operation failed');status.textContent=`TightVNC: ${data.vnc_running?'on':'off'} · noVNC: ${data.novnc_running?'on':'off'} · ${data.url}`;status.dataset.state='success'}catch(error){status.textContent=error.message;status.dataset.state='error'}finally{for(let button of document.querySelectorAll('[data-tightvnc-action]'))button.disabled=false}}
+let sshTerminalRunning=false;
+function renderSshTerminal(data){let status=document.getElementById('ssh-terminal-status');sshTerminalRunning=!!data.running;document.getElementById('ssh-open-button').disabled=!sshTerminalRunning;status.textContent=data.installed===false?'ttyd/ssh not installed. Run setup.sh.':`SSH terminal: ${data.running?'on':'off'} · login as ${data.user}`;status.dataset.state=data.running?'success':''}
+async function loadSshTerminal(){try{let response=await fetch('/api/ssh-terminal'),data=await response.json();if(!response.ok)throw new Error(data.error||'Status unavailable');renderSshTerminal(data)}catch(error){let status=document.getElementById('ssh-terminal-status');status.textContent=error.message;status.dataset.state='error'}}
+async function setSshTerminal(action){let status=document.getElementById('ssh-terminal-status');status.textContent='Working...';status.dataset.state='';for(let button of document.querySelectorAll('[data-ssh-action]'))button.disabled=true;try{let response=await fetch('/api/ssh-terminal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})}),data=await response.json();if(!response.ok)throw new Error(data.error||'SSH terminal operation failed');renderSshTerminal(data)}catch(error){status.textContent=error.message;status.dataset.state='error'}finally{for(let button of document.querySelectorAll('[data-ssh-action]'))button.disabled=false}}
+function openSshTerminal(){window.open('https://'+location.hostname+':7681/','_blank','noopener')}
 async function loadAppLogs(){let output=document.getElementById('app-log-output');try{let response=await fetch('/api/logs'),data=await response.json();output.textContent=(data.logs||[]).join('\n')||'No log entries.';output.scrollTop=output.scrollHeight}catch(error){output.textContent=error.message}}
 async function clearAppLogs(){if(!confirm('Delete all stored logs?'))return;let status=document.getElementById('app-log-status');try{let response=await fetch('/api/logs',{method:'DELETE'});if(!response.ok)throw new Error((await response.json()).error||'Failed');status.textContent='Logs cleared.';loadAppLogs()}catch(error){status.textContent=error.message}}
 function syncConfigControls(){let colorSelect=document.getElementById('theme-select'),savedClassicTheme=null;try{savedClassicTheme=localStorage.getItem('meshcore-classic-theme')}catch(error){}let validSavedClassicTheme=[...colorSelect.options].some(option=>option.value===savedClassicTheme),classicTheme=appConfig.theme==='tron'?(validSavedClassicTheme?savedClassicTheme:'midnight'):appConfig.theme;colorSelect.value=classicTheme;let modelSelect=document.getElementById('model');if(![...modelSelect.options].some(option=>option.value===appConfig.model))modelSelect.add(new Option(appConfig.model,appConfig.model));modelSelect.value=appConfig.model;document.getElementById('weather-city').value=appConfig.weather.city;document.getElementById('weather-state').value=appConfig.weather.state;document.getElementById('bot-name').value=appConfig.bot.name;document.getElementById('bot-personality').value=appConfig.bot.personality;document.getElementById('bot-response-length').value=appConfig.bot.response_length;document.getElementById('ollama-schedule-enabled').checked=appConfig.ollama.schedule_enabled;document.getElementById('ollama-schedule-start').value=appConfig.ollama.start_time;document.getElementById('ollama-schedule-end').value=appConfig.ollama.end_time;document.getElementById('auto-update-enabled').checked=appConfig.auto_update.enabled;applyTheme(appConfig.theme,false)}
@@ -3855,7 +4072,7 @@ function fields(){let t=connection_type.value;document.getElementById('ble-field
 async function scanDevices(kind){let bluetooth=kind==='bluetooth',select=document.getElementById(bluetooth?'ble_mac':'serial_port'),button=document.getElementById(bluetooth?'ble-scan':'serial-scan'),statusMessage=document.getElementById(bluetooth?'ble-scan-status':'serial-scan-status'),previous=select.value;button.disabled=true;button.textContent='Scanning';statusMessage.dataset.state='';statusMessage.textContent='Searching for available devices...';try{let response=await fetch('/api/scan/'+kind),data=await response.json();if(!response.ok)throw new Error(data.error||'Device scan failed');let devices=bluetooth?data.devices:data.ports;select.replaceChildren(new Option(bluetooth?'Select a Bluetooth device':'Select a serial port',''));for(let device of devices){let label=bluetooth?`${device.name} (${device.address})`:`${device.device} - ${device.description||'Serial port'}`;select.add(new Option(label,bluetooth?device.address:device.device))}if(previous&&[...select.options].some(option=>option.value===previous))select.value=previous;statusMessage.textContent=devices.length?`Found ${devices.length} device(s). Select one to connect.`:'No devices found. Check that the radio is powered and discoverable.'}catch(error){statusMessage.dataset.state='error';statusMessage.textContent=error.message}finally{button.disabled=false;button.textContent='Scan'}}
 function scanBluetooth(){return scanDevices('bluetooth')}
 function scanSerial(){return scanDevices('serial')}
-function updateClock(){document.getElementById('current-datetime').textContent=new Date().toLocaleString()}
+function updateClock(){document.getElementById('current-datetime').textContent=new Date().toLocaleDateString()+' '+fmtTime(new Date())}
 async function status(){let r=await fetch('/api/status'),d=await r.json();let b=document.getElementById('status');b.textContent=d.is_connected?'CONNECTED':'DISCONNECTED';b.className='header-status '+(d.is_connected?'connected':'disconnected');document.getElementById('console').innerText=d.logs.join('\n');handleTraceEvents(d.trace_events||[]);renderOllamaPower(d.ollama_running);handleIncomingNotifications(d)}
 let ollamaToggleBusy=false;
 function renderOllamaPower(running){let button=document.getElementById('ollama-power-toggle'),status=document.getElementById('ollama-power-status');if(!button||ollamaToggleBusy)return;button.textContent=running?'Turn off':'Turn on';status.textContent=running?'Running. Turn it off between chats to save power.':'Stopped to save power. Replies will fail until it is turned back on.'}
@@ -3871,8 +4088,10 @@ async function deleteOllamaModel(modelName){if(!window.confirm('Delete model "'+
 let notificationsInitialized=false,lastIncomingCount=0,notificationAudio=null;
 function notificationsEnabled(){try{return localStorage.getItem('meshcore-message-notifications')!=='off'}catch(error){return true}}
 function playNotificationSound(){try{notificationAudio=notificationAudio||new(window.AudioContext||window.webkitAudioContext)();let ctx=notificationAudio;if(ctx.state==='suspended')ctx.resume();let now=ctx.currentTime;[880,1175].forEach((freq,i)=>{let osc=ctx.createOscillator(),gain=ctx.createGain();osc.type='sine';osc.frequency.value=freq;gain.gain.setValueAtTime(0.0001,now+i*0.15);gain.gain.exponentialRampToValueAtTime(0.2,now+i*0.15+0.02);gain.gain.exponentialRampToValueAtTime(0.0001,now+i*0.15+0.14);osc.connect(gain);gain.connect(ctx.destination);osc.start(now+i*0.15);osc.stop(now+i*0.15+0.15)})}catch(error){}}
-function handleIncomingNotifications(d){let count=Number(d.incoming_message_count||0);if(!notificationsInitialized){lastIncomingCount=count;notificationsInitialized=true;return}if(count>lastIncomingCount){lastIncomingCount=count;if(notificationsEnabled()){playNotificationSound();let m=d.latest_incoming_message;if(m)showToast(m.type==='channel'?(m.sender?m.sender+' \u00b7 ':'')+'#'+(m.channel||m.target):(m.sender||'New direct message'),m.text);if(m&&'Notification'in window&&Notification.permission==='granted'&&document.hidden){try{new Notification('New MeshCore message',{body:m.text})}catch(error){}}}}else if(count<lastIncomingCount){lastIncomingCount=count}}
-function showToast(title,body,duration=3500){let stack=document.getElementById('toast-stack');if(!stack){stack=document.createElement('div');stack.id='toast-stack';stack.setAttribute('aria-live','polite');document.body.append(stack)}let toast=document.createElement('div'),heading=document.createElement('strong'),text=document.createElement('span');toast.className='toast';heading.textContent=title;text.textContent=body;toast.append(heading,text);stack.append(toast);while(stack.children.length>3)stack.firstChild.remove();requestAnimationFrame(()=>toast.classList.add('show'));setTimeout(()=>{toast.classList.remove('show');setTimeout(()=>toast.remove(),300)},duration)}
+function handleIncomingNotifications(d){let count=Number(d.incoming_message_count||0);if(!notificationsInitialized){lastIncomingCount=count;notificationsInitialized=true;return}if(count>lastIncomingCount){lastIncomingCount=count;if(notificationsEnabled()){playNotificationSound();let m=d.latest_incoming_message;if(m)showToast(m.type==='channel'?(m.sender?m.sender+' \u00b7 ':'')+'#'+(m.channel||m.target):(m.sender||'New direct message'),m.text,undefined,()=>openIncomingConversation(m));if(m&&'Notification'in window&&Notification.permission==='granted'&&document.hidden){try{let n=new Notification('New MeshCore message',{body:m.text});n.onclick=()=>{window.focus();openIncomingConversation(m);n.close()}}catch(error){}}}}else if(count<lastIncomingCount){lastIncomingCount=count}}
+function fmtTime(value){if(value instanceof Date){let h=value.getHours(),m=String(value.getMinutes()).padStart(2,'0'),sec=String(value.getSeconds()).padStart(2,'0');return String(h%12||12).padStart(2,'0')+':'+m+':'+sec+' '+(h<12?'AM':'PM')}let match=/^(\d{1,2}):(\d{2}):(\d{2})$/.exec(String(value||''));if(!match)return value||'';let h=Number(match[1]);return String(h%12||12).padStart(2,'0')+':'+match[2]+':'+match[3]+' '+(h<12?'AM':'PM')}
+function openIncomingConversation(m){let isChannel=m.type==='channel';showView(isChannel?'channels':'nodes');selectConversation(isChannel?'channel':'node',String(m.target))}
+function showToast(title,body,duration=7000,onClick=null){let stack=document.getElementById('toast-stack');if(!stack){stack=document.createElement('div');stack.id='toast-stack';stack.setAttribute('aria-live','polite');document.body.append(stack)}let toast=document.createElement('div'),heading=document.createElement('strong'),text=document.createElement('span');toast.className='toast';heading.textContent=title;text.textContent=body;toast.append(heading,text);if(onClick){toast.classList.add('clickable');toast.setAttribute('role','button');toast.tabIndex=0;toast.onclick=()=>{onClick();toast.remove()};toast.onkeydown=event=>{if(event.key==='Enter')toast.click()}}stack.append(toast);while(stack.children.length>3)stack.firstChild.remove();requestAnimationFrame(()=>toast.classList.add('show'));setTimeout(()=>{toast.classList.remove('show');setTimeout(()=>toast.remove(),300)},duration)}
 function syncNotificationControl(){let box=document.getElementById('notification-toggle');if(box)box.checked=notificationsEnabled()}
 function saveNotificationSetting(){let enabled=document.getElementById('notification-toggle').checked;try{localStorage.setItem('meshcore-message-notifications',enabled?'on':'off')}catch(error){}if(enabled){playNotificationSound();if('Notification'in window&&Notification.permission==='default')Notification.requestPermission()}}
 const NOISE_MAX_POINTS=90;
@@ -3883,9 +4102,9 @@ let cpuTempLoading=false;
 async function pollCpuTemp(){let label=document.getElementById('cpu-temp-value');if(!label||cpuTempLoading||document.hidden)return;cpuTempLoading=true;try{let response=await fetch('/api/cpu-temp'),data=await response.json();label.textContent=response.ok&&typeof data.temperature_f==='number'?data.temperature_f+'°F':'--°F'}catch(error){label.textContent='--°F'}finally{cpuTempLoading=false}}
 window.addEventListener('resize',drawNoiseScope);
 function handleTraceEvents(events){if(!traceEventsInitialized){for(let event of events)addTraceActivity(event);lastSeenTraceEventId=events.length?Number(events[events.length-1].id):0;traceEventsInitialized=true;return}for(let event of events){let eventId=Number(event.id);if(eventId<=lastSeenTraceEventId)continue;addTraceActivity(event);if(event.kind==='direct')pulseTrace(event.target_id,event.direction);lastSeenTraceEventId=eventId}}
-function addTraceActivity(event){let list=document.getElementById('live-trace-feed-list');if(list){document.getElementById('live-trace-feed-empty')?.remove();let target=event.target_name||event.target_id||'Unknown';let label=event.kind==='direct'?(event.direction==='inbound'?'Direct message from ':'Direct message to ')+target:(event.direction==='inbound'?'Message received on ':'Message sent to ')+'Channel '+target;let entry=document.createElement('div');entry.className='live-trace-feed-item';let timestamp=document.createElement('time');timestamp.textContent=event.timestamp||'';let body=document.createElement('div');body.textContent=label;entry.append(timestamp,body);list.prepend(entry);while(list.children.length>60)list.lastElementChild.remove()}addAnalyzerPacket(event)}
-function addAnalyzerPacket(event){let list=document.getElementById('analyzer-packet-list');if(!list)return;let empty=list.querySelector('.packet-empty');empty?.parentElement.remove();let row=document.createElement('tr');row.tabIndex=0;let direction=event.direction==='inbound'?'IN':'OUT';let transport=event.kind==='direct'?'DIRECT':'CHANNEL';let status=event.direction==='inbound'?'RECEIVED':'SENT';let values=[event.timestamp||'--',direction,transport,event.target_name||event.target_id||'Unknown',status];values.forEach((value,index)=>{let cell=document.createElement('td');cell.textContent=String(value);if(index===1)cell.className='packet-direction';if(index===2&&transport==='CHANNEL')cell.className='packet-channel';row.appendChild(cell)});row.onclick=()=>showAnalyzerEvent(event);row.onkeydown=key=>{if(key.key==='Enter'||key.key===' '){key.preventDefault();showAnalyzerEvent(event)}};list.prepend(row);while(list.children.length>60)list.lastElementChild.remove();analyzerEventCount=Math.min(analyzerEventCount+1,60);document.getElementById('analyzer-total').textContent=String(analyzerEventCount)}
-function showAnalyzerEvent(event){let detail=document.getElementById('analyzer-event-detail');if(!detail)return;detail.textContent=[event.target_name||event.target_id||'Unknown','Event '+(event.id||'--'),event.direction==='inbound'?'Received by gateway':'Sent by gateway','Transport: '+(event.kind==='direct'?'Direct message':'Channel message'),'Time: '+(event.timestamp||'--')].join('\n')}
+function addTraceActivity(event){let list=document.getElementById('live-trace-feed-list');if(list){document.getElementById('live-trace-feed-empty')?.remove();let target=event.target_name||event.target_id||'Unknown';let label=event.kind==='direct'?(event.direction==='inbound'?'Direct message from ':'Direct message to ')+target:(event.direction==='inbound'?'Message received on ':'Message sent to ')+'Channel '+target;let entry=document.createElement('div');entry.className='live-trace-feed-item';let timestamp=document.createElement('time');timestamp.textContent=fmtTime(event.timestamp)||'';let body=document.createElement('div');body.textContent=label;entry.append(timestamp,body);list.prepend(entry);while(list.children.length>60)list.lastElementChild.remove()}addAnalyzerPacket(event)}
+function addAnalyzerPacket(event){let list=document.getElementById('analyzer-packet-list');if(!list)return;let empty=list.querySelector('.packet-empty');empty?.parentElement.remove();let row=document.createElement('tr');row.tabIndex=0;let direction=event.direction==='inbound'?'IN':'OUT';let transport=event.kind==='direct'?'DIRECT':'CHANNEL';let status=event.direction==='inbound'?'RECEIVED':'SENT';let values=[fmtTime(event.timestamp)||'--',direction,transport,event.target_name||event.target_id||'Unknown',status];values.forEach((value,index)=>{let cell=document.createElement('td');cell.textContent=String(value);if(index===1)cell.className='packet-direction';if(index===2&&transport==='CHANNEL')cell.className='packet-channel';row.appendChild(cell)});row.onclick=()=>showAnalyzerEvent(event);row.onkeydown=key=>{if(key.key==='Enter'||key.key===' '){key.preventDefault();showAnalyzerEvent(event)}};list.prepend(row);while(list.children.length>60)list.lastElementChild.remove();analyzerEventCount=Math.min(analyzerEventCount+1,60);document.getElementById('analyzer-total').textContent=String(analyzerEventCount)}
+function showAnalyzerEvent(event){let detail=document.getElementById('analyzer-event-detail');if(!detail)return;detail.textContent=[event.target_name||event.target_id||'Unknown','Event '+(event.id||'--'),event.direction==='inbound'?'Received by gateway':'Sent by gateway','Transport: '+(event.kind==='direct'?'Direct message':'Channel message'),'Time: '+(fmtTime(event.timestamp)||'--')].join('\n')}
 let analyzerEventCount=0;
 function updateNavigationBadges(){for(let [badgeId,countId] of [['map-node-count','map-node-count'],['analyzer-count','analyzer-total']]){let badge=document.getElementById(badgeId),count=Number(document.getElementById(countId)?.textContent||0);if(badge){if(badgeId!==countId)badge.textContent=String(count);badge.hidden=count<=0}}}
 window.addEventListener('DOMContentLoaded',()=>{let observer=new MutationObserver(updateNavigationBadges);for(let id of ['map-node-count','analyzer-total']){let count=document.getElementById(id);if(count)observer.observe(count,{childList:true,characterData:true,subtree:true})}updateNavigationBadges()});
@@ -3917,7 +4136,7 @@ let nodePeerDetailsEl=null;
 function getNodePeerDetails(){if(!nodePeerDetailsEl){nodePeerDetailsEl=document.createElement('dl');nodePeerDetailsEl.className='peer-inline-detail rail-peer-detail';nodePeerDetailsEl.hidden=true;nodePeerDetailsEl.setAttribute('aria-live','polite')}return nodePeerDetailsEl}
 function appendPeerDetail(container,label,value){if(value===null||value===undefined||value==='')return;let field=document.createElement('div'),term=document.createElement('dt'),description=document.createElement('dd');term.textContent=label;description.textContent=value;field.append(term,description);container.appendChild(field)}
 function usUnitTelemetry(type,value){let n=Number(value);if(value===null||value===''||!Number.isFinite(n))return value;let t=String(type).toLowerCase();if(t.includes('temp'))return (n*9/5+32).toFixed(1)+'°F';if(t==='altitude'||t==='distance')return (n*3.28084).toFixed(0)+' ft';if(t==='barometer'||t.includes('pressure'))return (n*0.02953).toFixed(2)+' inHg';if(t.includes('wind')||t==='speed')return (n*2.23694).toFixed(1)+' mph';return value}
-async function renderPeerDetails(nodeId,container){if(!container)return;container.hidden=false;let knownPeer=mapNodes.find(peer=>String(peer.id)===String(nodeId))||{},appendContactDetails=node=>{let rawHops=node.hops,hops=Number(rawHops);appendPeerDetail(container,'Type',peerTypeLabel(node.type));appendPeerDetail(container,'Last heard',Number(node.last_heard)>0?new Date(Number(node.last_heard)*1000).toLocaleString():'Not available');appendPeerDetail(container,'# of hops',rawHops!==null&&rawHops!==undefined&&rawHops!==''&&Number.isInteger(hops)&&hops>=0?hops:'Unavailable')};container.replaceChildren();appendContactDetails(knownPeer);appendPeerDetail(container,'Telemetry','Requesting telemetry...');try{let response=await fetch('/api/peer-telemetry?node_id='+encodeURIComponent(nodeId)),data=await response.json();if(!response.ok)throw new Error(data.error||'Peer details could not be loaded');container.replaceChildren();appendContactDetails(data.node||knownPeer);let telemetry=data.telemetry||[];for(let item of telemetry){let label=String(item.type||'Telemetry');let value=item.value;if(value&&typeof value==='object')value=Object.entries(value).map(([key,entry])=>key+': '+entry).join(', ');else value=usUnitTelemetry(label,value);if(value!==null&&value!==undefined)appendPeerDetail(container,label,value)}if(!telemetry.length)appendPeerDetail(container,'Telemetry','No telemetry has been reported by this peer.')}catch(error){appendPeerDetail(container,'Telemetry error',error.message)}}
+async function renderPeerDetails(nodeId,container){if(!container)return;container.hidden=false;let knownPeer=mapNodes.find(peer=>String(peer.id)===String(nodeId))||{},appendContactDetails=node=>{let rawHops=node.hops,hops=Number(rawHops);appendPeerDetail(container,'Type',peerTypeLabel(node.type));appendPeerDetail(container,'Last heard',Number(node.last_heard)>0?(d=>d.toLocaleDateString()+' '+fmtTime(d))(new Date(Number(node.last_heard)*1000)):'Not available');appendPeerDetail(container,'# of hops',rawHops!==null&&rawHops!==undefined&&rawHops!==''&&Number.isInteger(hops)&&hops>=0?hops:'Unavailable')};container.replaceChildren();appendContactDetails(knownPeer);appendPeerDetail(container,'Telemetry','Requesting telemetry...');try{let response=await fetch('/api/peer-telemetry?node_id='+encodeURIComponent(nodeId)),data=await response.json();if(!response.ok)throw new Error(data.error||'Peer details could not be loaded');container.replaceChildren();appendContactDetails(data.node||knownPeer);let telemetry=data.telemetry||[];for(let item of telemetry){let label=String(item.type||'Telemetry');let value=item.value;if(value&&typeof value==='object')value=Object.entries(value).map(([key,entry])=>key+': '+entry).join(', ');else value=usUnitTelemetry(label,value);if(value!==null&&value!==undefined)appendPeerDetail(container,label,value)}if(!telemetry.length)appendPeerDetail(container,'Telemetry','No telemetry has been reported by this peer.')}catch(error){appendPeerDetail(container,'Telemetry error',error.message)}}
 const peerMarkerSvgs={users:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 21a7 7 0 0 1 14 0"/></svg>',repeaters:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V8M8 20h8M6 11a8 8 0 0 1 12 0M3 8a12 12 0 0 1 18 0"/><circle cx="12" cy="5" r="1"/></svg>','room-servers':'<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="13" width="16" height="7" rx="1.5"/><path d="M8 7.5h.01M8 16.5h.01M12 7.5h5M12 16.5h5"/></svg>',sensors:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 14.76V5a3 3 0 0 0-6 0v9.76a5 5 0 1 0 6 0Z"/><path d="M11 11v6"/></svg>',unknown:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/></svg>'};
 function peerMarkerIcon(peer){let category=nodeCategory(peer);return L.divIcon({className:'',html:`<span class="map-peer-icon map-peer-icon-${category}" aria-label="${category}">${peerMarkerSvgs[category]||peerMarkerSvgs.unknown}</span>`,iconSize:[32,32],iconAnchor:[16,16]})}
 function renderMapMarkers(){if(!dashboardMap||!mapMarkers)return;mapMarkers.clearLayers();let bounds=[];for(let peer of sortedFilteredNodes('map-node-sort','map-node-type-filter','map-node-search')){if(!Number.isFinite(peer.latitude)||!Number.isFinite(peer.longitude))continue;let point=[peer.latitude,peer.longitude],marker=L.marker(point,{icon:peerMarkerIcon(peer),title:peer.name+' ('+nodeCategory(peer)+')'}).bindPopup(peerPopupContent(peer)).addTo(mapMarkers);marker.on('click',()=>expandKnownPeerRow(peer.id));bounds.push(point)}if(Number.isFinite(gatewayTelemetry.latitude)&&Number.isFinite(gatewayTelemetry.longitude)){let point=[gatewayTelemetry.latitude,gatewayTelemetry.longitude];L.circleMarker(point,{radius:9,color:'#0d1117',weight:2,fillColor:'#36d1dc',fillOpacity:1}).bindPopup(popupContent('This gateway','Current radio location')).addTo(mapMarkers);bounds.push(point)}let signature=JSON.stringify(bounds);if(bounds.length&&signature!==mapBoundsSignature){dashboardMap.fitBounds(bounds,{padding:[36,36],maxZoom:12});mapBoundsSignature=signature}else if(!bounds.length){mapBoundsSignature=''}document.getElementById('map-message').hidden=bounds.length>0;document.getElementById('map-message').textContent='No peer or gateway location data is available yet.'}
@@ -3938,13 +4157,13 @@ function renderAnalyzerStats(){let located=mapNodes.filter(peer=>Number.isFinite
 function advertAgeLabel(timestamp){let advertTime=Number(timestamp);if(!Number.isFinite(advertTime)||advertTime<=0)return 'Time unavailable';let elapsed=Math.max(0,Math.floor(Date.now()/1000-advertTime));if(elapsed<60)return elapsed+'s ago';if(elapsed<3600)return Math.floor(elapsed/60)+'m ago';if(elapsed<86400)return Math.floor(elapsed/3600)+'h ago';return Math.floor(elapsed/86400)+'d ago'}
 function renderIncomingAdverts(){let list=document.getElementById('incoming-adverts-list'),count=document.getElementById('incoming-adverts-count');if(!list)return;let receivedNewAdvert=false;for(let peer of mapNodes){let timestamp=Number(peer.last_heard);if(!Number.isFinite(timestamp)||timestamp<=0)continue;let id=String(peer.id),previous=incomingAdvertSnapshot.get(id);if(previous===undefined||timestamp>previous){if(incomingAdvertsInitialized)receivedNewAdvert=true;incomingAdvertSnapshot.set(id,timestamp);incomingAdvertEvents.unshift({id,name:peer.name||'Unknown node',last_heard:timestamp,hops:peer.hops})}else{let existing=incomingAdvertEvents.find(event=>event.id===id&&event.last_heard===timestamp);if(existing){existing.name=peer.name||existing.name;existing.hops=peer.hops}}}incomingAdvertsInitialized=true;incomingAdvertEvents.sort((left,right)=>left.last_heard-right.last_heard);incomingAdvertEvents=incomingAdvertEvents.slice(-5);if(count)count.textContent=String(incomingAdvertEvents.length);let signature=incomingAdvertEvents.map(e=>[e.id,e.last_heard,e.name,e.hops].join('|')).join(';');if(!incomingAdvertEvents.length){list.replaceChildren();incomingAdvertSignature='';let empty=document.createElement('p');empty.className='incoming-advert-empty';empty.textContent=document.getElementById('status')?.classList.contains('connected')?'Waiting for incoming adverts...':'Connect to a radio to receive adverts.';list.appendChild(empty);return}let describe=advert=>{let hopCount=advert.hops===null||advert.hops===undefined?null:Number(advert.hops),route=hopCount===-1?'? hops':(Number.isInteger(hopCount)&&hopCount>=0?hopCount+' hop'+(hopCount===1?'':'s'):'Hops unavailable');return advertAgeLabel(advert.last_heard)+' · '+route};if(signature===incomingAdvertSignature){list.querySelectorAll('.incoming-advert-meta').forEach(meta=>{let advert=incomingAdvertEvents[Number(meta.dataset.index)];if(advert)meta.textContent=describe(advert)});return}incomingAdvertSignature=signature;let previousScroll=list.scrollTop;list.replaceChildren();let track=document.createElement('div');track.className='incoming-advert-track';let buildGroup=()=>{let group=document.createElement('div');group.className='incoming-advert-group';for(let index=0;index<incomingAdvertEvents.length;index++){let advert=incomingAdvertEvents[index],row=document.createElement('div'),name=document.createElement('span'),meta=document.createElement('span');row.className='incoming-advert-row'+(receivedNewAdvert&&index===incomingAdvertEvents.length-1?' incoming-advert-new':'');name.className='incoming-advert-name';name.textContent=advert.name;meta.className='incoming-advert-meta';meta.dataset.index=String(index);meta.textContent=describe(advert);row.append(name,meta);group.appendChild(row)}return group};track.appendChild(buildGroup());list.appendChild(track);list.scrollTop=receivedNewAdvert?previousScroll:list.scrollHeight;if(receivedNewAdvert)list.scrollTo({top:list.scrollHeight,behavior:'smooth'})}
 let analyzerRadioStatusLoading=false;
-async function loadAnalyzerRadioStatus(){let panel=document.getElementById('analyzer-radio-status');if(!panel||!['analyzer','tron-overview'].includes(activeView)||analyzerRadioStatusLoading)return;analyzerRadioStatusLoading=true;panel.textContent='Reading live radio status...';let groups=[['Radio','radio'],['Core','core'],['Packets','packets']],labels={noise_floor:['Noise floor','dBm'],last_rssi:['Last RSSI','dBm'],last_snr:['Last SNR','dB'],tx_air_secs:['TX airtime','s'],rx_air_secs:['RX airtime','s'],battery_mv:['Battery voltage','mV'],uptime_secs:['Uptime','s'],errors:['Errors',''],queue_len:['Transmit queue',''],recv:['Received packets',''],sent:['Sent packets',''],flood_tx:['Flood TX',''],direct_tx:['Direct TX',''],flood_rx:['Flood RX',''],direct_rx:['Direct RX',''],recv_errors:['Receive errors','']};let content=document.createDocumentFragment();try{for(let [title,statsType] of groups){let response;try{response=await fetch('/api/device-settings/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'stats',stats_type:statsType})});let data=await response.json();if(!response.ok){if(response.status===503){panel.textContent='Connect to a MeshCore radio to view live statistics.';return}throw new Error(data.error||'Statistics unavailable')}let values=data.result&&typeof data.result==='object'&&!Array.isArray(data.result)?data.result:{};let section=document.createElement('section'),heading=document.createElement('h4'),list=document.createElement('dl');section.className='analyzer-radio-group';heading.textContent=title;list.className='analyzer-radio-list';for(let [key,value] of Object.entries(values)){let [label,unit]=labels[key]||[key.replaceAll('_',' ').replace(/\b\w/g,char=>char.toUpperCase()),''];let term=document.createElement('dt'),detail=document.createElement('dd');term.textContent=label;detail.textContent=value===null||value===undefined?'Unavailable':String(value)+(unit?' '+unit:'');list.append(term,detail)}if(!list.children.length){let term=document.createElement('dt'),detail=document.createElement('dd');term.textContent='Status';detail.textContent='No fields reported';list.append(term,detail)}section.append(heading,list);content.append(section)}catch(error){let section=document.createElement('section'),heading=document.createElement('h4'),detail=document.createElement('p');section.className='analyzer-radio-group';heading.textContent=title;detail.className='analyzer-detail';detail.textContent=error.message||'Statistics unavailable';section.append(heading,detail);content.append(section)}}let updated=document.createElement('p');updated.className='analyzer-radio-updated';updated.textContent='Updated '+new Date().toLocaleTimeString();content.append(updated);panel.replaceChildren(content)}finally{analyzerRadioStatusLoading=false}}
-async function loadTronAnalyzerRadioStatus(){let panel=document.getElementById('analyzer-radio-status');if(!panel||activeView!=='tron-overview'||analyzerRadioStatusLoading)return;analyzerRadioStatusLoading=true;let groups=[['Radio','radio'],['Core','core'],['Packets','packets']],labels={noise_floor:['Noise floor','dBm'],last_rssi:['Last RSSI','dBm'],last_snr:['Last SNR','dB'],tx_air_secs:['TX airtime','s'],rx_air_secs:['RX airtime','s'],battery_mv:['Battery voltage','mV'],uptime_secs:['Uptime','s'],errors:['Errors',''],queue_len:['Transmit queue',''],recv:['Received packets',''],sent:['Sent packets',''],flood_tx:['Flood TX',''],direct_tx:['Direct TX',''],flood_rx:['Flood RX',''],direct_rx:['Direct RX',''],recv_errors:['Receive errors','']};let state=panel.querySelector('.analyzer-radio-state');if(!state){state=panel.querySelector('.analyzer-detail');if(state)state.className='analyzer-radio-state analyzer-detail'}let contentReady=Boolean(panel.querySelector('[data-stat-key]')),issues=[];try{for(let [title,statsType] of groups){try{let response=await fetch('/api/device-settings/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'stats',stats_type:statsType})}),data=await response.json();if(!response.ok){if(response.status===503){if(state)state.textContent='Connect to a MeshCore radio to view live statistics.';return}throw new Error(data.error||'Statistics unavailable')}let values=data.result&&typeof data.result==='object'&&!Array.isArray(data.result)?data.result:{};let section=panel.querySelector('[data-radio-group="'+statsType+'"]'),list;if(!section){if(!contentReady){panel.replaceChildren();contentReady=true;state=document.createElement('p');state.className='analyzer-radio-state';panel.appendChild(state)}section=document.createElement('section');section.className='analyzer-radio-group';section.dataset.radioGroup=statsType;let heading=document.createElement('h4');heading.textContent=title;list=document.createElement('dl');list.className='analyzer-radio-list';list.dataset.radioGroup=statsType;section.append(heading,list);panel.appendChild(section)}else list=section.querySelector('.analyzer-radio-list');for(let [key,value] of Object.entries(values)){let detail=[...list.querySelectorAll('[data-stat-key]')].find(item=>item.dataset.statKey===key);if(!detail){let term=document.createElement('dt');term.textContent=(labels[key]||[key.replaceAll('_',' ').replace(/\b\w/g,char=>char.toUpperCase()),''])[0];detail=document.createElement('dd');detail.dataset.statKey=key;list.append(term,detail)}let unit=(labels[key]||['',''])[1];detail.textContent=value===null||value===undefined?'Unavailable':String(value)+(unit?' '+unit:'')}}catch(error){issues.push(title)}}let timestamp=panel.querySelector('.analyzer-radio-updated');if(!timestamp){timestamp=document.createElement('p');timestamp.className='analyzer-radio-updated';panel.appendChild(timestamp)}timestamp.textContent='Updated '+new Date().toLocaleTimeString();if(state)state.textContent=issues.length?'Some readings did not refresh; previous values are retained.':'LIVE'}finally{analyzerRadioStatusLoading=false}}
+async function loadAnalyzerRadioStatus(){let panel=document.getElementById('analyzer-radio-status');if(!panel||!['analyzer','tron-overview'].includes(activeView)||analyzerRadioStatusLoading)return;analyzerRadioStatusLoading=true;panel.textContent='Reading live radio status...';let groups=[['Radio','radio'],['Core','core'],['Packets','packets']],labels={noise_floor:['Noise floor','dBm'],last_rssi:['Last RSSI','dBm'],last_snr:['Last SNR','dB'],tx_air_secs:['TX airtime','s'],rx_air_secs:['RX airtime','s'],battery_mv:['Battery voltage','mV'],uptime_secs:['Uptime','s'],errors:['Errors',''],queue_len:['Transmit queue',''],recv:['Received packets',''],sent:['Sent packets',''],flood_tx:['Flood TX',''],direct_tx:['Direct TX',''],flood_rx:['Flood RX',''],direct_rx:['Direct RX',''],recv_errors:['Receive errors','']};let content=document.createDocumentFragment();try{for(let [title,statsType] of groups){let response;try{response=await fetch('/api/device-settings/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'stats',stats_type:statsType})});let data=await response.json();if(!response.ok){if(response.status===503){panel.textContent='Connect to a MeshCore radio to view live statistics.';return}throw new Error(data.error||'Statistics unavailable')}let values=data.result&&typeof data.result==='object'&&!Array.isArray(data.result)?data.result:{};let section=document.createElement('section'),heading=document.createElement('h4'),list=document.createElement('dl');section.className='analyzer-radio-group';heading.textContent=title;list.className='analyzer-radio-list';for(let [key,value] of Object.entries(values)){let [label,unit]=labels[key]||[key.replaceAll('_',' ').replace(/\b\w/g,char=>char.toUpperCase()),''];let term=document.createElement('dt'),detail=document.createElement('dd');term.textContent=label;detail.textContent=value===null||value===undefined?'Unavailable':String(value)+(unit?' '+unit:'');list.append(term,detail)}if(!list.children.length){let term=document.createElement('dt'),detail=document.createElement('dd');term.textContent='Status';detail.textContent='No fields reported';list.append(term,detail)}section.append(heading,list);content.append(section)}catch(error){let section=document.createElement('section'),heading=document.createElement('h4'),detail=document.createElement('p');section.className='analyzer-radio-group';heading.textContent=title;detail.className='analyzer-detail';detail.textContent=error.message||'Statistics unavailable';section.append(heading,detail);content.append(section)}}let updated=document.createElement('p');updated.className='analyzer-radio-updated';updated.textContent='Updated '+fmtTime(new Date());content.append(updated);panel.replaceChildren(content)}finally{analyzerRadioStatusLoading=false}}
+async function loadTronAnalyzerRadioStatus(){let panel=document.getElementById('analyzer-radio-status');if(!panel||activeView!=='tron-overview'||analyzerRadioStatusLoading)return;analyzerRadioStatusLoading=true;let groups=[['Radio','radio'],['Core','core'],['Packets','packets']],labels={noise_floor:['Noise floor','dBm'],last_rssi:['Last RSSI','dBm'],last_snr:['Last SNR','dB'],tx_air_secs:['TX airtime','s'],rx_air_secs:['RX airtime','s'],battery_mv:['Battery voltage','mV'],uptime_secs:['Uptime','s'],errors:['Errors',''],queue_len:['Transmit queue',''],recv:['Received packets',''],sent:['Sent packets',''],flood_tx:['Flood TX',''],direct_tx:['Direct TX',''],flood_rx:['Flood RX',''],direct_rx:['Direct RX',''],recv_errors:['Receive errors','']};let state=panel.querySelector('.analyzer-radio-state');if(!state){state=panel.querySelector('.analyzer-detail');if(state)state.className='analyzer-radio-state analyzer-detail'}let contentReady=Boolean(panel.querySelector('[data-stat-key]')),issues=[];try{for(let [title,statsType] of groups){try{let response=await fetch('/api/device-settings/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'stats',stats_type:statsType})}),data=await response.json();if(!response.ok){if(response.status===503){if(state)state.textContent='Connect to a MeshCore radio to view live statistics.';return}throw new Error(data.error||'Statistics unavailable')}let values=data.result&&typeof data.result==='object'&&!Array.isArray(data.result)?data.result:{};let section=panel.querySelector('[data-radio-group="'+statsType+'"]'),list;if(!section){if(!contentReady){panel.replaceChildren();contentReady=true;state=document.createElement('p');state.className='analyzer-radio-state';panel.appendChild(state)}section=document.createElement('section');section.className='analyzer-radio-group';section.dataset.radioGroup=statsType;let heading=document.createElement('h4');heading.textContent=title;list=document.createElement('dl');list.className='analyzer-radio-list';list.dataset.radioGroup=statsType;section.append(heading,list);panel.appendChild(section)}else list=section.querySelector('.analyzer-radio-list');for(let [key,value] of Object.entries(values)){let detail=[...list.querySelectorAll('[data-stat-key]')].find(item=>item.dataset.statKey===key);if(!detail){let term=document.createElement('dt');term.textContent=(labels[key]||[key.replaceAll('_',' ').replace(/\b\w/g,char=>char.toUpperCase()),''])[0];detail=document.createElement('dd');detail.dataset.statKey=key;list.append(term,detail)}let unit=(labels[key]||['',''])[1];detail.textContent=value===null||value===undefined?'Unavailable':String(value)+(unit?' '+unit:'')}}catch(error){issues.push(title)}}let timestamp=panel.querySelector('.analyzer-radio-updated');if(!timestamp){timestamp=document.createElement('p');timestamp.className='analyzer-radio-updated';panel.appendChild(timestamp)}timestamp.textContent='Updated '+fmtTime(new Date());if(state)state.textContent=issues.length?'Some readings did not refresh; previous values are retained.':'LIVE'}finally{analyzerRadioStatusLoading=false}}
 setInterval(()=>{if(activeView==='analyzer')loadAnalyzerRadioStatus();else if(activeView==='tron-overview')loadTronAnalyzerRadioStatus()},15000);
 function updateSearchPlaceholders(){let contactPlaceholder='Search '+mapNodes.length+' contacts';for(let id of ['node-search','map-node-search']){let input=document.getElementById(id);if(input)input.placeholder=contactPlaceholder}let channelSearch=document.getElementById('channel-search');if(channelSearch)channelSearch.placeholder='Search '+meshChannels.length+' channels'}
 async function peers(){let r=await fetch('/api/peers'),d=await r.json();gatewayTelemetry=d.gateway_telemetry||{};mapNodes=d.nodes||[];meshChannels=d.channels||[];peerLimits=d.limits||{};updateAddCapacity();updateSearchPlaceholders();gateway_battery.textContent=gatewayTelemetry.battery!=null?gatewayTelemetry.battery+'%':'Unavailable';system_battery.textContent=d.system_battery!=null?d.system_battery+'%':'Unavailable';if(!mapNodes.some(item=>String(item.id)===selectedNodeId))selectedNodeId='';if(!meshChannels.some(item=>String(item.id)===selectedChannelId))selectedChannelId='';renderConversationTargets('node');renderConversationTargets('channel');renderKnownPeers();renderMapMarkers();renderAnalyzerStats();renderIncomingAdverts();if(liveTraceMap)renderLiveTraceMarkers()}
 function parseChannelSender(text){let bracket=text.match(/^\[([^\]]{1,24})\]\s*/);if(bracket)return bracket[1];let colon=text.match(/^([A-Za-z0-9 _-]{1,24}):\s/);if(colon)return colon[1];return null}
-async function history(type,id,boxId,scrollToLatest=false){let box=document.getElementById(boxId);if(!id){box.replaceChildren();updateConversationMenu(type);return}try{let response=await fetch('/api/chat-history?target_type='+encodeURIComponent(type)+'&target='+encodeURIComponent(id)),data=await response.json();if(!response.ok)throw new Error(data.error||'Message history could not be loaded');updateConversationMenu(type,data.metadata||{});let wasAtLatest=box.scrollHeight-box.clientHeight-box.scrollTop<=40;box.replaceChildren();let peerName=type==='node'?(mapNodes.find(item=>String(item.id)===id)?.name||id):(meshChannels.find(item=>String(item.id)===id)?.name||('Channel '+id));for(let message of data.messages||[]){let outgoing=message.direction==='outgoing';let item=document.createElement('div');item.className='chat-message '+(outgoing?'outgoing':'incoming');let sender=outgoing?'You':(type==='channel'?(parseChannelSender(message.text)||peerName):peerName);let meta=document.createElement('div');meta.className='chat-message-meta';let avatar=document.createElement('span');avatar.className='chat-avatar';avatar.style.background=hashColor(outgoing?'you':id);avatar.textContent=sender.charAt(0)||'?';let senderLabel=document.createElement('span');senderLabel.className='chat-sender';senderLabel.textContent=sender;let time=document.createElement('span');time.className='chat-time';time.textContent=message.timestamp;let status=document.createElement('span');status.className='chat-status';let statusLabels={sent:'Sent',delivered:'Delivered',unconfirmed:'Sent (not confirmed)',received:'Received'},hopCount=Number(message.hops);status.textContent=message.status==='delivered'&&Number.isInteger(hopCount)&&hopCount>=0?'Delivered · '+hopCount+' hop'+(hopCount===1?'':'s'):statusLabels[message.status]||statusLabels[outgoing?'sent':'received'];meta.append(avatar,senderLabel,time,status);let body=document.createElement('div');body.className='chat-message-body';body.textContent=message.text;item.append(meta,body);item.tabIndex=0;item.setAttribute('role','button');item.onclick=()=>openMessageActions(type,id,message,sender,data.blocked||[]);item.onkeydown=event=>{if(event.key==='Enter')item.click()};box.appendChild(item)}box.scrollTop=scrollToLatest||wasAtLatest?box.scrollHeight:box.scrollTop}catch(error){box.textContent=error.message}}
+async function history(type,id,boxId,scrollToLatest=false){let box=document.getElementById(boxId);if(!id){box.replaceChildren();updateConversationMenu(type);return}try{let response=await fetch('/api/chat-history?target_type='+encodeURIComponent(type)+'&target='+encodeURIComponent(id)),data=await response.json();if(!response.ok)throw new Error(data.error||'Message history could not be loaded');updateConversationMenu(type,data.metadata||{});let wasAtLatest=box.scrollHeight-box.clientHeight-box.scrollTop<=40,previousTop=box.scrollTop,previousBehavior=box.style.scrollBehavior;box.style.scrollBehavior='auto';box.replaceChildren();let peerName=type==='node'?(mapNodes.find(item=>String(item.id)===id)?.name||id):(meshChannels.find(item=>String(item.id)===id)?.name||('Channel '+id));for(let message of data.messages||[]){let outgoing=message.direction==='outgoing';let item=document.createElement('div');item.className='chat-message '+(outgoing?'outgoing':'incoming');let sender=outgoing?'You':(type==='channel'?(parseChannelSender(message.text)||peerName):peerName);let meta=document.createElement('div');meta.className='chat-message-meta';let avatar=document.createElement('span');avatar.className='chat-avatar';avatar.style.background=hashColor(outgoing?'you':id);avatar.textContent=sender.charAt(0)||'?';let senderLabel=document.createElement('span');senderLabel.className='chat-sender';senderLabel.textContent=sender;let time=document.createElement('span');time.className='chat-time';time.textContent=fmtTime(message.timestamp);let status=document.createElement('span');status.className='chat-status';let statusLabels={sent:'Sent',delivered:'Delivered',failed:'Failed',received:'Received'},heardCount=Number(message.heard);status.textContent=message.status==='delivered'&&Number.isInteger(heardCount)&&heardCount>0?'Delivered · '+heardCount+' heard':statusLabels[message.status]||statusLabels[outgoing?'sent':'received'];meta.append(avatar,senderLabel,time,status);let body=document.createElement('div');body.className='chat-message-body';body.textContent=message.text;item.append(meta,body);item.tabIndex=0;item.setAttribute('role','button');item.onclick=()=>openMessageActions(type,id,message,sender,data.blocked||[]);item.onkeydown=event=>{if(event.key==='Enter')item.click()};box.appendChild(item)}box.scrollTop=scrollToLatest||wasAtLatest?box.scrollHeight:previousTop;box.style.scrollBehavior=previousBehavior}catch(error){box.textContent=error.message}}
 async function deleteTarget(type){let selected=type==='node'?selectedNodeId:selectedChannelId;if(!selected)return;if(!confirm('Delete this '+type+' from the device? This cannot be undone.'))return;let response=await fetch('/api/delete-target',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_type:type,target:selected})}),data=await response.json();if(!response.ok){alert(data.error||'Delete failed');return}if(type==='node'){selectedNodeId=null;document.getElementById('node-chat-title').textContent='Select a node';document.getElementById('node-chat-detail').textContent='Choose a node to view its conversation.';document.getElementById('node-send').disabled=true;document.getElementById('node-chat-history').replaceChildren()}else{selectedChannelId=null;document.getElementById('channel-chat-title').textContent='Select a channel';document.getElementById('channel-chat-detail').textContent='Choose a channel to view its conversation.';document.getElementById('channel-send').disabled=true;document.getElementById('channel-chat-history').replaceChildren()}updateConversationMenu(type);let menu=document.getElementById(type+'-chat-options');if(menu)menu.open=false;await peers()}
 async function manageConversation(type,action){let selected=type==='node'?selectedNodeId:selectedChannelId;if(!selected)return;if(action==='clear'&&!confirm('Clear this conversation history? This cannot be undone.'))return;let response=await fetch('/api/chat-management',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_type:type,target:selected,action})}),data=await response.json();if(!response.ok){alert(data.error||'Conversation could not be updated');return}let menu=document.querySelector('#'+(type==='node'?'node':'channel')+'-chat-options');if(menu)menu.open=false;await history(type,selected,type==='node'?'node-chat-history':'channel-chat-history');await peers()}
 function selectNode(id){selectConversation('node',id)}
@@ -4001,13 +4220,13 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 </header>
 <main id="nodes-view" class="view-panel page-view">
 <div class="messages-layout">
-<aside class="card conversation-rail"><div class="panel-heading"><div><span class="eyebrow">DIRECT MESSAGES</span><h2>Nodes</h2></div><span class="panel-index">02</span></div><div class="conversation-filters"><div class="node-search-label"><label for="node-search">Search</label><div class="search-input-row"><input type="search" id="node-search" placeholder="Filter by name or ID" oninput="renderConversationTargets('node')"><details class="search-filter-menu"><summary aria-label="Sort and type filters" title="Sort and type filters"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16l-6.5 7.5v5l-3 1.5v-6.5L4 5Z"/></svg></summary><div class="search-filter-panel"><label for="node-sort">Sort<select id="node-sort" onchange="renderConversationTargets('node')"><option value="az">A-Z</option><option value="heard">Heard recently</option><option value="messages">Latest messages</option></select></label><label for="node-type-filter">Type<select id="node-type-filter" onchange="renderConversationTargets('node')"><option value="all">All</option><option value="favorites">Favorites</option><option value="users">Users</option><option value="repeaters">Repeaters</option><option value="room-servers">Room servers</option><option value="sensors">Sensors</option></select></label></div></details></div></div><label for="node-chat-filter">Chats<select id="node-chat-filter" onchange="renderConversationTargets('node')"><option value="active">Active</option><option value="archived">Archived</option><option value="all">All</option></select></label></div><div class="conversation-target-list" id="node-target-list"><p class="map-empty">Waiting for nodes...</p></div></aside>
+<aside class="card conversation-rail"><div class="panel-heading"><div><span class="eyebrow">DIRECT MESSAGES</span><h2>Nodes</h2></div><span class="panel-index">02</span></div><div class="conversation-filters"><div class="node-search-label"><label for="node-search">Search</label><div class="search-input-row"><input type="search" id="node-search" placeholder="Filter by name or ID" oninput="renderConversationTargets('node')"><details class="search-filter-menu"><summary aria-label="Sort and type filters" title="Sort and type filters"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16l-6.5 7.5v5l-3 1.5v-6.5L4 5Z"/></svg></summary><div class="search-filter-panel"><label for="node-sort">Sort<select id="node-sort" onchange="renderConversationTargets('node')"><option value="az">A-Z</option><option value="heard">Heard recently</option><option value="messages">Latest messages</option></select></label><label for="node-type-filter">Type<select id="node-type-filter" onchange="renderConversationTargets('node')"><option value="all">All</option><option value="favorites">Favorites</option><option value="users">Users</option><option value="repeaters">Repeaters</option><option value="room-servers">Room servers</option><option value="sensors">Sensors</option></select></label><label for="node-chat-filter">Chats<select id="node-chat-filter" onchange="renderConversationTargets('node')"><option value="active">Active</option><option value="archived">Archived</option><option value="all">All</option></select></label></div></details></div></div></div><div class="conversation-target-list" id="node-target-list"><p class="map-empty">Waiting for nodes...</p></div></aside>
 <section class="card chat-panel"><div class="chat-header"><div class="chat-header-main"><div class="chat-header-copy"><strong id="node-chat-title">Select a node</strong><span id="node-chat-detail">Choose a node to view its conversation.</span></div><details class="chat-actions" id="node-chat-options"><summary aria-label="Node chat options">Options</summary><div class="chat-action-menu"><button id="node-clear-action" type="button" disabled onclick="manageConversation('node','clear')">Clear chat</button><button id="node-archive-action" type="button" disabled onclick="manageConversation('node','archive')">Archive chat</button><button id="node-pin-action" type="button" disabled onclick="manageConversation('node','pin')">Pin chat</button><button id="node-delete-action" type="button" disabled onclick="deleteTarget('node')">Delete node</button></div></details></div></div><div id="node-chat-history"></div><form onsubmit="sendMessage(event,'node','node-message','node-chat-history')"><input id="node-message" maxlength="100" placeholder="Message selected node" required><button id="node-send" disabled>Send</button></form></section>
 </div>
 </main>
 <main id="channels-view" class="view-panel page-view" hidden>
 <div class="messages-layout">
-<aside class="card conversation-rail"><div class="panel-heading"><div><span class="eyebrow">SHARED FREQUENCY</span><h2>Channels</h2></div><span class="panel-index">03</span></div><div class="conversation-filters"><label for="channel-search" class="node-search-label">Search<input type="search" id="channel-search" placeholder="Filter by name or ID" oninput="renderConversationTargets('channel')"></label><label for="channel-chat-filter">Chats<select id="channel-chat-filter" onchange="renderConversationTargets('channel')"><option value="active">Active</option><option value="archived">Archived</option><option value="all">All</option></select></label></div><div class="conversation-target-list" id="channel-target-list"><p class="map-empty">Waiting for channels...</p></div></aside>
+<aside class="card conversation-rail"><div class="panel-heading"><div><span class="eyebrow">SHARED FREQUENCY</span><h2>Channels</h2></div><span class="panel-index">03</span></div><div class="conversation-filters"><div class="node-search-label"><label for="channel-search">Search</label><div class="search-input-row"><input type="search" id="channel-search" placeholder="Filter by name or ID" oninput="renderConversationTargets('channel')"><details class="search-filter-menu"><summary aria-label="Chat filters" title="Chat filters"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16l-6.5 7.5v5l-3 1.5v-6.5L4 5Z"/></svg></summary><div class="search-filter-panel"><label for="channel-chat-filter">Chats<select id="channel-chat-filter" onchange="renderConversationTargets('channel')"><option value="active">Active</option><option value="archived">Archived</option><option value="all">All</option></select></label></div></details></div></div></div><div class="conversation-target-list" id="channel-target-list"><p class="map-empty">Waiting for channels...</p></div></aside>
 <section class="card chat-panel"><div class="chat-header"><div class="chat-header-main"><div class="chat-header-copy"><strong id="channel-chat-title">Select a channel</strong><span id="channel-chat-detail">Choose a channel to view its conversation.</span></div><details class="chat-actions" id="channel-chat-options"><summary aria-label="Channel chat options">Options</summary><div class="chat-action-menu"><button id="channel-clear-action" type="button" disabled onclick="manageConversation('channel','clear')">Clear chat</button><button id="channel-archive-action" type="button" disabled onclick="manageConversation('channel','archive')">Archive chat</button><button id="channel-pin-action" type="button" disabled onclick="manageConversation('channel','pin')">Pin chat</button><button id="channel-delete-action" type="button" disabled onclick="deleteTarget('channel')">Delete channel</button></div></details></div></div><div id="channel-chat-history"></div><form onsubmit="sendMessage(event,'channel','channel-message','channel-chat-history')"><input id="channel-message" maxlength="100" placeholder="Message selected channel" required><button id="channel-send" disabled>Send</button></form></section>
 </div>
 </main>
@@ -4080,6 +4299,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <section id="settings-tightvnc-panel" class="settings-tab-panel" hidden>
 <div class="settings-grid">
 <div class="settings-item settings-item-full"><label>TightVNC / noVNC remote desktop</label><p class="settings-description">Manage the TightVNC server on localhost:5901 and the secure browser proxy on port 6080. Connect at https://&lt;host&gt;:6080/vnc.html and accept the self-signed certificate warning.</p><div class="device-action-grid"><button type="button" data-tightvnc-action="on" onclick="setTightvnc('on')">Turn on</button><button type="button" class="secondary" data-tightvnc-action="off" onclick="setTightvnc('off')">Turn off</button><button type="button" class="secondary" data-tightvnc-action="restart" onclick="setTightvnc('restart')">Restart</button></div><p id="tightvnc-status" class="preferences-status" aria-live="polite">Checking status...</p></div>
+<div class="settings-item settings-item-full"><label>SSH terminal</label><p class="settings-description">Opens a browser terminal on port 7681 that logs into this Orange Pi over SSH. You sign in with the Pi's own username and password. Accept the self-signed certificate warning.</p><div class="device-action-grid"><button type="button" data-ssh-action="on" onclick="setSshTerminal('on')">Turn on</button><button type="button" class="secondary" data-ssh-action="off" onclick="setSshTerminal('off')">Turn off</button><button type="button" class="secondary" data-ssh-action="restart" onclick="setSshTerminal('restart')">Restart</button><button type="button" id="ssh-open-button" class="secondary" onclick="openSshTerminal()" disabled>Open terminal</button></div><p id="ssh-terminal-status" class="preferences-status" aria-live="polite">Checking status...</p></div>
 </div>
 </section>
 <section id="settings-config-panel" class="settings-tab-panel" hidden>
@@ -4269,10 +4489,12 @@ function action(label,icon,handler,danger){
   button.onclick=handler;return button;
 }
 function showPaths(message,sender){
-  let rows=[['Sender',sender||'Unknown'],['Received',message.timestamp||'Unknown'],['Hops',Number.isInteger(message.path_len)?(message.path_len===0?'Direct (0 hops)':message.path_len+' hop'+(message.path_len===1?'':'s')):'Not reported'],['Signal (SNR)',typeof message.snr==='number'?message.snr.toFixed(2)+' dB':'Not reported']];
+  let rows=[['Sender',sender||'Unknown'],['Received',fmtTime(message.timestamp)||'Unknown'],['Hops',Number.isInteger(message.path_len)?(message.path_len===0?'Direct (0 hops)':message.path_len+' hop'+(message.path_len===1?'':'s')):'Not reported'],['Signal (SNR)',typeof message.snr==='number'?message.snr.toFixed(2)+' dB':'Not reported']];
   let box=document.createElement('div');box.className='sheet-paths';
   for(let [label,value] of rows){let row=document.createElement('div'),a=document.createElement('span'),b=document.createElement('strong');a.textContent=label;b.textContent=value;row.append(a,b);box.append(row)}
-  let note=document.createElement('div');note.className='muted';note.textContent='The radio reports the hop count and signal for each message, not the repeaters it passed through.';box.append(note);
+  let nodes=Array.isArray(message.path_nodes)?message.path_nodes:[];
+  if(nodes.length){let route=document.createElement('div');route.className='muted';route.style.display='block';route.textContent='Route: '+[sender||'Sender',...nodes.map(n=>(n.name||'Unknown repeater')+' ('+n.hash+')'),'You'].join(' → ');box.append(route)}
+  else{let note=document.createElement('div');note.className='muted';note.textContent=message.path_len===0?'Received directly, no repeaters in the path.':'The radio did not report the repeaters for this message.';box.append(note)}
   sheet.querySelector('.sheet-paths')?.remove();sheet.append(box);
 }
 window.openMessageActions=function(type,id,message,sender,blocked){
@@ -5777,7 +5999,7 @@ async def transmit_handler(request):
         if result.type == EventType.ERROR:
             return web.json_response({"error": str(result.payload)}, status=500)
         sent_message = add_chat_message(target_type, target, "outgoing", message)
-        update_chat_message_status(sent_message, "unconfirmed")
+        update_chat_message_status(sent_message, "sent")
         schedule_delivery_status_update(sent_message, pending_delivery, hops)
         record_trace_event(
             "direct" if target_type == "node" else "channel",
@@ -6057,6 +6279,8 @@ def create_app():
     app.router.add_post("/api/autostart", update_autostart_handler)
     app.router.add_get("/api/tightvnc", tightvnc_handler)
     app.router.add_post("/api/tightvnc", update_tightvnc_handler)
+    app.router.add_get("/api/ssh-terminal", ssh_terminal_handler)
+    app.router.add_post("/api/ssh-terminal", update_ssh_terminal_handler)
     app.router.add_get("/api/logs", logs_handler)
     app.router.add_delete("/api/logs", clear_logs_handler)
     app.router.add_get("/api/scan/bluetooth", bluetooth_scan_handler)

@@ -8,7 +8,7 @@ DESKTOP_DIR="$HOME/Desktop"
 sudo apt update
 sudo apt install -y git python3 python3-venv python3-pip python3-dev build-essential \
   libffi-dev libssl-dev pkg-config curl bluez rfkill fastfetch whiptail zstd \
-  tightvncserver novnc websockify xfce4 dbus-x11 openssl
+  tightvncserver novnc websockify xfce4 dbus-x11 openssl ttyd openssh-client openssh-server
 
 mkdir -p "$HOME/.vnc"
 if [[ ! -f "$HOME/.vnc/xstartup" ]]; then
