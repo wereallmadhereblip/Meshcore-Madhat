@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -u
+
+cat <<'EOF'
+██████╗ ██████╗  █████╗ ███╗   ██╗ ██████╗ ███████╗    ██████╗ ██╗
+██╔═══██╗██╔══██╗██╔══██╗████╗  ██║██╔════╝ ██╔════╝    ██╔══██╗██║
+██║   ██║██████╔╝███████║██╔██╗ ██║██║  ███╗█████╗      ██████╔╝██║
+██║   ██║██╔══██╗██╔══██║██║╚██╗██║██║   ██║██╔══╝      ██╔═══╝ ██║
+╚██████╔╝██║  ██║██║  ██║██║ ╚████║╚██████╔╝███████╗    ██║     ██║
+ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚══════╝    ╚═╝     ╚═╝
+
+███████╗███████╗██████╗  ██████╗     ██╗  ██╗
+╚══███╔╝██╔════╝██╔══██╗██╔═══██╗    ██║  ██║
+  ███╔╝ █████╗  ██████╔╝██║   ██║    ███████║
+ ███╔╝  ██╔══╝  ██╔══██╗██║   ██║    ╚════██║
+███████╗███████╗██║  ██║╚██████╔╝         ██║
+╚══════╝╚══════╝╚═╝  ╚═╝ ╚═════╝          ╚═╝
+
+root@orangepizero4
+------------------
+OS: Debian GNU/Linux 13 (trixie) aarch64
+Host: sun60iw2
+Kernel: Linux 6.6.98-sun60iw2
+Uptime: 20 mins
+Packages: 1604 (dpkg)
+Shell: sh
+Cursor: Adwaita
+Terminal: /dev/pts/0
+CPU: sun60iw2p1 (8) @ 2.00 GHz
+GPU: Img gpu [Integrated]
+Memory: 636.54 MiB / 3.76 GiB (17%)
+Swap: 0 B / 1.88 GiB (0%)
+Disk (/): 9.02 GiB / 27.98 GiB (32%) - ext4
+Local IP (wlan0): 192.168.254.105/24
+Locale: en_US.UTF-8
+EOF
+
+if command -v apt >/dev/null 2>&1; then
+    upgradable=$(apt list --upgradable 2>/dev/null | awk 'NR > 1 && $0 !~ /^Listing/')
+    total=$(printf '%s' "$upgradable" | grep -c . || true)
+    security=$(printf '%s' "$upgradable" | grep -ci 'security' || true)
+    stamp=/var/lib/apt/periodic/update-success-stamp
+    [[ -e "$stamp" ]] || stamp=/var/lib/apt/lists
+    last_check=$(date -d "@$(stat -c %Y "$stamp" 2>/dev/null || echo 0)" '+%Y-%m-%d %H:%M')
+    printf '\n[ %s security updates available, %s updates total: apt upgrade ]\n' "$security" "$total"
+    printf 'Last check: %s\n' "$last_check"
+fi
