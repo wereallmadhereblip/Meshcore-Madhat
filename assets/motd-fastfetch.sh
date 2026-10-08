@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -u
 
+render() {
+
 cat <<'EOF'
  ██████╗ ██████╗  █████╗ ███╗   ██╗ ██████╗ ███████╗
 ██╔═══██╗██╔══██╗██╔══██╗████╗  ██║██╔════╝ ██╔════╝
@@ -73,3 +75,17 @@ if command -v apt >/dev/null 2>&1; then
     printf '\n[ %s security updates available, %s updates total: apt upgrade ]\n' "$security" "$total"
     printf 'Last check: %s\n' "$last_check"
 fi
+}
+
+render | awk '
+{ line[NR] = $0 }
+END {
+    n = NR
+    for (i = 1; i <= n; i++) {
+        t = (n > 1) ? (i - 1) / (n - 1) : 0
+        if (t < 0.5) { u = t / 0.5; r = 150 + (45 - 150) * u; g = 225 + (175 - 225) * u; b = 255 + (215 - 255) * u }
+        else { u = (t - 0.5) / 0.5; r = 45 + (25 - 45) * u; g = 175 + (95 - 175) * u; b = 215 + (150 - 215) * u }
+        if (line[i] == "") { print ""; continue }
+        printf "\033[38;2;%d;%d;%dm%s\033[0m\n", r, g, b, line[i]
+    }
+}'
