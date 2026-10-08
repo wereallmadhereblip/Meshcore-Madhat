@@ -58,9 +58,6 @@ AUTOSTART_UNIT_PATH = CONFIG_DIR / "systemd" / "user" / AUTOSTART_UNIT_NAME
 TIGHTVNC_CERT_PATH = Path.home() / "novnc.pem"
 TIGHTVNC_PID_PATH = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "meshcore-madhat" / "websockify.pid"
 TIGHTVNC_LOG_PATH = TIGHTVNC_PID_PATH.with_name("websockify.log")
-SSH_TERMINAL_PORT = 7681
-SSH_TERMINAL_PID_PATH = TIGHTVNC_PID_PATH.with_name("ttyd.pid")
-SSH_TERMINAL_LOG_PATH = TIGHTVNC_PID_PATH.with_name("ttyd.log")
 NOVNC_WEB_PATH = Path("/usr/share/novnc")
 AVAILABLE_THEMES = {"midnight", "light", "ocean", "amber", "linux", "macos", "cyberpunk", "tron"}
 ADMIN_KEY_PATTERN = re.compile(r"^[0-9a-fA-F]{6,64}$")
@@ -1258,6 +1255,25 @@ WEATHER_CODES = {
 }
 
 
+def weather_emoji(code):
+    code = int(code)
+    if code == 0:
+        return "🌞"
+    if code in (1, 2):
+        return "⛅"
+    if code == 3:
+        return "☁"
+    if code in (45, 48):
+        return "🌫"
+    if code in (71, 73, 75, 77, 85, 86):
+        return "❄"
+    if code >= 95:
+        return "⚡"
+    if code >= 51:
+        return "🌧"
+    return ""
+
+
 def wind_arrow(degrees_from):
     """Arrow pointing the way the wind is blowing (the API reports where it comes from)."""
     if degrees_from is None:
@@ -1307,8 +1323,8 @@ async def fetch_weather_response(prompt, sender_id=None):
     command = re.fullmatch(r"\s*(?:wx|weather)\b[\s:,]*(.*?)\s*", prompt, re.IGNORECASE | re.DOTALL)
     if command is None:
         return None
-    usage = "Usage: wx <zip code> or wx local. Add 'forecast' or 'c' for more."
-    argument = re.sub(r"\b(?:celsius|metric|forecast|c)\b", "", command.group(1), flags=re.IGNORECASE).strip()
+    usage = "Usage: wx <zip code> or wx local. Add 'forecast', 'weekly' or 'c' for more."
+    argument = re.sub(r"\b(?:celsius|metric|forecast|weekly|c)\b", "", command.group(1), flags=re.IGNORECASE).strip()
     if not argument:
         return usage
     local_requested = argument.lower() == "local"
@@ -1325,6 +1341,7 @@ async def fetch_weather_response(prompt, sender_id=None):
     forecast_requested = bool(
         re.search(r"\b(?:forecast|tomorrow|next few days|this week)\b", prompt, re.IGNORECASE)
     )
+    weekly_requested = bool(re.search(r"\bweekly\b", prompt, re.IGNORECASE))
     temperature_unit = "celsius" if use_metric else "fahrenheit"
     wind_speed_unit = "kmh" if use_metric else "mph"
 
@@ -1378,7 +1395,7 @@ async def fetch_weather_response(prompt, sender_id=None):
                     "longitude": longitude,
                     "current": "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m",
                     "daily": "weather_code,temperature_2m_max,temperature_2m_min",
-                    "forecast_days": 3,
+                    "forecast_days": 7 if weekly_requested else 3,
                     "temperature_unit": temperature_unit,
                     "wind_speed_unit": wind_speed_unit,
                     "timezone": "auto",
@@ -1394,17 +1411,28 @@ async def fetch_weather_response(prompt, sender_id=None):
         answer = (
             f"{location_label}: {current['temperature_2m']:.0f}{temperature_label} "
             f"(feels {current['apparent_temperature']:.0f}), "
-            f"{WEATHER_CODES.get(code, 'unknown')}, "
+            f"{weather_emoji(code)}{WEATHER_CODES.get(code, 'unknown')}, "
             f"humidity {current['relative_humidity_2m']}%, "
             f"wind {wind_arrow(current.get('wind_direction_10m'))}{current['wind_speed_10m']:.0f}{wind_label}"
         )
-        if forecast_requested:
+        if weekly_requested:
+            daily = weather["daily"]
+            days = " ".join(
+                f"{datetime.strptime(date, '%Y-%m-%d').strftime('%a')}"
+                f"{weather_emoji(day_code)} {high:.0f}/{low:.0f}"
+                for date, high, low, day_code in zip(
+                    daily["time"], daily["temperature_2m_max"],
+                    daily["temperature_2m_min"], daily["weather_code"],
+                )
+            )
+            answer = f"{location_label.split(',')[0]} {temperature_label}: {days}"
+        elif forecast_requested:
             daily = weather["daily"]
             for index, day_name in enumerate(("Today", "Tmrw")):
                 answer += (
                     f". {day_name} {daily['temperature_2m_max'][index]:.0f}/"
                     f"{daily['temperature_2m_min'][index]:.0f}{temperature_label} "
-                    f"{WEATHER_CODES.get(int(daily['weather_code'][index]), '')}"
+                    f"{weather_emoji(daily['weather_code'][index])}"
                 ).rstrip()
         return SingleMessage(answer)
     except Exception as error:
@@ -1500,7 +1528,7 @@ def update_greeting_setting_from_message(prompt, channel_id=None):
 
 HELP_TEXT = (
     "Commands: /help, /help settings, /clearmemory, /settings (show), /settings <name> <value>, /restart, /update, /syssleep, /syswakeup, /syswifi status|on|off|scan|connect <SSID> [password]|disconnect|ap [off], /reboot, /sysreboot, /sysshutdown, /tightvnc start|off|restart, /power, /fastfetch, "
-    "wx <zip>, wx local, "
+    "wx <zip>, wx weekly <zip>, wx local, "
     "/greet on|off (in a channel), /bot <question> (in a channel). "
     "/settings works in direct messages from admins only."
 )
@@ -3109,87 +3137,6 @@ def set_tightvnc(action):
         return _tightvnc_start()
 
 
-def _ssh_terminal_pid():
-    try:
-        pid = int(SSH_TERMINAL_PID_PATH.read_text(encoding="ascii").strip())
-        command_line = Path(f"/proc/{pid}/cmdline").read_bytes()
-        state = Path(f"/proc/{pid}/stat").read_text(encoding="ascii").split(") ", 1)[1][0]
-        if state != "Z" and b"ttyd" in command_line:
-            return pid
-    except (OSError, ValueError, IndexError):
-        pass
-    SSH_TERMINAL_PID_PATH.unlink(missing_ok=True)
-    return None
-
-
-def ssh_terminal_status():
-    return {
-        "running": _ssh_terminal_pid() is not None,
-        "installed": shutil.which("ttyd") is not None and shutil.which("ssh") is not None,
-        "addresses": local_ip_addresses(),
-        "user": getpass.getuser(),
-    }
-
-
-def _ssh_terminal_start():
-    if shutil.which("ttyd") is None or shutil.which("ssh") is None:
-        raise RuntimeError("ttyd or an SSH client is not installed. Run setup.sh to install them.")
-    if _ssh_terminal_pid() is not None:
-        return ssh_terminal_status()
-    _ensure_novnc_certificate()
-    help_text = subprocess.run(["ttyd", "--help"], capture_output=True, text=True, check=False)
-    command = ["ttyd", "-p", str(SSH_TERMINAL_PORT), "--ssl",
-               "--ssl-cert", str(TIGHTVNC_CERT_PATH), "--ssl-key", str(TIGHTVNC_CERT_PATH)]
-    if "--writable" in help_text.stdout + help_text.stderr:
-        command.append("--writable")
-    # The session is an ordinary SSH login to this machine, so the Pi's own credentials gate access.
-    command += ["ssh", "-o", "StrictHostKeyChecking=accept-new", f"{getpass.getuser()}@localhost"]
-    SSH_TERMINAL_PID_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with SSH_TERMINAL_LOG_PATH.open("ab") as log_file:
-        process = subprocess.Popen(
-            command, stdin=subprocess.DEVNULL, stdout=log_file,
-            stderr=subprocess.STDOUT, start_new_session=True,
-        )
-    SSH_TERMINAL_PID_PATH.write_text(f"{process.pid}\n", encoding="ascii")
-    for _ in range(20):
-        if process.poll() is not None:
-            SSH_TERMINAL_PID_PATH.unlink(missing_ok=True)
-            tail = SSH_TERMINAL_LOG_PATH.read_text(encoding="utf-8", errors="replace")[-500:].strip()
-            raise RuntimeError(tail or "ttyd exited during startup")
-        try:
-            with socket.create_connection(("127.0.0.1", SSH_TERMINAL_PORT), timeout=0.2):
-                return ssh_terminal_status()
-        except OSError:
-            time.sleep(0.25)
-    process.terminate()
-    SSH_TERMINAL_PID_PATH.unlink(missing_ok=True)
-    raise RuntimeError(f"ttyd did not start on port {SSH_TERMINAL_PORT}")
-
-
-def _ssh_terminal_stop():
-    pid = _ssh_terminal_pid()
-    if pid is not None:
-        os.kill(pid, signal.SIGTERM)
-        for _ in range(20):
-            if _ssh_terminal_pid() is None:
-                break
-            time.sleep(0.25)
-        else:
-            raise RuntimeError("ttyd did not stop after SIGTERM")
-    return ssh_terminal_status()
-
-
-def set_ssh_terminal(action):
-    if action not in {"on", "off", "restart"}:
-        raise ValueError("action must be on, off, or restart")
-    with _tightvnc_lock:
-        if action == "off":
-            return _ssh_terminal_stop()
-        if action == "restart":
-            _ssh_terminal_stop()
-        return _ssh_terminal_start()
-
-
 def can_use_system_service():
     if not Path("/run/systemd/system").is_dir():
         return False
@@ -3330,27 +3277,6 @@ async def update_tightvnc_handler(request):
         log_to_dash(f"TightVNC {action} failed: {error}")
         return web.json_response({"error": str(error)}, status=500)
     log_to_dash(f"TightVNC {action} completed")
-    return web.json_response(status)
-
-
-async def ssh_terminal_handler(request):
-    return web.json_response(await asyncio.to_thread(ssh_terminal_status))
-
-
-async def update_ssh_terminal_handler(request):
-    try:
-        payload = await request.json()
-    except json.JSONDecodeError:
-        return web.json_response({"error": "Invalid JSON"}, status=400)
-    action = payload.get("action") if isinstance(payload, dict) else None
-    if action not in {"on", "off", "restart"}:
-        return web.json_response({"error": "action must be on, off, or restart"}, status=400)
-    try:
-        status = await asyncio.to_thread(set_ssh_terminal, action)
-    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
-        log_to_dash(f"SSH terminal {action} failed: {error}")
-        return web.json_response({"error": str(error)}, status=500)
-    log_to_dash(f"SSH terminal {action} completed")
     return web.json_response(status)
 
 
@@ -4080,16 +4006,11 @@ const commonRadioProfiles={balanced:{radio_bw:125,radio_sf:7,radio_cr:5},long_ra
 function applyTheme(theme,persist=true){let previousTheme=document.body.dataset.theme,wasOverview=document.body.classList.contains('tron-overview');document.body.dataset.theme=theme;let modeSelect=document.getElementById('theme-mode-select'),colorSelect=document.getElementById('theme-select'),colorControl=document.getElementById('classic-theme-control');if(modeSelect)modeSelect.value=theme==='tron'?'tron':'classic';if(colorSelect&&theme!=='tron')colorSelect.value=theme;if(colorControl)colorControl.hidden=theme==='tron';let sessionTitle=document.getElementById('analyzer-session-title');if(sessionTitle)sessionTitle.textContent=theme==='tron'?'MeshCore Live Statistics':'Session';if(theme==='tron'&&previousTheme!=='tron'||theme!=='tron'&&wasOverview)showView('nodes');if(persist)saveAppConfig({...appConfig,theme})}
 function selectThemeMode(mode){if(mode==='tron'){applyTheme('tron');return}let colorTheme=document.getElementById('theme-select').value;applyTheme(colorTheme==='tron'?'midnight':colorTheme)}
 function selectClassicTheme(theme){try{localStorage.setItem('meshcore-classic-theme',theme)}catch(error){}applyTheme(theme)}
-function showSettingsTab(tab){document.querySelectorAll('.settings-tab').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.settingsTab===tab)));for(let panel of document.querySelectorAll('.settings-tab-panel'))panel.hidden=panel.id!=='settings-'+tab+'-panel';if(tab==='config'){if(!configEditorLoaded)loadConfigEditor();loadAutostart()}if(tab==='ollama')loadOllamaModels();if(tab==='tightvnc'){loadTightvnc();loadSshTerminal()}if(tab==='logs')loadAppLogs()}
+function showSettingsTab(tab){document.querySelectorAll('.settings-tab').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.settingsTab===tab)));for(let panel of document.querySelectorAll('.settings-tab-panel'))panel.hidden=panel.id!=='settings-'+tab+'-panel';if(tab==='config'){if(!configEditorLoaded)loadConfigEditor();loadAutostart()}if(tab==='ollama')loadOllamaModels();if(tab==='tightvnc')loadTightvnc()if(tab==='logs')loadAppLogs()}
 async function loadAutostart(){let box=document.getElementById('autostart-enabled');try{let response=await fetch('/api/autostart'),data=await response.json();box.checked=!!data.enabled}catch(error){}}
 async function saveAutostart(){let box=document.getElementById('autostart-enabled'),status=document.getElementById('autostart-status'),wanted=box.checked;try{let response=await fetch('/api/autostart',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:wanted})}),data=await response.json();if(!response.ok)throw new Error(data.error||'Failed');status.textContent=wanted?'Enabled':'Disabled'}catch(error){box.checked=!wanted;status.textContent=error.message}}
 async function loadTightvnc(){let status=document.getElementById('tightvnc-status');try{let response=await fetch('/api/tightvnc'),data=await response.json();if(!response.ok)throw new Error(data.error||'Status unavailable');serverAddresses=data.addresses||[];document.querySelectorAll('.live-host-url').forEach(el=>el.textContent=hostUrl(el.dataset.port,el.dataset.path));status.textContent=`TightVNC: ${data.vnc_running?'on':'off'} · noVNC: ${data.novnc_running?'on':'off'} · ${hostUrl(6080,'/vnc.html')}`;status.dataset.state=data.vnc_running&&data.novnc_running?'success':''}catch(error){status.textContent=error.message;status.dataset.state='error'}}
 async function setTightvnc(action){let status=document.getElementById('tightvnc-status');status.textContent=`${action==='restart'?'Restarting':'Turning '+action} TightVNC...`;status.dataset.state='';for(let button of document.querySelectorAll('[data-tightvnc-action]'))button.disabled=true;try{let response=await fetch('/api/tightvnc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})}),data=await response.json();if(!response.ok)throw new Error(data.error||'TightVNC operation failed');status.textContent=`TightVNC: ${data.vnc_running?'on':'off'} · noVNC: ${data.novnc_running?'on':'off'} · ${hostUrl(6080,'/vnc.html')}`;status.dataset.state='success'}catch(error){status.textContent=error.message;status.dataset.state='error'}finally{for(let button of document.querySelectorAll('[data-tightvnc-action]'))button.disabled=false}}
-let sshTerminalRunning=false;
-function renderSshTerminal(data){let status=document.getElementById('ssh-terminal-status');sshTerminalRunning=!!data.running;document.getElementById('ssh-open-button').disabled=!sshTerminalRunning;status.textContent=data.installed===false?'ttyd/ssh not installed. Run setup.sh.':`SSH terminal: ${data.running?'on':'off'} · login as ${data.user}`;status.dataset.state=data.running?'success':''}
-async function loadSshTerminal(){try{let response=await fetch('/api/ssh-terminal'),data=await response.json();if(!response.ok)throw new Error(data.error||'Status unavailable');renderSshTerminal(data)}catch(error){let status=document.getElementById('ssh-terminal-status');status.textContent=error.message;status.dataset.state='error'}}
-async function setSshTerminal(action){let status=document.getElementById('ssh-terminal-status');status.textContent='Working...';status.dataset.state='';for(let button of document.querySelectorAll('[data-ssh-action]'))button.disabled=true;try{let response=await fetch('/api/ssh-terminal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})}),data=await response.json();if(!response.ok)throw new Error(data.error||'SSH terminal operation failed');renderSshTerminal(data)}catch(error){status.textContent=error.message;status.dataset.state='error'}finally{for(let button of document.querySelectorAll('[data-ssh-action]'))button.disabled=false}}
-function openSshTerminal(){window.open(hostUrl(7681,'/'),'_blank','noopener')}
 async function loadAppLogs(){let output=document.getElementById('app-log-output');try{let response=await fetch('/api/logs'),data=await response.json();output.textContent=(data.logs||[]).join('\n')||'No log entries.';output.scrollTop=output.scrollHeight}catch(error){output.textContent=error.message}}
 async function clearAppLogs(){if(!confirm('Delete all stored logs?'))return;let status=document.getElementById('app-log-status');try{let response=await fetch('/api/logs',{method:'DELETE'});if(!response.ok)throw new Error((await response.json()).error||'Failed');status.textContent='Logs cleared.';loadAppLogs()}catch(error){status.textContent=error.message}}
 function syncConfigControls(){let colorSelect=document.getElementById('theme-select'),savedClassicTheme=null;try{savedClassicTheme=localStorage.getItem('meshcore-classic-theme')}catch(error){}let validSavedClassicTheme=[...colorSelect.options].some(option=>option.value===savedClassicTheme),classicTheme=appConfig.theme==='tron'?(validSavedClassicTheme?savedClassicTheme:'midnight'):appConfig.theme;colorSelect.value=classicTheme;let modelSelect=document.getElementById('model');if(![...modelSelect.options].some(option=>option.value===appConfig.model))modelSelect.add(new Option(appConfig.model,appConfig.model));modelSelect.value=appConfig.model;document.getElementById('weather-city').value=appConfig.weather.city;document.getElementById('weather-state').value=appConfig.weather.state;document.getElementById('bot-name').value=appConfig.bot.name;document.getElementById('bot-personality').value=appConfig.bot.personality;document.getElementById('bot-response-length').value=appConfig.bot.response_length;document.getElementById('ollama-schedule-enabled').checked=appConfig.ollama.schedule_enabled;document.getElementById('ollama-schedule-start').value=appConfig.ollama.start_time;document.getElementById('ollama-schedule-end').value=appConfig.ollama.end_time;document.getElementById('auto-update-enabled').checked=appConfig.auto_update.enabled;applyTheme(appConfig.theme,false)}
@@ -4389,7 +4310,6 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <section id="settings-tightvnc-panel" class="settings-tab-panel" hidden>
 <div class="settings-grid">
 <div class="settings-item settings-item-full"><label>TightVNC / noVNC remote desktop</label><p class="settings-description">Manage the TightVNC server on localhost:5901 and the secure browser proxy on port 6080. Connect at <span class="live-host-url" data-port="6080" data-path="/vnc.html"></span> and accept the self-signed certificate warning.</p><div class="device-action-grid"><button type="button" data-tightvnc-action="on" onclick="setTightvnc('on')">Turn on</button><button type="button" class="secondary" data-tightvnc-action="off" onclick="setTightvnc('off')">Turn off</button><button type="button" class="secondary" data-tightvnc-action="restart" onclick="setTightvnc('restart')">Restart</button></div><p id="tightvnc-status" class="preferences-status" aria-live="polite">Checking status...</p></div>
-<div class="settings-item settings-item-full"><label>SSH terminal</label><p class="settings-description">Opens a browser terminal on port 7681 that logs into this Orange Pi over SSH. You sign in with the Pi's own username and password. Accept the self-signed certificate warning.</p><div class="device-action-grid"><button type="button" data-ssh-action="on" onclick="setSshTerminal('on')">Turn on</button><button type="button" class="secondary" data-ssh-action="off" onclick="setSshTerminal('off')">Turn off</button><button type="button" class="secondary" data-ssh-action="restart" onclick="setSshTerminal('restart')">Restart</button><button type="button" id="ssh-open-button" class="secondary" onclick="openSshTerminal()" disabled>Open terminal</button></div><p id="ssh-terminal-status" class="preferences-status" aria-live="polite">Checking status...</p></div>
 </div>
 </section>
 <section id="settings-config-panel" class="settings-tab-panel" hidden>
@@ -6659,8 +6579,6 @@ def create_app():
     app.router.add_post("/api/autostart", update_autostart_handler)
     app.router.add_get("/api/tightvnc", tightvnc_handler)
     app.router.add_post("/api/tightvnc", update_tightvnc_handler)
-    app.router.add_get("/api/ssh-terminal", ssh_terminal_handler)
-    app.router.add_post("/api/ssh-terminal", update_ssh_terminal_handler)
     app.router.add_get("/api/logs", logs_handler)
     app.router.add_delete("/api/logs", clear_logs_handler)
     app.router.add_get("/api/scan/bluetooth", bluetooth_scan_handler)
