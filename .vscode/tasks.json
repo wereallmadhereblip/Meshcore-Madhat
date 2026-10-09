@@ -1,0 +1,18 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run MeshCore dashboard",
+			"type": "shell",
+			"command": "python3",
+			"args": [
+				"madhat.py"
+			],
+			"isBackground": true,
+			"problemMatcher": [
+				"$python"
+			],
+			"group": "build"
+		}
+	]
+}
