@@ -27,6 +27,8 @@ Setup creates a self-signed TLS certificate at `~/novnc.pem`, configures XFCE fo
 
 Setup also asks whether to open the dashboard automatically in a browser on the Orange Pi. This preference is saved under `~/.config/meshcore-ollama-bot/preferences.json`. Automatic opening requires a graphical desktop; a headless board can still be opened from a browser on the LAN.
 
+On Orange Pi boards, setup installs the MeshCore gradient login banner automatically. To install it on another Debian-based device, run `MESHCORE_MOTD=1 bash assets/install-motd.sh` from the project directory. You can also run that command on an already-installed device without rerunning the full app setup. Log out and back in to display the banner; run `bash /usr/local/share/meshcore/motd.sh` to preview it in the current terminal.
+
 The script starts the dashboard in the foreground. On a desktop session it also creates a desktop launcher. For a headless board, open `http://<board-ip>:8080` from a browser on the same network; find the board address with:
 
 ```bash

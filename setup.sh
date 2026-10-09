@@ -204,30 +204,7 @@ EOF
   echo "Desktop shortcut created: $DESKTOP_DIR/MeshCore AI Bot Dashboard.desktop"
 fi
 
-# On Orange Pi boards, replace the login banner with the MeshCore gradient MOTD.
-# Set MESHCORE_MOTD=1 to force it on other devices or MESHCORE_MOTD=0 to skip it.
-MOTD_SCRIPT="$SCRIPT_DIR/assets/motd-fastfetch.sh"
-board_model="$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || true)"
-install_motd="${MESHCORE_MOTD:-}"
-if [[ -z "$install_motd" ]]; then
-  if [[ "${board_model,,}" == *orange*pi* ]]; then install_motd=1; else install_motd=0; fi
-fi
-if [[ "$install_motd" == "1" && -f "$MOTD_SCRIPT" ]]; then
-  sudo install -D -m 0755 "$MOTD_SCRIPT" /usr/local/share/meshcore/motd.sh
-  sudo tee /etc/profile.d/meshcore-motd.sh >/dev/null <<'EOF'
-# Show the MeshCore banner once per interactive login shell.
-case "$-" in
-  *i*) [ -x /usr/local/share/meshcore/motd.sh ] && bash /usr/local/share/meshcore/motd.sh ;;
-esac
-EOF
-  sudo chmod 0644 /etc/profile.d/meshcore-motd.sh
-  # Silence the stock static banner and dynamic MOTD scripts so only ours shows.
-  sudo truncate -s 0 /etc/motd 2>/dev/null || true
-  if [[ -d /etc/update-motd.d ]]; then
-    sudo chmod -x /etc/update-motd.d/* 2>/dev/null || true
-  fi
-  echo "Installed the MeshCore login banner (/etc/profile.d/meshcore-motd.sh)."
-fi
+bash "$SCRIPT_DIR/assets/install-motd.sh"
 
 LOGO_SCRIPT="$SCRIPT_DIR/assets/fastfetch-logo.sh"
 if [[ -f "$LOGO_SCRIPT" ]]; then
