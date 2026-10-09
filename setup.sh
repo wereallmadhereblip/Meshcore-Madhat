@@ -85,6 +85,7 @@ if [[ -n "${OLLAMA_MODEL:-}" ]]; then
   case "$OLLAMA_MODEL" in
     llama3.2:1b) model_choice="1" ;;
     qwen2.5:0.5b) model_choice="2" ;;
+    llama3.2:3b) model_choice="3" ;;
     *) echo "Unsupported OLLAMA_MODEL: $OLLAMA_MODEL" >&2; exit 1 ;;
   esac
 elif [ -t 0 ] || [ -e /dev/tty ]; then
@@ -92,24 +93,27 @@ elif [ -t 0 ] || [ -e /dev/tty ]; then
     model_choice=$(whiptail --title "MeshCore AI Bot - Model Selection" \
       --default-item "$model_choice" \
       --menu "Choose an Ollama model to install:\n(Option 2 is recommended on low-memory ARM boards)" \
-      13 72 2 \
+      14 72 3 \
       "1" "llama3.2:1b  (~1.3 GB)" \
       "2" "qwen2.5:0.5b (~400 MB - low memory)" \
+      "3" "llama3.2:3b  (~2.0 GB - needs 4 GB+ RAM)" \
       3>&1 1>&2 2>&3 < /dev/tty) || model_choice="$model_choice"
   elif command -v dialog >/dev/null 2>&1; then
     model_choice=$(dialog --clear --title "MeshCore AI Bot - Model Selection" \
       --default-item "$model_choice" \
       --menu "Choose an Ollama model to install:\n(Option 2 is recommended on low-memory ARM boards)" \
-      13 72 2 \
+      14 72 3 \
       "1" "llama3.2:1b  (~1.3 GB)" \
       "2" "qwen2.5:0.5b (~400 MB - low memory)" \
+      "3" "llama3.2:3b  (~2.0 GB - needs 4 GB+ RAM)" \
       3>&1 1>&2 2>&3 < /dev/tty) || model_choice="$model_choice"
   else
     echo ""
     echo "Select the Ollama model to download:"
     echo "  1) llama3.2:1b  (~1.3 GB)"
     echo "  2) qwen2.5:0.5b (~400 MB - low memory)"
-    read -rp "Enter choice [1-2] (default: $model_choice): " selected_choice < /dev/tty || true
+    echo "  3) llama3.2:3b  (~2.0 GB - needs 4 GB+ RAM)"
+    read -rp "Enter choice [1-3] (default: $model_choice): " selected_choice < /dev/tty || true
     model_choice="${selected_choice:-$model_choice}"
   fi
 fi
@@ -120,6 +124,11 @@ case "$model_choice" in
     echo "Pulling qwen2.5:0.5b..."
     ollama pull qwen2.5:0.5b
     SELECTED_MODEL="qwen2.5:0.5b"
+    ;;
+  3)
+    echo "Pulling llama3.2:3b..."
+    ollama pull llama3.2:3b
+    SELECTED_MODEL="llama3.2:3b"
     ;;
   *)
     echo "Pulling llama3.2:1b..."
