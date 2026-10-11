@@ -35,6 +35,8 @@ The script starts the dashboard in the foreground. On a desktop session it also 
 hostname -I
 ```
 
+After signing in, change the dashboard password from **App Settings → Security**. Enter the current password and choose a new password (4–128 characters).
+
 Setup also enables the dashboard to start automatically at boot through a systemd user service (`meshcore-madhat.service`, with lingering enabled so it runs without a login). Turn it off under **Settings → Update → Start the dashboard automatically when the system boots**, or run `systemctl --user disable meshcore-madhat.service`. Because the service owns port `8080`, use `systemctl --user stop meshcore-madhat.service` before running the dashboard manually.
 
 The dashboard listens on the network so another device can access it. Keep it on a trusted LAN and do not expose ports `8080` or `6080` to the public internet.
@@ -72,6 +74,19 @@ The bot confirms each change and saves its name and personality under
 Use the dashboard to choose Bluetooth or Serial, enter the Device Bluetooth MAC address or serial port, and connect. The default values are `/dev/ttyACM0` and the MAC address defined near the top of the script.
 
 Administrators can DM `/fastfetch` to receive the host's Fastfetch system summary. Fastfetch must be installed on the host.
+
+Configured bot admins can DM `/systerminal <command> [arguments]` to run a non-interactive command on the host and receive its output in MeshCore. The working directory starts at the admin's home folder and is remembered for subsequent commands. For example:
+
+```text
+/systerminal ls
+/systerminal cd ..
+/systerminal pwd
+/systerminal cat sample.txt
+/systerminal mv sample.txt archive.txt
+/systerminal rm archive.txt
+```
+
+`cd` supports paths and `cd -` to return to the previous directory. Commands run as the dashboard user (not as root), are limited to 15 seconds, and return output within the configured reply-size limit (up to 850 characters). Commands run without an interactive shell, so shell pipelines and redirection are not supported. Interactive programs such as `nano` require a terminal and cannot be used in chat; use `/tightvnc start` and connect to the Pi desktop to edit files.
 
 ## Hardware notes
 
