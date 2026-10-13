@@ -4030,7 +4030,7 @@ body[data-theme="tron"] .settings-tabs{background:transparent}
 body[data-theme="tron"] .tron-mode-button{background:rgba(0,80,100,.28)}
 body[data-theme="tron"].tron-overview{background-color:#000}
 .incoming-adverts{display:flex;flex:0 0 auto;width:min(33%,300px);flex-direction:row;align-items:center;gap:8px;min-width:180px;max-width:33%;height:30px;overflow:hidden;padding:2px 6px;border-left:2px solid var(--accent);background:transparent}
-#incoming-adverts-panel{width:min(38%,420px);max-width:38%;height:132px;align-items:stretch;padding:6px 8px}
+#incoming-adverts-panel{width:min(38%,420px);max-width:38%;height:100px;align-items:stretch;padding:6px 8px}
 #incoming-adverts-panel .incoming-adverts-list{align-self:stretch}
 #incoming-adverts-panel .incoming-advert-row{width:100%;min-height:17px;justify-content:space-between}
 #incoming-adverts-panel .incoming-advert-meta{font-size:9px}
@@ -4048,7 +4048,7 @@ body[data-theme="tron"].tron-overview{background-color:#000}
 .incoming-advert-meta{flex:none;color:var(--muted);font:8px ui-monospace,monospace;white-space:nowrap}
 body[data-theme="tron"] .incoming-adverts-list::-webkit-scrollbar,.incoming-adverts-list::-webkit-scrollbar{display:none}
 body[data-theme="tron"] .incoming-adverts{flex:0 0 auto;width:min(33%,300px);min-width:0;max-width:33%;height:30px;border-left-color:#00d8ff;background:rgba(0,0,0,.45)}
-body[data-theme="tron"] #incoming-adverts-panel{width:min(38%,420px);max-width:38%;height:132px}
+body[data-theme="tron"] #incoming-adverts-panel{width:min(38%,420px);max-width:38%;height:100px}
 body[data-theme="tron"] .incoming-adverts-heading h3{color:#58dff7;font:600 9px "IBM Plex Mono","Cascadia Code",ui-monospace,monospace}
 body[data-theme="tron"] .incoming-adverts-count{font-size:9px}
 body[data-theme="tron"] .incoming-advert-empty{font:9px/1.3 ui-monospace,monospace}
@@ -4087,8 +4087,8 @@ body[data-theme="tron"].tron-overview .analyzer-radio-group h4{margin:0 0 2px;fo
 body[data-theme="tron"].tron-overview .analyzer-radio-list{grid-template-columns:minmax(0,1fr) auto;gap:1px 3px}
 body[data-theme="tron"].tron-overview .analyzer-radio-list dt,body[data-theme="tron"].tron-overview .analyzer-radio-list dd{overflow:hidden;font:8px/1.15 ui-monospace,monospace;text-overflow:ellipsis;white-space:nowrap}
 @media(max-width:1050px){body[data-theme="tron"] .dashboard-header{gap:4px 6px}body[data-theme="tron"] .header-meta{flex-basis:100%;order:1;justify-content:space-between}body[data-theme="tron"] .top-nav{order:2;flex:1 1 auto}body[data-theme="tron"] .tron-quick-tabs{order:3;margin-left:auto}body[data-theme="tron"] .console-toggle{order:4}}
-@media(max-width:720px){.incoming-adverts{flex-basis:100%;max-width:none;height:30px}#incoming-adverts-panel{width:100%;max-width:none;height:132px}}
-@media(max-width:640px){body[data-theme="tron"] .dashboard-header{gap:4px;padding:4px 6px}body[data-theme="tron"] .incoming-adverts{order:0;flex-basis:100%;max-width:none;height:30px}body[data-theme="tron"] #incoming-adverts-panel{width:100%;max-width:none;height:132px}body[data-theme="tron"] .header-meta{flex-wrap:wrap;justify-content:flex-start;gap:0}body[data-theme="tron"] .header-meta-item{padding:2px 5px}body[data-theme="tron"] .top-nav{flex-basis:100%;order:2}body[data-theme="tron"] .tron-quick-tabs{order:3;margin-left:0}body[data-theme="tron"] .console-toggle{order:4}}
+@media(max-width:720px){.incoming-adverts{flex-basis:100%;max-width:none;height:30px}#incoming-adverts-panel{width:100%;max-width:none;height:100px}}
+@media(max-width:640px){body[data-theme="tron"] .dashboard-header{gap:4px;padding:4px 6px}body[data-theme="tron"] .incoming-adverts{order:0;flex-basis:100%;max-width:none;height:30px}body[data-theme="tron"] #incoming-adverts-panel{width:100%;max-width:none;height:100px}body[data-theme="tron"] .header-meta{flex-wrap:wrap;justify-content:flex-start;gap:0}body[data-theme="tron"] .header-meta-item{padding:2px 5px}body[data-theme="tron"] .top-nav{flex-basis:100%;order:2}body[data-theme="tron"] .tron-quick-tabs{order:3;margin-left:0}body[data-theme="tron"] .console-toggle{order:4}}
 .tron-settings-back{display:none}
 body[data-theme="tron"] #settings-view .tron-settings-back{display:inline-flex;align-self:flex-start;min-height:28px;margin:0 0 8px;padding:4px 8px;border:1px solid rgba(0,190,235,.42);border-radius:1px;background:rgba(0,45,62,.28);color:#78ddf4;font:9px "IBM Plex Mono","Cascadia Code",ui-monospace,monospace}
 .add-btn{margin-left:8px;padding:3px 9px;border:1px solid var(--accent);border-radius:6px;background:var(--accent-dim);color:var(--accent);font:600 11px inherit;cursor:pointer;white-space:nowrap}
