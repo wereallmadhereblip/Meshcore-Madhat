@@ -113,7 +113,7 @@ def load_app_config():
     config = {
         "model": DEFAULT_MODEL,
         "theme": "midnight",
-        "connection": {"type": "serial", "ble_mac": "", "serial_port": DEFAULT_SERIAL_PORT},
+        "connection": {"type": "serial", "ble_mac": "", "serial_port": DEFAULT_SERIAL_PORT, "tcp_bridge_enabled": False, "tcp_bridge_port": 4444},
         "weather": {"city": "", "state": ""},
         "bot": {**load_bot_settings(), "greet_new_users": False, "greet_channel": "", "admins": []},
         "ollama": {"schedule_enabled": False, "start_time": "07:00", "end_time": "17:00"},
@@ -225,7 +225,7 @@ def validate_app_config(value):
         raise ValueError("Choose a supported dashboard theme")
 
     connection = value.get("connection", app_config["connection"])
-    if not isinstance(connection, dict) or set(connection) - {"type", "ble_mac", "serial_port"}:
+    if not isinstance(connection, dict) or set(connection) - {"type", "ble_mac", "serial_port", "tcp_bridge_enabled", "tcp_bridge_port"}:
         raise ValueError("Connection settings must contain type, ble_mac, and serial_port")
     connection_type = connection.get("type", app_config["connection"]["type"])
     if connection_type not in {"bluetooth", "serial"}:
@@ -236,6 +236,8 @@ def validate_app_config(value):
         if not isinstance(setting, str):
             raise ValueError(f"Connection {key} must be text")
         connection_values[key] = setting.strip()
+    connection_values["tcp_bridge_enabled"] = bool(connection.get("tcp_bridge_enabled", app_config["connection"].get("tcp_bridge_enabled", False)))
+    connection_values["tcp_bridge_port"] = int(connection.get("tcp_bridge_port", app_config["connection"].get("tcp_bridge_port", 4444)))
 
     weather = value.get("weather", app_config["weather"])
     if not isinstance(weather, dict) or set(weather) - {"city", "state"}:
@@ -466,6 +468,70 @@ advert_seen_at = {}
 incoming_advert_events = deque(maxlen=20)
 meshcore_instance = None
 ollama_process = None
+
+# --- TCP Bridge State ---
+bot_tcp_server = None
+bot_tcp_clients = set()
+
+async def bot_client_handler(reader, writer):
+    bot_tcp_clients.add(writer)
+    try:
+        while True:
+            line = await reader.readline()
+            if not line:
+                break
+            try:
+                import json
+                req = json.loads(line.decode('utf-8').strip())
+                target = req.get("target")
+                target_type = req.get("target_type", "channel")
+                text = req.get("text")
+                if target and text:
+                    asyncio.create_task(send_to_target_with_pending_confirmation(target, target_type, text))
+            except Exception as e:
+                log_to_dash(f"Bot TCP bridge parse error: {e}")
+    finally:
+        bot_tcp_clients.remove(writer)
+        try:
+            writer.close()
+        except:
+            pass
+
+async def start_tcp_bridge(port):
+    global bot_tcp_server
+    if bot_tcp_server:
+        return
+    try:
+        bot_tcp_server = await asyncio.start_server(bot_client_handler, '0.0.0.0', port)
+        log_to_dash(f"TCP Bot Bridge listening on port {port}")
+    except Exception as e:
+        log_to_dash(f"Failed to start TCP bridge: {e}")
+
+async def stop_tcp_bridge():
+    global bot_tcp_server
+    if bot_tcp_server:
+        bot_tcp_server.close()
+        await bot_tcp_server.wait_closed()
+        bot_tcp_server = None
+    for c in list(bot_tcp_clients):
+        try:
+            c.close()
+        except:
+            pass
+    bot_tcp_clients.clear()
+    
+def forward_to_bot_tcp(msg_obj):
+    if not bot_tcp_clients:
+        return
+    import json
+    data = json.dumps(msg_obj) + "\n"
+    for c in bot_tcp_clients:
+        try:
+            c.write(data.encode('utf-8'))
+        except:
+            pass
+# ------------------------
+
 
 
 def load_chat_store():
@@ -3053,6 +3119,7 @@ async def _disconnect_hardware_locked():
         app_state["contacts"] = {}
         app_state["channels"] = {}
         app_state["gateway_telemetry"] = {}
+        await stop_tcp_bridge()
 
 
 async def bluetooth_scan_handler(request):
@@ -4205,7 +4272,7 @@ async function maybeCheckForUpdates(){if(!appConfig.auto_update||!appConfig.auto
 function loadFavoriteNodes(){try{let saved=JSON.parse(localStorage.getItem('meshcore-favorite-nodes')||'[]');if(Array.isArray(saved))favoriteNodeIds=new Set(saved.map(String))}catch(error){favoriteNodeIds=new Set()}}
 function toggleNodeFavorite(id){let normalized=String(id);if(favoriteNodeIds.has(normalized))favoriteNodeIds.delete(normalized);else favoriteNodeIds.add(normalized);localStorage.setItem('meshcore-favorite-nodes',JSON.stringify([...favoriteNodeIds]));renderConversationTargets('node');renderKnownPeers();renderMapMarkers()}
 function createNodeFavoriteButton(id){let favorite=document.createElement('button'),isFavorite=favoriteNodeIds.has(String(id));favorite.type='button';favorite.className='favorite-toggle';favorite.textContent=isFavorite?'★':'☆';favorite.title=isFavorite?'Remove from favorites':'Add to favorites';favorite.setAttribute('aria-label',favorite.title);favorite.setAttribute('aria-pressed',String(isFavorite));favorite.onclick=()=>toggleNodeFavorite(id);return favorite}
-function fields(){let t=connection_type.value;document.getElementById('ble-field').style.display=t==='bluetooth'?'block':'none';document.getElementById('serial-field').style.display=t==='serial'?'block':'none'}
+function fields(){let tb=document.getElementById('tcp_bridge_enabled'),tp=document.getElementById('tcp_bridge_port');if(tb)tb.checked=appConfig.connection?.tcp_bridge_enabled||false;if(tp)tp.value=appConfig.connection?.tcp_bridge_port||4444;let t=connection_type.value;document.getElementById('ble-field').style.display=t==='bluetooth'?'block':'none';document.getElementById('serial-field').style.display=t==='serial'?'block':'none'}
 async function scanDevices(kind){let bluetooth=kind==='bluetooth',select=document.getElementById(bluetooth?'ble_mac':'serial_port'),button=document.getElementById(bluetooth?'ble-scan':'serial-scan'),statusMessage=document.getElementById(bluetooth?'ble-scan-status':'serial-scan-status'),previous=select.value;button.disabled=true;button.textContent='Scanning';statusMessage.dataset.state='';statusMessage.textContent='Searching for available devices...';try{let response=await fetch('/api/scan/'+kind),data=await response.json();if(!response.ok)throw new Error(data.error||'Device scan failed');let devices=bluetooth?data.devices:data.ports;select.replaceChildren(new Option(bluetooth?'Select a Bluetooth device':'Select a serial port',''));for(let device of devices){let label=bluetooth?`${device.name} (${device.address})`:`${device.device} - ${device.description||'Serial port'}`;select.add(new Option(label,bluetooth?device.address:device.device))}if(previous&&[...select.options].some(option=>option.value===previous))select.value=previous;statusMessage.textContent=devices.length?`Found ${devices.length} device(s). Select one to connect.`:'No devices found. Check that the radio is powered and discoverable.'}catch(error){statusMessage.dataset.state='error';statusMessage.textContent=error.message}finally{button.disabled=false;button.textContent='Scan'}}
 function scanBluetooth(){return scanDevices('bluetooth')}
 function scanSerial(){return scanDevices('serial')}
@@ -4351,7 +4418,7 @@ function populatePowerOptions(maximum,current){let select=document.getElementByI
 async function loadDeviceSettings(){deviceSettingsLoaded=false;loadedDeviceSettings=null;let statusMessage=document.getElementById('device-settings-status');statusMessage.dataset.state='';statusMessage.textContent='Loading settings from device...';try{let response=await fetch('/api/device-settings'),data=await response.json();if(!response.ok)throw new Error(data.error||'Device settings could not be loaded');loadedDeviceSettings=data;document.getElementById('device-name').value=data.name||'';document.getElementById('advert-lat').value=data.adv_lat??'';document.getElementById('advert-lon').value=data.adv_lon??'';document.getElementById('rx-delay').value=data.rx_delay??'';document.getElementById('airtime-factor').value=data.airtime_factor??'';document.getElementById('telemetry-mode-base').value=data.telemetry_mode_base??0;document.getElementById('telemetry-mode-loc').value=data.telemetry_mode_loc??0;document.getElementById('telemetry-mode-env').value=data.telemetry_mode_env??0;document.getElementById('advert-location-policy').value=data.adv_loc_policy??0;document.getElementById('manual-add-contacts').checked=Boolean(data.manual_add_contacts);document.getElementById('multi-acks').checked=Boolean(data.multi_acks);document.getElementById('custom-radio-frequency').value=data.radio_freq??'';document.getElementById('custom-radio-bandwidth').value=data.radio_bw??'';document.getElementById('custom-radio-spreading-factor').value=data.radio_sf??'';document.getElementById('custom-radio-coding-rate').value=data.radio_cr??'';let matchingProfile=Object.entries(commonRadioProfiles).find(([,profile])=>Number(profile.radio_bw)===Number(data.radio_bw)&&Number(profile.radio_sf)===Number(data.radio_sf)&&Number(profile.radio_cr)===Number(data.radio_cr));document.getElementById('radio-profile').value=matchingProfile?.[0]||'custom';setCustomRadioMode();let maximum=Number(data.max_tx_power??30);populatePowerOptions(maximum,data.tx_power);document.getElementById('tx-power-limit').textContent='Device maximum: '+maximum+' dBm';deviceSettingsLoaded=true;statusMessage.textContent='Settings loaded from device.';statusMessage.dataset.state='success'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
 async function saveDeviceSettings(event){event.preventDefault();let statusMessage=document.getElementById('device-settings-status'),form=new FormData(event.currentTarget);if(!loadedDeviceSettings){statusMessage.textContent='Load settings from the connected device first.';statusMessage.dataset.state='error';return}let profile=form.get('radio_profile'),values={name:String(form.get('name')||'').trim(),adv_lat:Number(form.get('adv_lat')),adv_lon:Number(form.get('adv_lon')),rx_delay:Number(form.get('rx_delay')),airtime_factor:Number(form.get('airtime_factor')),telemetry_mode_base:Number(form.get('telemetry_mode_base')),telemetry_mode_loc:Number(form.get('telemetry_mode_loc')),telemetry_mode_env:Number(form.get('telemetry_mode_env')),adv_loc_policy:Number(form.get('adv_loc_policy')),manual_add_contacts:form.get('manual_add_contacts')==='on',multi_acks:form.get('multi_acks')==='on'},radio=profile==='custom'?{radio_freq:Number(form.get('radio_freq')),radio_bw:Number(form.get('radio_bw')),radio_sf:Number(form.get('radio_sf')),radio_cr:Number(form.get('radio_cr'))}:{radio_freq:Number(loadedDeviceSettings.radio_freq),...commonRadioProfiles[profile]};Object.assign(values,radio);let powerMode=form.get('tx_power_mode');values.tx_power=Number(powerMode==='custom'?form.get('custom_tx_power'):powerMode);statusMessage.dataset.state='';statusMessage.textContent='Saving settings to device...';try{let response=await fetch('/api/device-settings',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({values})}),data=await response.json();if(!response.ok)throw new Error(data.error||'Settings could not be saved');deviceSettingsLoaded=false;await loadDeviceSettings();statusMessage.textContent='Device settings saved.';statusMessage.dataset.state='success'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
 let connectInFlight=false;
-async function connect(){if(connectInFlight)return;connectInFlight=true;let button=document.getElementById('connect-btn');if(button)button.disabled=true;try{let r=await fetch('/api/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({connection_type:connection_type.value,ble_mac:ble_mac.value,serial_port:serial_port.value})});let d=await r.json();if(!r.ok)alert(d.error);await status();await peers()}finally{connectInFlight=false;if(button)button.disabled=false}}
+async function connect(){if(connectInFlight)return;connectInFlight=true;let button=document.getElementById('connect-btn');if(button)button.disabled=true;try{let r=await fetch('/api/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({connection_type:connection_type.value,ble_mac:ble_mac.value,serial_port:serial_port.value, tcp_bridge_enabled: document.getElementById("tcp_bridge_enabled") ? document.getElementById("tcp_bridge_enabled").checked : false, tcp_bridge_port: document.getElementById("tcp_bridge_port") ? parseInt(document.getElementById("tcp_bridge_port").value, 10) : 4444})});let d=await r.json();if(!r.ok)alert(d.error);await status();await peers()}finally{connectInFlight=false;if(button)button.disabled=false}}
 async function disconnect(){await fetch('/api/disconnect',{method:'POST'});await status();await peers()}
 async function sendMessage(event,type,messageId,historyId){event.preventDefault();let selected=type==='node'?selectedNodeId:selectedChannelId,input=document.getElementById(messageId);if(!selected)return;if(type==='node'&&isRepeaterNode(selected)){input.disabled=true;document.getElementById('node-send').disabled=true;return}let message=input.value.trim();if(!message)return;let response=await fetch('/api/transmit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:selected,target_type:type,text:message})}),data=await response.json();if(!response.ok){alert(data.error||'Message could not be sent');return}input.value='';await history(type,selected,historyId,true)}
 let consoleDrag=null;
@@ -4537,6 +4604,14 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <label for="connection_type">Connection type</label><select id="connection_type" onchange="fields()"><option value="bluetooth">Bluetooth</option><option value="serial">Serial</option></select>
 <div id="ble-field"><label for="ble_mac">Bluetooth device</label><div class="scan-control"><select id="ble_mac"><option value="">Scan for Bluetooth devices</option></select><button id="ble-scan" type="button" onclick="scanBluetooth()">Scan</button></div><p id="ble-scan-status" class="scan-status" aria-live="polite"></p></div>
 <div id="serial-field" style="display:none"><label for="serial_port">Serial port</label><div class="scan-control"><select id="serial_port"><option value="">Scan for serial ports</option></select><button id="serial-scan" type="button" onclick="scanSerial()">Scan</button></div><p id="serial-scan-status" class="scan-status" aria-live="polite"></p></div>
+<div id="tcp-bridge-field" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);">
+<label class="device-toggle-row">
+<span><strong>Enable TCP Bot Bridge</strong><small>Forward messages to a local TCP socket</small></span>
+<input id="tcp_bridge_enabled" type="checkbox">
+</label>
+<label style="margin-top:8px"><span>Bridge Port</span><input id="tcp_bridge_port" type="number" min="1" max="65535" value="4444"></label>
+</div>
+
 <div class="connection-actions"><button id="connect-btn" onclick="connect()">Connect</button><button onclick="disconnect()">Disconnect</button></div>
 </section>
 <section class="card device-settings-card"><div class="panel-heading"><div><span class="eyebrow">IDENTITY</span><h2 id="device-identity-name">Connected device</h2></div><span id="device-identity-status" class="header-status disconnected">DISCONNECTED</span></div><button id="identity-toggle" class="device-setting-row" type="button" onclick="toggleDeviceIdentity()" aria-expanded="false"><span><strong>Device information</strong><small>Identifier, battery, firmware, key, contacts and channels</small></span><span id="identity-expand-icon">+</span></button><dl id="device-identity-details" class="device-info-grid" hidden></dl></section>
