@@ -1,0 +1,16 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^git branch --show-current && git remote -v \\| head -2 && git add README\\.md madhat\\.py setup\\.sh && git commit -q -m \"Add /sysreboot, /tightvnc command and Remote Desktop settings with noVNC setup\n\nCo-authored-by: Copilot <223556219\\+Copilot@users\\.noreply\\.github\\.com>\" && git push 2>&1 \\| tail -5$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^grep -n \"OTA_INSTRUCTIONS\\\\\\|run_cli_command\\\\\\|start ota\" -r --include=\\*\\.py --include=\\*\\.md \\. \\| head -20; pip show meshcore 2>/dev/null \\| head -3; git log --oneline \\| head -5$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^git add madhat\\.py && git commit -q -m \"Add /syswifi scan and connect commands\n\nCo-authored-by: Copilot <223556219\\+Copilot@users\\.noreply\\.github\\.com>\" && git push 2>&1 \\| tail -5; git status -sb \\| head -3$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}
