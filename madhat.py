@@ -114,6 +114,7 @@ def load_app_config():
         "model": DEFAULT_MODEL,
         "theme": "midnight",
         "connection": {"type": "serial", "ble_mac": "", "ble_pin": "", "serial_port": DEFAULT_SERIAL_PORT},
+        "known_devices": [],
         "weather": {"city": "", "state": ""},
         "bot": {**load_bot_settings(), "greet_new_users": False, "greet_channel": "", "admins": []},
         "ollama": {"schedule_enabled": False, "start_time": "07:00", "end_time": "17:00"},
@@ -146,6 +147,12 @@ def load_app_config():
         config["connection"]["type"] = "serial"
     if config["connection"]["type"] == "serial" and not config["connection"]["serial_port"]:
         config["connection"]["serial_port"] = DEFAULT_SERIAL_PORT
+    saved_known_devices = saved_config.get("known_devices")
+    if isinstance(saved_known_devices, list):
+        config["known_devices"] = [
+            dev.strip() for dev in saved_known_devices
+            if isinstance(dev, str) and dev.strip()
+        ]
     saved_weather = saved_config.get("weather")
     if isinstance(saved_weather, dict):
         for key in ("city", "state"):
@@ -213,7 +220,7 @@ def load_app_config():
 def validate_app_config(value):
     if not isinstance(value, dict):
         raise ValueError("Configuration must be a JSON object")
-    unsupported = set(value) - {"model", "theme", "connection", "weather", "bot", "ollama", "auto_update"}
+    unsupported = set(value) - {"model", "theme", "connection", "known_devices", "weather", "bot", "ollama", "auto_update"}
     if unsupported:
         raise ValueError(f"Unsupported configuration keys: {', '.join(sorted(unsupported))}")
 
@@ -407,6 +414,7 @@ app_state = {
     "ble_mac": app_config["connection"]["ble_mac"],
     "ble_pin": app_config["connection"]["ble_pin"],
     "serial_port": app_config["connection"]["serial_port"],
+    "known_devices": app_config["known_devices"],
     "selected_model": app_config["model"],
     "is_connected": False,
     "auto_reconnect": True,
@@ -3519,6 +3527,18 @@ async def connect_hardware():
             await refresh_channels()
             meshcore_instance.subscribe(EventType.NEW_CONTACT, handle_new_contact)
             meshcore_instance.subscribe(EventType.ADVERTISEMENT, handle_advertisement)
+            
+            # Add device to known_devices list if it was successfully connected
+            if app_state["connection_type"] == "bluetooth":
+                ble_mac = (app_state.get("ble_mac") or "").strip()
+                if ble_mac and ble_mac not in app_state.get("known_devices", []):
+                    app_state["known_devices"].append(ble_mac)
+                    app_config["known_devices"] = app_state["known_devices"]
+                    try:
+                        write_app_config(app_config)
+                    except OSError as error:
+                        log_to_dash(f"Warning: Could not save known device to config: {error}")
+            
             log_to_dash("Hardware interface successfully linked and active.")
         except Exception as error:
             meshcore_instance = None
@@ -4208,7 +4228,9 @@ async function maybeCheckForUpdates(){if(!appConfig.auto_update||!appConfig.auto
 function loadFavoriteNodes(){try{let saved=JSON.parse(localStorage.getItem('meshcore-favorite-nodes')||'[]');if(Array.isArray(saved))favoriteNodeIds=new Set(saved.map(String))}catch(error){favoriteNodeIds=new Set()}}
 function toggleNodeFavorite(id){let normalized=String(id);if(favoriteNodeIds.has(normalized))favoriteNodeIds.delete(normalized);else favoriteNodeIds.add(normalized);localStorage.setItem('meshcore-favorite-nodes',JSON.stringify([...favoriteNodeIds]));renderConversationTargets('node');renderKnownPeers();renderMapMarkers()}
 function createNodeFavoriteButton(id){let favorite=document.createElement('button'),isFavorite=favoriteNodeIds.has(String(id));favorite.type='button';favorite.className='favorite-toggle';favorite.textContent=isFavorite?'★':'☆';favorite.title=isFavorite?'Remove from favorites':'Add to favorites';favorite.setAttribute('aria-label',favorite.title);favorite.setAttribute('aria-pressed',String(isFavorite));favorite.onclick=()=>toggleNodeFavorite(id);return favorite}
-function fields(){let t=connection_type.value,bp=document.getElementById('ble_pin');if(bp)bp.value=appConfig.connection?.ble_pin||'';document.getElementById('ble-field').style.display=t==='bluetooth'?'block':'none';document.getElementById('serial-field').style.display=t==='serial'?'block':'none'}
+function fields(){let t=connection_type.value,bp=document.getElementById('ble_pin');if(bp)bp.value=appConfig.connection?.ble_pin||'';document.getElementById('ble-field').style.display=t==='bluetooth'?'block':'none';document.getElementById('serial-field').style.display=t==='serial'?'block':'none';updateKnownDevicesList()}
+function updateKnownDevicesList(){let section=document.getElementById('known-devices-section'),list=document.getElementById('known-devices-list');if(!section||!list)return;let known=appConfig?.known_devices||[];if(known.length===0){section.style.display='none';return}section.style.display='block';list.innerHTML='';for(let device of known){let item=document.createElement('div');item.style.cssText='display:flex;justify-content:space-between;align-items:center;padding:6px;background:white;border-radius:3px;margin-bottom:4px;font-size:12px;border:1px solid #ddd';let label=document.createElement('span');label.textContent=device;let btn=document.createElement('button');btn.type='button';btn.textContent='Forget';btn.className='secondary';btn.style.cssText='padding:4px 8px;font-size:11px';btn.onclick=()=>forgetDevice(device);item.appendChild(label);item.appendChild(btn);list.appendChild(item)}}
+async function forgetDevice(device_mac){if(!confirm(`Forget device ${device_mac}? It will no longer auto-connect.`))return;try{let r=await fetch('/api/forget-device',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_mac})}),d=await r.json();if(!r.ok)throw new Error(d.error||'Failed to forget device');appConfig.known_devices=d.known_devices;updateKnownDevicesList()}catch(error){alert('Error: '+error.message)}}
 async function scanDevices(kind){let bluetooth=kind==='bluetooth',select=document.getElementById(bluetooth?'ble_mac':'serial_port'),button=document.getElementById(bluetooth?'ble-scan':'serial-scan'),statusMessage=document.getElementById(bluetooth?'ble-scan-status':'serial-scan-status'),previous=select.value;button.disabled=true;button.textContent='Scanning';statusMessage.dataset.state='';statusMessage.textContent='Searching for available devices...';try{let response=await fetch('/api/scan/'+kind),data=await response.json();if(!response.ok)throw new Error(data.error||'Device scan failed');let devices=bluetooth?data.devices:data.ports;select.replaceChildren(new Option(bluetooth?'Select a Bluetooth device':'Select a serial port',''));for(let device of devices){let label=bluetooth?`${device.name} (${device.address})`:`${device.device} - ${device.description||'Serial port'}`;select.add(new Option(label,bluetooth?device.address:device.device))}if(previous&&[...select.options].some(option=>option.value===previous))select.value=previous;statusMessage.textContent=devices.length?`Found ${devices.length} device(s). Select one to connect.`:'No devices found. Check that the radio is powered and discoverable.'}catch(error){statusMessage.dataset.state='error';statusMessage.textContent=error.message}finally{button.disabled=false;button.textContent='Scan'}}
 function scanBluetooth(){return scanDevices('bluetooth')}
 function scanSerial(){return scanDevices('serial')}
@@ -4543,6 +4565,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <div id="serial-field" style="display:none"><label for="serial_port">Serial port</label><div class="scan-control"><select id="serial_port"><option value="">Scan for serial ports</option></select><button id="serial-scan" type="button" onclick="scanSerial()">Scan</button></div><p id="serial-scan-status" class="scan-status" aria-live="polite"></p></div>
 
 <div class="connection-actions"><button id="connect-btn" onclick="connect()">Connect</button><button onclick="disconnect()">Disconnect</button><button type="button" onclick="clearDevice()" class="secondary" title="Clear stored device and stop auto-connect">Clear Device</button></div>
+<div id="known-devices-section" style="margin-top:16px;padding:12px;background:#f5f5f5;border-radius:4px;display:none"><p style="margin:0 0 8px 0;font-weight:bold;font-size:14px">Known Devices (will auto-connect)</p><div id="known-devices-list" style="max-height:200px;overflow-y:auto"></div></div>
 </section>
 <section class="card device-settings-card"><div class="panel-heading"><div><span class="eyebrow">IDENTITY</span><h2 id="device-identity-name">Connected device</h2></div><span id="device-identity-status" class="header-status disconnected">DISCONNECTED</span></div><button id="identity-toggle" class="device-setting-row" type="button" onclick="toggleDeviceIdentity()" aria-expanded="false"><span><strong>Device information</strong><small>Identifier, battery, firmware, key, contacts and channels</small></span><span id="identity-expand-icon">+</span></button><dl id="device-identity-details" class="device-info-grid" hidden></dl></section>
 <form id="device-settings-form" onsubmit="saveDeviceSettings(event)">
@@ -6480,6 +6503,33 @@ async def clear_device_handler(request):
         return web.json_response({"error": str(error)}, status=500)
 
 
+async def forget_device_handler(request):
+    """Remove a device from the known_devices list."""
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+    
+    device_mac = str(data.get("device_mac", "")).strip()
+    if not device_mac:
+        return web.json_response({"error": "Device MAC address required"}, status=400)
+    
+    known_devices = app_state.get("known_devices", [])
+    if device_mac in known_devices:
+        known_devices.remove(device_mac)
+        app_state["known_devices"] = known_devices
+        app_config["known_devices"] = known_devices
+        try:
+            write_app_config(app_config)
+            log_to_dash(f"Removed {device_mac} from known devices")
+            return web.json_response({"success": True, "known_devices": known_devices})
+        except OSError as error:
+            log_to_dash(f"Failed to save known devices: {error}")
+            return web.json_response({"error": str(error)}, status=500)
+    
+    return web.json_response({"success": True, "known_devices": known_devices})
+
+
 async def transmit_handler(request):
     try:
         data = await request.json()
@@ -6537,13 +6587,17 @@ async def auto_connect_hardware():
             if app_state["auto_reconnect"] and not app_state["is_connected"] and not connection_lock.locked():
                 if app_state["connection_type"] == "bluetooth":
                     target = (app_state["ble_mac"] or "").strip()
+                    # Only auto-connect to devices that have been successfully connected before
+                    if target and target in app_state.get("known_devices", []):
+                        log_to_dash(f"Auto-connecting to known Bluetooth device {target}...")
+                        await connect_hardware()
                 else:
                     target = app_state["serial_port"]
                     if target == DEFAULT_SERIAL_PORT and not os.path.exists(target):
                         target = ""
-                if target:
-                    log_to_dash(f"Auto-connecting to MeshCore device {target}...")
-                    await connect_hardware()
+                    if target:
+                        log_to_dash(f"Auto-connecting to serial port {target}...")
+                        await connect_hardware()
             await asyncio.sleep(AUTO_RECONNECT_INTERVAL_SECONDS)
         except asyncio.CancelledError:
             raise
@@ -6849,6 +6903,7 @@ def create_app():
     app.router.add_post("/api/connect", connect_handler)
     app.router.add_post("/api/disconnect", disconnect_handler)
     app.router.add_post("/api/clear-device", clear_device_handler)
+    app.router.add_post("/api/forget-device", forget_device_handler)
     app.router.add_post("/api/transmit", transmit_handler)
     app.router.add_patch("/api/device-settings", update_device_settings_handler)
     app.on_startup.append(on_startup)
