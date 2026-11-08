@@ -3079,11 +3079,28 @@ async def bluetooth_scan_handler(request):
         log_to_dash(f"Bluetooth scan failed: {error}")
         return web.json_response({"error": str(error)}, status=503)
 
+    # Find devices starting with "MeshCore" in their name
     meshcore_devices = [
         device
         for device, adv in devices.values()
         if (adv.local_name or device.name or "").startswith("MeshCore")
     ]
+    
+    # If no MeshCore devices found, return all devices for debugging
+    if not meshcore_devices and devices:
+        log_to_dash(f"No MeshCore devices found. Found {len(devices)} other device(s).")
+        return web.json_response({
+            "devices": [
+                {
+                    "name": device.name or f"Unknown ({device.address})",
+                    "address": device.address,
+                }
+                for device in sorted(
+                    [dev for dev, _ in devices.values()],
+                    key=lambda device: (device.name or device.address).casefold(),
+                )
+            ]
+        })
 
     return web.json_response({
         "devices": [
