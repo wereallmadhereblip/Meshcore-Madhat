@@ -3504,7 +3504,11 @@ async def connect_hardware():
                     ble_pin = app_state.get("ble_pin", "").strip() or None
                     if ble_pin:
                         log_to_dash(f"Using PIN for pairing...")
-                    meshcore_instance = await MeshCore.create_ble(app_state["ble_mac"], pin=ble_pin)
+                    try:
+                        meshcore_instance = await MeshCore.create_ble(app_state["ble_mac"], pin=ble_pin)
+                    except Exception as e:
+                        log_to_dash(f"BLE connection error: {type(e).__name__}: {e}")
+                        meshcore_instance = None
                 else:
                     log_to_dash(f"Connecting via serial to {app_state['serial_port']}...")
                     meshcore_instance = await MeshCore.create_serial(app_state["serial_port"])
