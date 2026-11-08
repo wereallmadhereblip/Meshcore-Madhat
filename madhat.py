@@ -4356,6 +4356,7 @@ async function saveDeviceSettings(event){event.preventDefault();let statusMessag
 let connectInFlight=false;
 async function connect(){if(connectInFlight)return;connectInFlight=true;let button=document.getElementById('connect-btn');if(button)button.disabled=true;try{let r=await fetch('/api/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({connection_type:connection_type.value,ble_mac:ble_mac.value,ble_pin:document.getElementById('ble_pin')?document.getElementById('ble_pin').value:'',serial_port:serial_port.value})});let d=await r.json();if(!r.ok)alert(d.error);await status();await peers()}finally{connectInFlight=false;if(button)button.disabled=false}}
 async function disconnect(){await fetch('/api/disconnect',{method:'POST'});await status();await peers()}
+async function clearDevice(){if(!confirm('Clear the stored Bluetooth device and disable auto-connect?'))return;try{let response=await fetch('/api/clear-device',{method:'POST'}),data=await response.json();if(!response.ok){alert(data.error||'Failed to clear device');return}alert('Bluetooth device cleared. Use Scan to find and select a new device.');document.getElementById('ble_mac').value='';document.getElementById('ble_pin').value='';await status()}catch(error){alert('Error: '+error.message)}}
 async function sendMessage(event,type,messageId,historyId){event.preventDefault();let selected=type==='node'?selectedNodeId:selectedChannelId,input=document.getElementById(messageId);if(!selected)return;if(type==='node'&&isRepeaterNode(selected)){input.disabled=true;document.getElementById('node-send').disabled=true;return}let message=input.value.trim();if(!message)return;let response=await fetch('/api/transmit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:selected,target_type:type,text:message})}),data=await response.json();if(!response.ok){alert(data.error||'Message could not be sent');return}input.value='';await history(type,selected,historyId,true)}
 let consoleDrag=null;
 function clampConsolePosition(dock){if(!dock||dock.classList.contains('collapsed'))return;let header=document.querySelector('.dashboard-header');if(!header)return;let minTop=header.getBoundingClientRect().bottom+12;let rect=dock.getBoundingClientRect();if(rect.top<minTop){dock.style.top=minTop+'px';dock.style.bottom='auto'}}
@@ -4541,7 +4542,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <div id="ble-field"><label for="ble_mac">Bluetooth device</label><div class="scan-control"><select id="ble_mac"><option value="">Scan for Bluetooth devices</option></select><button id="ble-scan" type="button" onclick="scanBluetooth()">Scan</button></div><p id="ble-scan-status" class="scan-status" aria-live="polite"></p><label for="ble_pin"><span>PIN (optional, for headless systems)</span><input id="ble_pin" type="text" placeholder="Leave empty if not needed"></label></div>
 <div id="serial-field" style="display:none"><label for="serial_port">Serial port</label><div class="scan-control"><select id="serial_port"><option value="">Scan for serial ports</option></select><button id="serial-scan" type="button" onclick="scanSerial()">Scan</button></div><p id="serial-scan-status" class="scan-status" aria-live="polite"></p></div>
 
-<div class="connection-actions"><button id="connect-btn" onclick="connect()">Connect</button><button onclick="disconnect()">Disconnect</button></div>
+<div class="connection-actions"><button id="connect-btn" onclick="connect()">Connect</button><button onclick="disconnect()">Disconnect</button><button type="button" onclick="clearDevice()" class="secondary" title="Clear stored device and stop auto-connect">Clear Device</button></div>
 </section>
 <section class="card device-settings-card"><div class="panel-heading"><div><span class="eyebrow">IDENTITY</span><h2 id="device-identity-name">Connected device</h2></div><span id="device-identity-status" class="header-status disconnected">DISCONNECTED</span></div><button id="identity-toggle" class="device-setting-row" type="button" onclick="toggleDeviceIdentity()" aria-expanded="false"><span><strong>Device information</strong><small>Identifier, battery, firmware, key, contacts and channels</small></span><span id="identity-expand-icon">+</span></button><dl id="device-identity-details" class="device-info-grid" hidden></dl></section>
 <form id="device-settings-form" onsubmit="saveDeviceSettings(event)">
@@ -6464,6 +6465,21 @@ async def disconnect_handler(request):
     return web.json_response({"is_connected": False})
 
 
+async def clear_device_handler(request):
+    """Clear the stored Bluetooth device to prevent auto-connect attempts."""
+    app_state["ble_mac"] = ""
+    app_state["ble_pin"] = ""
+    app_config["connection"]["ble_mac"] = ""
+    app_config["connection"]["ble_pin"] = ""
+    try:
+        write_app_config(app_config)
+        log_to_dash("Cleared stored Bluetooth device")
+        return web.json_response({"success": True, "message": "Bluetooth device cleared"})
+    except OSError as error:
+        log_to_dash(f"Failed to clear device settings: {error}")
+        return web.json_response({"error": str(error)}, status=500)
+
+
 async def transmit_handler(request):
     try:
         data = await request.json()
@@ -6520,7 +6536,7 @@ async def auto_connect_hardware():
                     app_state["is_connected"] = False
             if app_state["auto_reconnect"] and not app_state["is_connected"] and not connection_lock.locked():
                 if app_state["connection_type"] == "bluetooth":
-                    target = app_state["ble_mac"]
+                    target = (app_state["ble_mac"] or "").strip()
                 else:
                     target = app_state["serial_port"]
                     if target == DEFAULT_SERIAL_PORT and not os.path.exists(target):
@@ -6832,6 +6848,7 @@ def create_app():
     app.router.add_get("/api/device-settings/export", device_gpx_export_handler)
     app.router.add_post("/api/connect", connect_handler)
     app.router.add_post("/api/disconnect", disconnect_handler)
+    app.router.add_post("/api/clear-device", clear_device_handler)
     app.router.add_post("/api/transmit", transmit_handler)
     app.router.add_patch("/api/device-settings", update_device_settings_handler)
     app.on_startup.append(on_startup)
