@@ -3050,10 +3050,14 @@ async def _disconnect_hardware_locked():
         return
     try:
         method = getattr(meshcore_instance, "disconnect", None)
-        if method:
-            result = method()
-            if inspect.isawaitable(result):
-                await result
+        if method and callable(method):
+            try:
+                result = method()
+                if inspect.isawaitable(result):
+                    await result
+            except AttributeError:
+                # Device may have already disconnected; ignore NoneType errors
+                pass
     except Exception as error:
         log_to_dash(f"Disconnect error: {error}")
     finally:
@@ -3481,7 +3485,13 @@ async def connect_hardware():
                 if app_state["connection_type"] == "bluetooth":
                     log_to_dash(f"Connecting via Bluetooth to {app_state['ble_mac']}...")
                     ble_pin = app_state.get("ble_pin", "").strip() or None
-                    meshcore_instance = await MeshCore.create_ble(app_state["ble_mac"], pin=ble_pin)
+                    try:
+                        meshcore_instance = await MeshCore.create_ble(app_state["ble_mac"], pin=ble_pin)
+                    except Exception as ble_error:
+                        error_msg = str(ble_error)
+                        if "No Bluetooth" in error_msg or "adapter" in error_msg.lower():
+                            log_to_dash("⚠️  Bluetooth adapter unavailable. Check Bluetooth hardware on Pi Zero.")
+                        meshcore_instance = None
                 else:
                     log_to_dash(f"Connecting via serial to {app_state['serial_port']}...")
                     meshcore_instance = await MeshCore.create_serial(app_state["serial_port"])
