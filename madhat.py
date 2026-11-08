@@ -3501,14 +3501,8 @@ async def connect_hardware():
             for attempt in range(1, HARDWARE_CONNECT_ATTEMPTS + 1):
                 if app_state["connection_type"] == "bluetooth":
                     log_to_dash(f"Connecting via Bluetooth to {app_state['ble_mac']}...")
-                    ble_pin = app_state.get("ble_pin", "").strip() or None
-                    try:
-                        meshcore_instance = await MeshCore.create_ble(app_state["ble_mac"], pin=ble_pin)
-                    except Exception as ble_error:
-                        error_msg = str(ble_error)
-                        if "No Bluetooth" in error_msg or "adapter" in error_msg.lower():
-                            log_to_dash("⚠️  Bluetooth adapter unavailable. Check Bluetooth hardware on Pi Zero.")
-                        meshcore_instance = None
+                    # Don't pass pin parameter - let MeshCore handle it
+                    meshcore_instance = await MeshCore.create_ble(app_state["ble_mac"])
                 else:
                     log_to_dash(f"Connecting via serial to {app_state['serial_port']}...")
                     meshcore_instance = await MeshCore.create_serial(app_state["serial_port"])
