@@ -3515,10 +3515,12 @@ async def ble_pairing_agent(pin):
 
             @method()
             def RequestPinCode(self, device: "o") -> "s":
+                log_to_dash("Bluetooth pairing: device requested a PIN code; sending it.")
                 return pin
 
             @method()
             def RequestPasskey(self, device: "o") -> "u":
+                log_to_dash("Bluetooth pairing: device requested a passkey; sending it.")
                 if not pin.isdigit():
                     raise DBusError("org.bluez.Error.Rejected", "PIN must be numeric")
                 return int(pin)
@@ -3533,7 +3535,7 @@ async def ble_pairing_agent(pin):
 
             @method()
             def RequestConfirmation(self, device: "o", passkey: "u"):
-                pass
+                log_to_dash(f"Bluetooth pairing: confirming passkey {passkey}.")
 
             @method()
             def RequestAuthorization(self, device: "o"):
@@ -3555,6 +3557,7 @@ async def ble_pairing_agent(pin):
         )
         await manager.call_register_agent(BLE_AGENT_PATH, "KeyboardOnly")
         await manager.call_request_default_agent(BLE_AGENT_PATH)
+        log_to_dash("Bluetooth pairing agent registered.")
     except Exception as e:
         log_to_dash(f"Could not register Bluetooth pairing agent: {type(e).__name__}: {e}")
     try:
