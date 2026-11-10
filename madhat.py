@@ -3488,6 +3488,85 @@ async def serial_scan_handler(request):
 
 HARDWARE_CONNECT_ATTEMPTS = 3
 HARDWARE_CONNECT_RETRY_DELAY_SECONDS = 3
+BLE_AGENT_PATH = "/org/madhat/ble_agent"
+
+
+@asynccontextmanager
+async def ble_pairing_agent(pin):
+    # Bleak's pair() takes no PIN; BlueZ asks a registered agent for it, and a
+    # headless system has none, which surfaces as AuthenticationFailed.
+    if not pin:
+        yield
+        return
+    bus = None
+    manager = None
+    try:
+        from dbus_fast import BusType, DBusError
+        from dbus_fast.aio import MessageBus
+        from dbus_fast.service import ServiceInterface, method
+
+        class PinAgent(ServiceInterface):
+            def __init__(self):
+                super().__init__("org.bluez.Agent1")
+
+            @method()
+            def Release(self):
+                pass
+
+            @method()
+            def RequestPinCode(self, device: "o") -> "s":
+                return pin
+
+            @method()
+            def RequestPasskey(self, device: "o") -> "u":
+                if not pin.isdigit():
+                    raise DBusError("org.bluez.Error.Rejected", "PIN must be numeric")
+                return int(pin)
+
+            @method()
+            def DisplayPasskey(self, device: "o", passkey: "u", entered: "q"):
+                pass
+
+            @method()
+            def DisplayPinCode(self, device: "o", pincode: "s"):
+                pass
+
+            @method()
+            def RequestConfirmation(self, device: "o", passkey: "u"):
+                pass
+
+            @method()
+            def RequestAuthorization(self, device: "o"):
+                pass
+
+            @method()
+            def AuthorizeService(self, device: "o", uuid: "s"):
+                pass
+
+            @method()
+            def Cancel(self):
+                pass
+
+        bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+        bus.export(BLE_AGENT_PATH, PinAgent())
+        introspection = await bus.introspect("org.bluez", "/org/bluez")
+        manager = bus.get_proxy_object("org.bluez", "/org/bluez", introspection).get_interface(
+            "org.bluez.AgentManager1"
+        )
+        await manager.call_register_agent(BLE_AGENT_PATH, "KeyboardOnly")
+        await manager.call_request_default_agent(BLE_AGENT_PATH)
+    except Exception as e:
+        log_to_dash(f"Could not register Bluetooth pairing agent: {type(e).__name__}: {e}")
+    try:
+        yield
+    finally:
+        if bus is not None:
+            try:
+                if manager is not None:
+                    await manager.call_unregister_agent(BLE_AGENT_PATH)
+            except Exception:
+                pass
+            bus.disconnect()
 
 
 async def connect_hardware():
@@ -3505,7 +3584,8 @@ async def connect_hardware():
                     if ble_pin:
                         log_to_dash(f"Using PIN for pairing...")
                     try:
-                        meshcore_instance = await MeshCore.create_ble(app_state["ble_mac"], pin=ble_pin)
+                        async with ble_pairing_agent(ble_pin):
+                            meshcore_instance = await MeshCore.create_ble(app_state["ble_mac"], pin=ble_pin)
                     except Exception as e:
                         log_to_dash(f"BLE connection error: {type(e).__name__}: {e}")
                         meshcore_instance = None
