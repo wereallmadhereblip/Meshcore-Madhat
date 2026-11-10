@@ -5373,7 +5373,7 @@ async def restart_dashboard_handler(request):
 async def update_app_handler(request):
     repo_dir = Path(__file__).resolve().parent
     status = subprocess.run(
-        ["git", "status", "--porcelain"],
+        ["git", "status", "--porcelain", "--untracked-files=no"],
         cwd=repo_dir,
         capture_output=True,
         text=True,
