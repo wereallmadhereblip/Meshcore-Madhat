@@ -3501,11 +3501,8 @@ async def connect_hardware():
             for attempt in range(1, HARDWARE_CONNECT_ATTEMPTS + 1):
                 if app_state["connection_type"] == "bluetooth":
                     log_to_dash(f"Connecting via Bluetooth to {app_state['ble_mac']}...")
-                    ble_pin = app_state.get("ble_pin", "").strip() or None
-                    if ble_pin:
-                        log_to_dash(f"Using PIN for pairing...")
                     try:
-                        meshcore_instance = await MeshCore.create_ble(app_state["ble_mac"], pin=ble_pin)
+                        meshcore_instance = await MeshCore.create_ble(app_state["ble_mac"])
                     except Exception as e:
                         log_to_dash(f"BLE connection error: {type(e).__name__}: {e}")
                         meshcore_instance = None
