@@ -3825,18 +3825,8 @@ body:has(#nodes-view:not([hidden])){height:100vh;overflow:hidden}
 .model-card-badge{display:inline-block;padding:2px 7px;border-radius:10px;background:var(--accent-dim);color:var(--accent);font-size:10px;font-weight:700;text-transform:uppercase;border:1px solid var(--accent)}
 .model-card-actions{display:flex;gap:6px;align-items:center}
 .model-card-actions button{min-height:28px;padding:4px 10px;font-size:11px}
-.ollama-download-progress{margin-top:12px}
-.ollama-download-progress[hidden]{display:none}
-.ollama-download-progress progress{display:block;width:100%;height:12px;margin:6px 0}
-.ollama-download-progress p{margin:0;color:var(--muted);font-size:11px}
 .model-card-actions .delete-btn{color:var(--danger)!important;border-color:color-mix(in srgb,var(--danger) 45%,var(--border))!important}
 .model-card-actions .delete-btn:hover{background:color-mix(in srgb,var(--danger) 15%,transparent)}
-.download-control{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-top:6px}
-.download-control button{min-width:90px;border-color:var(--accent);background:var(--accent);color:var(--button-text)}
-.download-control button:hover{background:color-mix(in srgb,var(--accent) 85%,white)}
-.model-preset-row{display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap;font-size:11px;color:var(--muted)}
-.preset-btn{min-height:26px;padding:2px 8px;font-size:10px;border-radius:12px;background:var(--panel-bg);color:var(--muted);border:1px solid var(--border)}
-.preset-btn:hover{color:var(--text);border-color:var(--accent)}
 .settings-description{margin:8px 0 0;color:var(--muted);font-size:11px}
 .card{min-width:0;margin-bottom:12px;padding:12px;background:var(--panel-bg);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12)}
 .panel-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
@@ -4376,13 +4366,8 @@ async function status(){let r=await fetch('/api/status'),d=await r.json();let b=
 let ollamaToggleBusy=false;
 function renderOllamaPower(running){let button=document.getElementById('ollama-power-toggle'),status=document.getElementById('ollama-power-status');if(!button||ollamaToggleBusy)return;button.textContent=running?'Turn off':'Turn on';status.textContent=running?'Running. Turn it off between chats to save power.':'Stopped to save power. Replies will fail until it is turned back on.'}
 async function toggleOllama(){let button=document.getElementById('ollama-power-toggle'),status=document.getElementById('ollama-power-status'),running=button.textContent.trim()==='Turn off';ollamaToggleBusy=true;button.disabled=true;status.textContent=running?'Stopping Ollama...':'Starting Ollama...';try{let r=await fetch('/api/ollama/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!running})}),d=await r.json();if(!r.ok)throw new Error(d.error||'Could not change Ollama state');ollamaToggleBusy=false;renderOllamaPower(d.ollama_running);loadOllamaModels()}catch(error){ollamaToggleBusy=false;status.textContent=error.message}finally{button.disabled=false}}
-let ollamaModelsBusy=false;
-async function loadOllamaModels(){let listEl=document.getElementById('installed-models-list');if(!listEl)return;try{let res=await fetch('/api/ollama/models');let data=await res.json();if(!res.ok)throw new Error(data.error||'Failed to load models');let models=data.models||[];let currentModel=appConfig.model||data.selected_model;if(!data.ollama_running){listEl.innerHTML='<p class="map-empty">Ollama server is currently stopped. Turn it on above to view or manage models.</p>';return}if(models.length===0){listEl.innerHTML='<p class="map-empty">No models installed in Ollama yet. Use the download section below to pull a model.</p>';return}listEl.replaceChildren();for(let m of models){let isCurrent=m.name===currentModel;let card=document.createElement('div');card.className='model-card';let info=document.createElement('div');info.className='model-card-info';let name=document.createElement('span');name.className='model-card-name';name.textContent=m.name;info.appendChild(name);if(m.size){let size=document.createElement('span');size.className='model-card-size';size.textContent=m.size;info.appendChild(size)}if(isCurrent){let badge=document.createElement('span');badge.className='model-card-badge';badge.textContent='Active';info.appendChild(badge)}card.appendChild(info);let actions=document.createElement('div');actions.className='model-card-actions';if(!isCurrent){let useBtn=document.createElement('button');useBtn.type='button';useBtn.className='secondary';useBtn.textContent='Use';useBtn.onclick=()=>setActiveModel(m.name);actions.appendChild(useBtn)}let delBtn=document.createElement('button');delBtn.type='button';delBtn.className='delete-btn';delBtn.textContent='Delete';delBtn.onclick=()=>deleteOllamaModel(m.name);actions.appendChild(delBtn);card.appendChild(actions);listEl.appendChild(card)}}catch(err){listEl.replaceChildren();let errP=document.createElement('p');errP.className='map-empty';errP.textContent='Could not load models: '+err.message;listEl.appendChild(errP)}}
+async function loadOllamaModels(){let listEl=document.getElementById('installed-models-list');if(!listEl)return;try{let res=await fetch('/api/ollama/models');let data=await res.json();if(!res.ok)throw new Error(data.error||'Failed to load models');let models=data.models||[];let currentModel=appConfig.model||data.selected_model;if(!data.ollama_running){listEl.innerHTML='<p class="map-empty">Ollama server is currently stopped. Turn it on above to view or manage models.</p>';return}if(models.length===0){listEl.innerHTML='<p class="map-empty">No models installed in Ollama yet.</p>';return}listEl.replaceChildren();for(let m of models){let isCurrent=m.name===currentModel;let card=document.createElement('div');card.className='model-card';let info=document.createElement('div');info.className='model-card-info';let name=document.createElement('span');name.className='model-card-name';name.textContent=m.name;info.appendChild(name);if(m.size){let size=document.createElement('span');size.className='model-card-size';size.textContent=m.size;info.appendChild(size)}if(isCurrent){let badge=document.createElement('span');badge.className='model-card-badge';badge.textContent='Active';info.appendChild(badge)}card.appendChild(info);let actions=document.createElement('div');actions.className='model-card-actions';if(!isCurrent){let useBtn=document.createElement('button');useBtn.type='button';useBtn.className='secondary';useBtn.textContent='Use';useBtn.onclick=()=>setActiveModel(m.name);actions.appendChild(useBtn)}let delBtn=document.createElement('button');delBtn.type='button';delBtn.className='delete-btn';delBtn.textContent='Delete';delBtn.onclick=()=>deleteOllamaModel(m.name);actions.appendChild(delBtn);card.appendChild(actions);listEl.appendChild(card)}}catch(err){listEl.replaceChildren();let errP=document.createElement('p');errP.className='map-empty';errP.textContent='Could not load models: '+err.message;listEl.appendChild(errP)}}
 async function setActiveModel(modelName){let statusEl=document.getElementById('ollama-model-status');statusEl.dataset.state='';statusEl.textContent='Activating model '+modelName+'...';try{await savePreference('model',modelName);statusEl.dataset.state='success';statusEl.textContent='Active model set to '+modelName+'.';loadOllamaModels()}catch(err){statusEl.dataset.state='error';statusEl.textContent=err.message}}
-function setDownloadModel(modelName){let input=document.getElementById('ollama-download-input');if(input){input.value=modelName;input.focus()}}
-async function pollOllamaModelProgress(model,stop){let panel=document.getElementById('ollama-download-progress'),phaseEl=document.getElementById('ollama-download-phase'),bar=document.getElementById('ollama-download-progress-bar'),detail=document.getElementById('ollama-download-detail');if(!panel||!phaseEl||!bar||!detail)return;panel.hidden=false;while(!stop.done){try{let res=await fetch('/api/ollama/models/progress'),data=await res.json();if(!res.ok)throw new Error(data.error||'Could not read model progress');let progress=data.progress;if(progress&&progress.model===model){let phase=progress.phase==='installing'?'Installing':progress.phase==='error'?'Download failed':'Downloading';phaseEl.textContent=phase+' "'+model+'": '+(progress.status||phase.toLowerCase());let completed=Number(progress.completed)||0,total=Number(progress.total)||0;if(total>0){bar.max=100;bar.value=progress.phase==='installing'?100:Math.min(100,completed/total*100);detail.textContent=progress.phase==='installing'?'Downloaded '+formatModelProgressSize(completed)+' of '+formatModelProgressSize(total):formatModelProgressSize(completed)+' of '+formatModelProgressSize(total)+' ('+Math.floor(completed/total*100)+'%)'}else if(progress.phase==='installing'){bar.max=100;bar.value=100;detail.textContent='Finishing model installation...'}else{bar.removeAttribute('value');detail.textContent='Waiting for download size...'}}}catch(error){phaseEl.textContent='Download progress unavailable: '+error.message;break}await new Promise(resolve=>setTimeout(resolve,700))}}
-function formatModelProgressSize(bytes){if(bytes<1024*1024)return Math.round(bytes/1024)+' KB';return (bytes/(1024*1024*1024)>=1?(bytes/(1024*1024*1024)).toFixed(2)+' GB':(bytes/(1024*1024)).toFixed(0)+' MB')}
-async function downloadOllamaModel(){let input=document.getElementById('ollama-download-input'),btn=document.getElementById('ollama-download-button'),statusEl=document.getElementById('ollama-model-status'),progressPanel=document.getElementById('ollama-download-progress'),model=(input?input.value:'').trim();if(!model){statusEl.dataset.state='error';statusEl.textContent='Enter a model name to download.';return}ollamaModelsBusy=true;if(btn)btn.disabled=true;if(input)input.disabled=true;statusEl.dataset.state='';statusEl.textContent='Starting download of "'+model+'"...';if(progressPanel)progressPanel.hidden=false;let stop={done:false},progressPoll=pollOllamaModelProgress(model,stop);try{let res=await fetch('/api/ollama/models/pull',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model})}),data=await res.json();if(!res.ok)throw new Error(data.error||'Failed to download model');statusEl.dataset.state='success';statusEl.textContent='Model "'+model+'" downloaded and installed successfully!';if(input)input.value='';await loadOllamaModels()}catch(err){statusEl.dataset.state='error';statusEl.textContent=err.message}finally{stop.done=true;await progressPoll;ollamaModelsBusy=false;if(btn)btn.disabled=false;if(input)input.disabled=false}}
 async function deleteOllamaModel(modelName){if(!window.confirm('Delete model "'+modelName+'"? This will permanently remove its files from disk.'))return;let statusEl=document.getElementById('ollama-model-status');statusEl.dataset.state='';statusEl.textContent='Deleting "'+modelName+'"...';try{let res=await fetch('/api/ollama/models/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:modelName})}),data=await res.json();if(!res.ok)throw new Error(data.error||'Failed to delete model');statusEl.dataset.state='success';statusEl.textContent='Model "'+modelName+'" deleted successfully.';if(data.selected_model&&data.selected_model!==appConfig.model){appConfig.model=data.selected_model;syncConfigControls()}await loadOllamaModels()}catch(err){statusEl.dataset.state='error';statusEl.textContent=err.message}}
 let notificationsInitialized=false,lastIncomingCount=0,notificationAudio=null,directMessageNotificationAudio=null;
 function notificationsEnabled(){try{return localStorage.getItem('meshcore-message-notifications')!=='off'}catch(error){return true}}
@@ -4621,26 +4606,6 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <div id="installed-models-list" class="installed-models-list"><p class="map-empty">Loading models...</p></div>
 <p id="ollama-model-status" class="preferences-status" aria-live="polite"></p>
 </div>
-<div class="settings-item settings-item-full">
-<label for="ollama-download-input">Download new model</label>
-<div class="download-control">
-<input id="ollama-download-input" placeholder="e.g. qwen2.5:0.5b or llama3.2:1b">
-<button type="button" id="ollama-download-button" onclick="downloadOllamaModel()">Download</button>
-</div>
-<div class="model-preset-row">
-<span>Presets:</span>
-<button type="button" class="preset-btn" onclick="setDownloadModel('qwen2.5:0.5b')">qwen2.5:0.5b (~400 MB)</button>
-<button type="button" class="preset-btn" onclick="setDownloadModel('llama3.2:1b')">llama3.2:1b (~1.3 GB)</button>
-<button type="button" class="preset-btn" onclick="setDownloadModel('llama3.2:3b')">llama3.2:3b (~2.0 GB)</button>
-<button type="button" class="preset-btn" onclick="setDownloadModel('phi3:mini')">phi3:mini (~2.2 GB)</button>
-</div>
-<p class="settings-description">Enter any Ollama model name or select a preset to pull it from the Ollama library.</p>
-<div id="ollama-download-progress" class="ollama-download-progress" hidden aria-live="polite">
-<p id="ollama-download-phase">Preparing download...</p>
-<progress id="ollama-download-progress-bar" max="100"></progress>
-<p id="ollama-download-detail"></p>
-</div>
-</div>
 </div>
 <form class="settings-grid" style="margin-top:16px" onsubmit="saveOllamaSettings(event)">
 <div class="settings-item"><label><input type="checkbox" id="ollama-schedule-enabled"> Schedule on/off automatically</label><p class="settings-description">Turns Ollama on at the start time and off at the end time every day, to lower power use.</p></div>
@@ -4843,6 +4808,20 @@ installButtons();
 (function(){
 const overlay=document.getElementById('msg-actions'),sheet=document.getElementById('msg-sheet');
 const ICONS={copy:'<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/>',reply:'<path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 6 6v3"/>',path:'<circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M6 16V8a2 2 0 0 1 2-2h8M18 8v8"/>',user:'<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',signal:'<path d="M3 12h4l3-8 4 16 3-8h4"/>',block:'<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>',map:'<path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/>',trash:'<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>'};
+let messageHold=null;
+function cancelMessageHold(){if(messageHold){clearTimeout(messageHold.timer);messageHold=null}}
+document.addEventListener('pointerdown',event=>{
+    if(!event.isPrimary||event.button!==0)return;
+    let item=event.target.closest('.chat-message');
+    if(!item)return;
+    cancelMessageHold();
+    let hold={pointerId:event.pointerId,x:event.clientX,y:event.clientY};
+    hold.timer=setTimeout(()=>{if(item.isConnected)item.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:hold.x,clientY:hold.y}));messageHold=null},500);
+    messageHold=hold;
+});
+document.addEventListener('pointermove',event=>{if(messageHold&&event.pointerId===messageHold.pointerId&&Math.hypot(event.clientX-messageHold.x,event.clientY-messageHold.y)>10)cancelMessageHold()});
+document.addEventListener('pointerup',event=>{if(messageHold&&event.pointerId===messageHold.pointerId)cancelMessageHold()});
+document.addEventListener('pointercancel',event=>{if(messageHold&&event.pointerId===messageHold.pointerId)cancelMessageHold()});
 function close(){overlay.classList.remove('open')}
 overlay.addEventListener('click',event=>{if(event.target===overlay)close()});
 document.addEventListener('keydown',event=>{if(event.key==='Escape')close()});
@@ -4899,7 +4878,7 @@ window.openMessageActions=function(type,id,message,sender,blocked,nodePeer){
   }
   if(!isRepeater){
     if(!nodeMode&&!incoming)sheet.append(action('Heard Repeaters','path',()=>showPaths(message,'')));
-    sheet.append(action('Node Telemetry','signal',()=>{,'signal',()=>{      if(!knownPeer){showToast('Telemetry','Add this sender as a contact first.');return}
+    sheet.append(action('Node Telemetry','signal',()=>{if(!knownPeer){showToast('Telemetry','Add this sender as a contact first.');return}
       sheet.querySelector('.sheet-paths')?.remove();let box=document.createElement('div');box.className='sheet-paths';let list=document.createElement('dl');list.className='peer-inline-detail';box.append(list);sheet.append(box);renderPeerDetails(String(knownPeer.id),list)}));
   if(knownPeer){
     sheet.append(action('View on Map','map',()=>{let lat=Number(knownPeer.latitude),lon=Number(knownPeer.longitude);if(!Number.isFinite(lat)||!Number.isFinite(lon)||(lat===0&&lon===0)){showToast('No location',(knownPeer.name||'This node')+' has not reported a location.');return}close();focusMapPoint(lat,lon);setTimeout(()=>{if(dashboardMap)dashboardMap.invalidateSize();focusMapPoint(lat,lon)},250)}));
@@ -6761,7 +6740,7 @@ async def on_cleanup(app):
 
 
 AUTH_PATH = CONFIG_DIR / "meshcore-ollama-bot" / "dashboard_auth.json"
-DEFAULT_DASHBOARD_PASSWORD = "orange pi"
+DEFAULT_DASHBOARD_PASSWORD = "orangepi"
 AUTH_COOKIE = "madhat_session"
 AUTH_SESSION_SECONDS = 30 * 24 * 3600
 AUTH_PUBLIC_PATHS = {"/login", "/api/login", "/api/forgot", "/api/reset"}
