@@ -3591,6 +3591,9 @@ async def connect_hardware():
                             meshcore_instance = await MeshCore.create_ble(app_state["ble_mac"], pin=ble_pin)
                     except Exception as e:
                         log_to_dash(f"BLE connection error: {type(e).__name__}: {e}")
+                        underlying = e.__cause__ or (None if e.__suppress_context__ else e.__context__)
+                        if underlying is not None:
+                            log_to_dash(f"Underlying BLE error: {type(underlying).__name__}: {underlying}")
                         meshcore_instance = None
                 else:
                     log_to_dash(f"Connecting via serial to {app_state['serial_port']}...")
@@ -3601,7 +3604,7 @@ async def connect_hardware():
 
                 if attempt < HARDWARE_CONNECT_ATTEMPTS:
                     log_to_dash(
-                        f"No response from device (attempt {attempt}/{HARDWARE_CONNECT_ATTEMPTS}); "
+                        f"Connection attempt {attempt}/{HARDWARE_CONNECT_ATTEMPTS} failed; "
                         f"retrying in {HARDWARE_CONNECT_RETRY_DELAY_SECONDS}s..."
                     )
                     await asyncio.sleep(HARDWARE_CONNECT_RETRY_DELAY_SECONDS)

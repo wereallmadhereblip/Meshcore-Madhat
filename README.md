@@ -110,7 +110,17 @@ bluetoothctl power on
 
 - Confirm the MeshCore device is powered on and discoverable.
 - Check that the MAC address entered in the app is correct.
-- If the device is paired but still not connecting, try removing it from the OS Bluetooth list and reconnecting.
+- Disconnect other apps or hosts that may already be connected to the radio, then restart the radio and retry.
+- Check the adapter, device and Bluetooth service logs on the host running the dashboard (replace the address):
+
+```bash
+bluetoothctl show
+bluetoothctl info AA:BB:CC:DD:EE:FF
+journalctl -u bluetooth --since "10 minutes ago" --no-pager
+```
+
+- `Underlying BLE error` in the dashboard, when present, may reveal an error hidden by a subsequent library cleanup failure. Contact retrieval timeouts can also occur when the link drops; they do not by themselves establish why it dropped.
+- If pairing is stale, stop the dashboard or disable auto-reconnect, remove the device with `bluetoothctl remove AA:BB:CC:DD:EE:FF`, and reconnect using its PIN. Removing it deletes the host's pairing information.
 
 ### Serial connection fails
 
