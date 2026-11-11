@@ -1053,6 +1053,7 @@ async def ollama_schedule_loop():
 async def get_contacts_snapshot(instance):
     events = asyncio.Queue()
     subscriptions = []
+    received_contacts = set()
     try:
         for event_type in (EventType.NEXT_CONTACT, EventType.CONTACTS, EventType.ERROR):
             subscriptions.append(instance.subscribe(event_type, events.put_nowait))
@@ -1063,9 +1064,17 @@ async def get_contacts_snapshot(instance):
             try:
                 event = await asyncio.wait_for(events.get(), timeout=min(20, max(0, deadline - loop.time())))
             except asyncio.TimeoutError:
-                raise TimeoutError("contact list did not finish before the timeout") from None
+                raise TimeoutError(
+                    f"contact list timed out after receiving {len(received_contacts)} contacts"
+                ) from None
             if event.type == EventType.CONTACTS:
                 return normalize_entries(event.payload)
+            if event.type == EventType.NEXT_CONTACT and isinstance(event.payload, dict):
+                public_key = event.payload.get("public_key")
+                if public_key:
+                    received_contacts.add(str(public_key))
+                    if instance is meshcore_instance and app_state["is_connected"]:
+                        app_state["contacts"][str(public_key)] = event.payload
             if event.type == EventType.ERROR:
                 raise RuntimeError(str(event.payload))
     finally:
@@ -5598,17 +5607,10 @@ async def peer_telemetry_handler(request):
     if not node_id:
         return web.json_response({"error": "A node ID is required"}, status=400)
 
-    await refresh_contacts()
-    entry = app_state["contacts"].get(node_id)
+    entry = app_state["contacts"].get(resolve_contact_id(node_id))
     if entry is None:
-        entry = next(
-            (
-                contact for contact in app_state["contacts"].values()
-                if isinstance(contact, dict)
-                and contact.get("public_key", "").startswith(node_id)
-            ),
-            None,
-        )
+        await refresh_contacts()
+        entry = app_state["contacts"].get(resolve_contact_id(node_id))
     contact = entry.get("contact", entry) if isinstance(entry, dict) else None
     if not isinstance(contact, dict) or not contact.get("public_key"):
         return web.json_response({"error": "Peer is not in the contact list"}, status=404)
