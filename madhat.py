@@ -1050,20 +1050,35 @@ async def ollama_schedule_loop():
 
 
 
+async def get_contacts_snapshot(instance):
+    events = asyncio.Queue()
+    subscriptions = []
+    try:
+        for event_type in (EventType.NEXT_CONTACT, EventType.CONTACTS, EventType.ERROR):
+            subscriptions.append(instance.subscribe(event_type, events.put_nowait))
+        await instance.commands.get_contacts_async()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 180
+        while True:
+            try:
+                event = await asyncio.wait_for(events.get(), timeout=min(20, max(0, deadline - loop.time())))
+            except asyncio.TimeoutError:
+                raise TimeoutError("contact list did not finish before the timeout") from None
+            if event.type == EventType.CONTACTS:
+                return normalize_entries(event.payload)
+            if event.type == EventType.ERROR:
+                raise RuntimeError(str(event.payload))
+    finally:
+        for subscription in subscriptions:
+            subscription.unsubscribe()
+
+
 async def refresh_contacts():
     if not meshcore_instance or not app_state["is_connected"]:
         return
     try:
         async with paced_hardware_lock():
-            # Streaming a full contact list over BLE can take much longer
-            # than the library's 5s default, especially with many peers.
-            result = await meshcore_instance.commands.get_contacts(timeout=20)
-        if result.type != EventType.ERROR:
-            app_state["contacts"] = normalize_entries(result.payload)
-        else:
-            # Silent failures here previously left the dashboard showing an
-            # empty node list with no indication the fetch ever ran.
-            log_to_dash(f"Failed to fetch nodes: {result.payload}")
+            app_state["contacts"] = await get_contacts_snapshot(meshcore_instance)
     except Exception as error:
         log_to_dash(f"Failed to fetch nodes: {error}")
 
@@ -6479,10 +6494,8 @@ async def device_action_handler(request):
                     count += 1
                 return web.json_response({"message": f"Reset paths for {count} contacts."})
             elif action == "refresh_contacts":
-                result = await commands.get_contacts(timeout=20)
-                if result.type != EventType.ERROR:
-                    app_state["contacts"] = normalize_entries(result.payload)
-                    return web.json_response({"message": f"Loaded {len(app_state['contacts'])} contacts."})
+                app_state["contacts"] = await get_contacts_snapshot(meshcore_instance)
+                return web.json_response({"message": f"Loaded {len(app_state['contacts'])} contacts."})
             else:
                 return web.json_response({"error": "Unknown device action"}, status=400)
         if result.type == EventType.ERROR:
