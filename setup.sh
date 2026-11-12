@@ -342,5 +342,13 @@ else
   fastfetch
 fi
 
+echo ""
 echo "Starting the MeshCore AI Bot Dashboard..."
-exec "$APP_DIR/.venv/bin/python" "$APP_DIR/madhat.py"
+echo "======== Running on http://0.0.0.0:8080 ========"
+echo ""
+
+# Start the dashboard in the background
+nohup "$APP_DIR/.venv/bin/python" "$APP_DIR/madhat.py" >/tmp/madhat.log 2>&1 &
+
+echo "Dashboard started in background. Check logs with: tail -f /tmp/madhat.log"
+exit 0
