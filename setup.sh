@@ -5,11 +5,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$SCRIPT_DIR"
 DESKTOP_DIR="$HOME/Desktop"
 
-# Detect if running on a headless SBC (Single Board Computer)
+# Detect if running on a headless SBC (Single Board Computer) or server OS
 detect_headless_sbc() {
   # Check for common SBC indicators
   local is_sbc=false
   local has_display=false
+  local is_server_os=false
 
   # Detect common SBC boards
   if [ -f /proc/device-tree/model ]; then
@@ -25,8 +26,13 @@ detect_headless_sbc() {
     has_display=true
   fi
 
-  # Return 0 (true) if it's an SBC without a display
-  if [[ "$is_sbc" == true ]] && [[ "$has_display" == false ]]; then
+  # Detect server OS (no desktop environment installed)
+  if ! command -v startx >/dev/null 2>&1 && ! command -v startxfce4 >/dev/null 2>&1; then
+    is_server_os=true
+  fi
+
+  # Return 0 (true) if it's headless (SBC without display or server OS)
+  if ([[ "$is_sbc" == true ]] && [[ "$has_display" == false ]]) || [[ "$is_server_os" == true ]]; then
     return 0
   fi
   return 1
@@ -161,37 +167,51 @@ EOF
 }
 
 sudo apt update
-sudo apt install -y git python3 python3-venv python3-pip python3-dev build-essential \
-  libffi-dev libssl-dev pkg-config curl bluez rfkill fastfetch whiptail zstd \
-  tightvncserver novnc websockify xfce4 dbus-x11 openssl
 
-mkdir -p "$HOME/.vnc"
-if [[ ! -f "$HOME/.vnc/xstartup" ]]; then
-  cat > "$HOME/.vnc/xstartup" <<'EOF'
+# Determine if headless/server installation
+if detect_headless_sbc; then
+  echo "[!] Headless/Server OS detected. Skipping desktop and VNC packages."
+  sudo apt install -y git python3 python3-venv python3-pip python3-dev build-essential \
+    libffi-dev libssl-dev pkg-config curl bluez rfkill fastfetch whiptail zstd openssl
+  IS_HEADLESS=true
+else
+  echo "[+] Desktop environment detected. Installing desktop and VNC packages."
+  sudo apt install -y git python3 python3-venv python3-pip python3-dev build-essential \
+    libffi-dev libssl-dev pkg-config curl bluez rfkill fastfetch whiptail zstd \
+    tightvncserver novnc websockify xfce4 dbus-x11 openssl
+  IS_HEADLESS=false
+fi
+
+# Only configure VNC on non-headless systems
+if [[ "$IS_HEADLESS" != true ]]; then
+  mkdir -p "$HOME/.vnc"
+  if [[ ! -f "$HOME/.vnc/xstartup" ]]; then
+    cat > "$HOME/.vnc/xstartup" <<'EOF'
 #!/bin/sh
 unset SESSION_MANAGER
 unset DBUS_SESSION_BUS_ADDRESS
 exec startxfce4
 EOF
-fi
-chmod +x "$HOME/.vnc/xstartup"
+  fi
+  chmod +x "$HOME/.vnc/xstartup"
 
-if [[ ! -f "$HOME/novnc.pem" ]]; then
-  openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-    -keyout "$HOME/novnc.pem" -out "$HOME/novnc.pem" \
-    -subj "/CN=$(hostname)"
-fi
-chmod 600 "$HOME/novnc.pem"
+  if [[ ! -f "$HOME/novnc.pem" ]]; then
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+      -keyout "$HOME/novnc.pem" -out "$HOME/novnc.pem" \
+      -subj "/CN=$(hostname)"
+  fi
+  chmod 600 "$HOME/novnc.pem"
 
-if [[ ! -f "$HOME/.vnc/passwd" ]]; then
-  if [[ -t 0 ]]; then
-    echo "Set the password used to connect to TightVNC:"
-    vncpasswd
-  elif ( : < /dev/tty > /dev/tty ) 2>/dev/null; then
-    echo "Set the password used to connect to TightVNC:"
-    vncpasswd < /dev/tty > /dev/tty
-  else
-    echo "No VNC password is configured. Run 'vncpasswd' before using /tightvnc on." >&2
+  if [[ ! -f "$HOME/.vnc/passwd" ]]; then
+    if [[ -t 0 ]]; then
+      echo "Set the password used to connect to TightVNC:"
+      vncpasswd
+    elif ( : < /dev/tty > /dev/tty ) 2>/dev/null; then
+      echo "Set the password used to connect to TightVNC:"
+      vncpasswd < /dev/tty > /dev/tty
+    else
+      echo "No VNC password is configured. Run 'vncpasswd' before using /tightvnc on." >&2
+    fi
   fi
 fi
 
@@ -307,7 +327,7 @@ fi
   || echo "Could not enable start at boot; enable it later in the dashboard settings." >&2
 
 echo "Setup complete."
-if [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
+if [[ "$IS_HEADLESS" != true ]] && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
   mkdir -p "$DESKTOP_DIR"
   cat > "$DESKTOP_DIR/MeshCore AI Bot Dashboard.desktop" <<EOF
 [Desktop Entry]

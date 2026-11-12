@@ -69,6 +69,22 @@ ADMIN_KEY_PATTERN = re.compile(r"^[0-9a-fA-F]{6,64}$")
 TIME_OF_DAY_PATTERN = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
 
+def is_headless_system():
+    """Detect if running on a headless/server OS without desktop environment."""
+    # Check for display environment
+    if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+        return False
+    
+    # Check if desktop environment commands exist
+    if not os.path.exists("/usr/bin/startx") and not os.path.exists("/usr/bin/startxfce4"):
+        return True
+    
+    return False
+
+
+HEADLESS_MODE = is_headless_system()
+
+
 def should_auto_open_browser():
     default = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
     try:
@@ -1615,13 +1631,18 @@ def update_greeting_setting_from_message(prompt, channel_id=None):
     return "New-user greetings are off."
 
 
-HELP_TEXT = (
-    "Commands: /help, /help settings, /clearmemory, /settings (show), /settings <name> <value>, /systerminal <command>, /restart, /update, /syssleep, /syswakeup, /syswifi status|on|off|scan|connect <SSID> [password]|disconnect|ap [off], /reboot, /sysreboot, /sysshutdown, /tightvnc start|off|restart, /power, /fastfetch, "
-    "wx <zip>, wx weekly <zip>, wx local, "
-    "/greet on|off (in a channel), /bot <question> (in a channel). "
-    "/systerminal supports cd, ls, cat, rm, and mv; command working directory is remembered per admin. "
-    "System commands work in direct messages from admins only."
-)
+def build_help_text():
+    tightvnc_part = "" if HEADLESS_MODE else "/tightvnc start|off|restart, "
+    return (
+        f"Commands: /help, /help settings, /clearmemory, /settings (show), /settings <name> <value>, /systerminal <command>, /restart, /update, /syssleep, /syswakeup, /syswifi status|on|off|scan|connect <SSID> [password]|disconnect|ap [off], /reboot, /sysreboot, /sysshutdown, {tightvnc_part}/power, /fastfetch, "
+        "wx <zip>, wx weekly <zip>, wx local, "
+        "/greet on|off (in a channel), /bot <question> (in a channel). "
+        "/systerminal supports cd, ls, cat, rm, and mv; command working directory is remembered per admin. "
+        "System commands work in direct messages from admins only."
+    )
+
+
+HELP_TEXT = build_help_text()
 SETTINGS_HELP_TEXT = (
     "/settings names - App: name, personality, length (short|medium|long), model, "
     "theme, autoupdate on|off, city, state, schedule on|off, start HH:MM, end HH:MM. "
@@ -2036,11 +2057,11 @@ def local_ip_addresses():
 
 def wifi_ap_instructions(ip_address="10.42.0.1"):
     user = getpass.getuser()
+    vnc_line = "" if HEADLESS_MODE else f"\n3. VNC: /tightvnc start, then https://{ip_address}:6080/vnc.html"
     return (
         f"Access point {WIFI_AP_SSID} started (password {WIFI_AP_PASSWORD}).\n"
         f"1. Join that Wi-Fi.\n"
-        f"2. SSH: ssh {user}@{ip_address}\n"
-        f"3. VNC: /tightvnc start, then https://{ip_address}:6080/vnc.html"
+        f"2. SSH: ssh {user}@{ip_address}{vnc_line}"
     )
 
 
@@ -2277,6 +2298,8 @@ async def run_system_terminal_command(command, sender_id="default"):
         system_terminal_directories[sender_key] = target
         return f"Directory: {target}"
     if Path(arguments[0]).name.lower() in {"nano", "vi", "vim", "nvim"}:
+        if HEADLESS_MODE:
+            return "Interactive editors like nano need a terminal, which is not available on headless systems."
         return "Interactive editors like nano need a terminal. Use /tightvnc start, then open the Pi desktop in a browser."
     try:
         process = await asyncio.create_subprocess_exec(
@@ -2459,6 +2482,8 @@ async def handle_slash_command(sender_id, prompt, allow_settings):
         asyncio.create_task(shutdown_system())
         return "Shutting down the host in a few seconds."
     if command == "tightvnc":
+        if HEADLESS_MODE:
+            return "Remote desktop is not available on headless/server systems."
         if not is_settings_admin(sender_id):
             log_to_dash(f"Rejected /tightvnc from non-admin {sender_id}")
             return f"Not allowed. Add \"{str(sender_id)[:12]}\" to bot.admins in config.json."
@@ -3513,11 +3538,15 @@ async def update_autostart_handler(request):
 
 
 async def tightvnc_handler(request):
+    if HEADLESS_MODE:
+        return web.json_response({"error": "Remote desktop is not available on headless systems"}, status=403)
     status = await asyncio.to_thread(tightvnc_status)
     return web.json_response(status)
 
 
 async def update_tightvnc_handler(request):
+    if HEADLESS_MODE:
+        return web.json_response({"error": "Remote desktop is not available on headless systems"}, status=403)
     try:
         payload = await request.json()
     except json.JSONDecodeError:
