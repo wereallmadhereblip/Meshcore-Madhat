@@ -5,6 +5,134 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$SCRIPT_DIR"
 DESKTOP_DIR="$HOME/Desktop"
 
+# Detect OS and board type
+detect_board_and_os() {
+  local board_name=""
+  local os_name=""
+  local os_version=""
+
+  # Try to detect Orange Pi Zero 4
+  if [ -f /proc/device-tree/model ]; then
+    board_name=$(cat /proc/device-tree/model 2>/dev/null || echo "")
+  fi
+
+  # Detect Debian version
+  if [ -f /etc/os-release ]; then
+    os_name=$(grep '^NAME=' /etc/os-release | cut -d'"' -f2)
+    os_version=$(grep '^VERSION_CODENAME=' /etc/os-release | cut -d'=' -f2)
+  fi
+
+  echo "Board: $board_name | OS: $os_name | Version: $os_version"
+
+  # Check if Orange Pi Zero 4 with Debian Trixie
+  if [[ "$board_name" == *"Orange Pi Zero 4"* ]] && [[ "$os_version" == "trixie" ]]; then
+    return 0
+  fi
+  return 1
+}
+
+# AIC8800 Bluetooth fix for Orange Pi Zero 4
+fix_aic8800_bluetooth() {
+  echo "=========================================================="
+  echo "  AIC8800 Bluetooth Permanent Fix for Orange Pi Zero 4   "
+  echo "=========================================================="
+
+  FW_DIR="/lib/firmware/aic8800d80"
+  COMBO_FW="fmacfwbt_8800d80_u02.bin"
+  TARGET_FW="fmacfw_8800d80_u02.bin"
+  USER_CONF="aic_userconfig_8800d80.txt"
+  HW_CONF="aichw.conf"
+  ENV_FILE="/etc/environment"
+  SERVICE_PATH="/etc/systemd/system/aic-bluetooth.service"
+
+  # 1. Firmware & Hardware Config
+  echo "[1/6] Setting up AIC8800 firmware & configs..."
+  if [ -d "$FW_DIR" ]; then
+    cd "$FW_DIR"
+    if [ -f "$TARGET_FW" ] && [ ! -f "${TARGET_FW}.bak" ]; then
+      cp -f "$TARGET_FW" "${TARGET_FW}.bak"
+    fi
+    if [ -f "$COMBO_FW" ]; then
+      cp -f "$COMBO_FW" "$TARGET_FW"
+      echo "  [+] Active firmware set to combo BT+Wi-Fi binary."
+    fi
+    if [ -f "$USER_CONF" ]; then
+      cp -f "$USER_CONF" "$HW_CONF"
+      echo "  [+] Generated $HW_CONF from user config."
+    fi
+  fi
+
+  # 2. Kernel Module Configuration
+  echo "[2/6] Writing module parameters to /etc/modprobe.d/aic8800.conf..."
+  sudo cat << 'EOF' > /etc/modprobe.d/aic8800.conf
+options aic8800_fdrv testmode=0
+options aic8800_bsp btmode=1
+EOF
+
+  # 3. Systemd Auto-Attach Service
+  echo "[3/6] Installing persistent aic-bluetooth.service..."
+  sudo cat << 'EOF' > "$SERVICE_PATH"
+[Unit]
+Description=AIC8800 Bluetooth UART Initialization & Wake Service
+After=syslog.target network.target bluetooth.service
+Before=bluetooth.target
+
+[Service]
+Type=forking
+ExecStartPre=/usr/sbin/rfkill unblock bluetooth
+ExecStartPre=/bin/sh -c 'echo 1 > /proc/bluetooth/sleep/btwrite 2>/dev/null || true'
+ExecStart=/usr/bin/hciattach -s 1500000 /dev/ttyS1 any 1500000 flow nosleep
+ExecStartPost=/bin/sleep 2
+ExecStartPost=/bin/sh -c '/usr/bin/hciconfig hci1 up 2>/dev/null || /usr/bin/hciconfig hci0 up 2>/dev/null || true'
+ExecStartPost=/bin/sh -c '/usr/bin/bluetoothctl power on || true'
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  sudo chmod 644 "$SERVICE_PATH"
+  sudo systemctl daemon-reload
+  sudo systemctl enable aic-bluetooth.service
+  echo "  [+] Enabled aic-bluetooth.service."
+
+  # 4. Global Environment Variable for Bleak
+  echo "[4/6] Exporting BLEAK_ADAPTER=hci1 to /etc/environment..."
+  if ! sudo grep -q "BLEAK_ADAPTER" "$ENV_FILE" 2>/dev/null; then
+    echo 'BLEAK_ADAPTER="hci1"' | sudo tee -a "$ENV_FILE" > /dev/null
+  else
+    sudo sed -i 's/BLEAK_ADAPTER=.*/BLEAK_ADAPTER="hci1"/' "$ENV_FILE"
+  fi
+
+  # 5. Inject into Application Services
+  echo "[5/6] Patching systemd services with BLEAK_ADAPTER..."
+  for s in $(find /etc/systemd/system -name "*meshcore*" -o -name "*madhat*" 2>/dev/null); do
+    if [ -f "$s" ] && ! sudo grep -q "BLEAK_ADAPTER" "$s"; then
+      sudo sed -i '/\[Service\]/a Environment="BLEAK_ADAPTER=hci1"' "$s"
+      echo "  [+] Patched $s"
+    fi
+  done
+
+  # 6. Apply Live Settings
+  echo "[6/6] Initializing Bluetooth interfaces..."
+  sudo systemctl stop aic-bluetooth.service 2>/dev/null || true
+  sudo killall -9 hciattach 2>/dev/null || true
+  sudo rfkill unblock bluetooth 2>/dev/null || true
+  echo 1 | sudo tee /proc/bluetooth/sleep/btwrite 2>/dev/null || true
+
+  sudo systemctl start aic-bluetooth.service || true
+  sleep 2
+
+  sudo hciconfig hci1 up 2>/dev/null || true
+  sudo bluetoothctl select hci1 2>/dev/null || true
+  sudo bluetoothctl power on 2>/dev/null || true
+
+  echo "=========================================================="
+  echo "Done! Run 'hciconfig -a' or 'bluetoothctl show' to verify."
+  echo "=========================================================="
+}
+
 sudo apt update
 sudo apt install -y git python3 python3-venv python3-pip python3-dev build-essential \
   libffi-dev libssl-dev pkg-config curl bluez rfkill fastfetch whiptail zstd \
@@ -48,6 +176,18 @@ fi
 sudo systemctl enable --now bluetooth
 sudo rfkill unblock bluetooth || true
 
+# Detect and apply OS-specific fixes
+echo ""
+echo "Detecting board and OS configuration..."
+if detect_board_and_os; then
+  echo "[+] Detected Orange Pi Zero 4 with Debian Trixie. Applying AIC8800 Bluetooth fix..."
+  fix_aic8800_bluetooth
+  echo ""
+else
+  echo "[-] Standard board configuration detected."
+fi
+echo ""
+
 python3 -m venv "$APP_DIR/.venv"
 "$APP_DIR/.venv/bin/python" -m pip install --upgrade pip
 "$APP_DIR/.venv/bin/python" -m pip install -r "$APP_DIR/requirements.txt"
@@ -77,65 +217,9 @@ if [[ "$ollama_ready" != true ]]; then
   exit 1
 fi
 
-model_choice="1"
-if [[ "$(dpkg --print-architecture)" == "arm64" ]]; then
-  model_choice="2"
-fi
-if [[ -n "${OLLAMA_MODEL:-}" ]]; then
-  case "$OLLAMA_MODEL" in
-    llama3.2:1b) model_choice="1" ;;
-    qwen2.5:0.5b) model_choice="2" ;;
-    llama3.2:3b) model_choice="3" ;;
-    *) echo "Unsupported OLLAMA_MODEL: $OLLAMA_MODEL" >&2; exit 1 ;;
-  esac
-elif [ -t 0 ] || [ -e /dev/tty ]; then
-  if command -v whiptail >/dev/null 2>&1; then
-    model_choice=$(whiptail --title "MeshCore AI Bot - Model Selection" \
-      --default-item "$model_choice" \
-      --menu "Choose an Ollama model to install:\n(Option 2 is recommended on low-memory ARM boards)" \
-      14 72 3 \
-      "1" "llama3.2:1b  (~1.3 GB)" \
-      "2" "qwen2.5:0.5b (~400 MB - low memory)" \
-      "3" "llama3.2:3b  (~2.0 GB - needs 4 GB+ RAM)" \
-      3>&1 1>&2 2>&3 < /dev/tty) || model_choice="$model_choice"
-  elif command -v dialog >/dev/null 2>&1; then
-    model_choice=$(dialog --clear --title "MeshCore AI Bot - Model Selection" \
-      --default-item "$model_choice" \
-      --menu "Choose an Ollama model to install:\n(Option 2 is recommended on low-memory ARM boards)" \
-      14 72 3 \
-      "1" "llama3.2:1b  (~1.3 GB)" \
-      "2" "qwen2.5:0.5b (~400 MB - low memory)" \
-      "3" "llama3.2:3b  (~2.0 GB - needs 4 GB+ RAM)" \
-      3>&1 1>&2 2>&3 < /dev/tty) || model_choice="$model_choice"
-  else
-    echo ""
-    echo "Select the Ollama model to download:"
-    echo "  1) llama3.2:1b  (~1.3 GB)"
-    echo "  2) qwen2.5:0.5b (~400 MB - low memory)"
-    echo "  3) llama3.2:3b  (~2.0 GB - needs 4 GB+ RAM)"
-    read -rp "Enter choice [1-3] (default: $model_choice): " selected_choice < /dev/tty || true
-    model_choice="${selected_choice:-$model_choice}"
-  fi
-fi
-
-SELECTED_MODEL="llama3.2:1b"
-case "$model_choice" in
-  2)
-    echo "Pulling qwen2.5:0.5b..."
-    ollama pull qwen2.5:0.5b
-    SELECTED_MODEL="qwen2.5:0.5b"
-    ;;
-  3)
-    echo "Pulling llama3.2:3b..."
-    ollama pull llama3.2:3b
-    SELECTED_MODEL="llama3.2:3b"
-    ;;
-  *)
-    echo "Pulling llama3.2:1b..."
-    ollama pull llama3.2:1b
-    SELECTED_MODEL="llama3.2:1b"
-    ;;
-esac
+echo "Installing llama3.2:1b-instruct-q4_K_M..."
+ollama pull llama3.2:1b-instruct-q4_K_M
+SELECTED_MODEL="llama3.2:1b-instruct-q4_K_M"
 
 browser_choice="2"
 if [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
@@ -180,8 +264,8 @@ except (OSError, json.JSONDecodeError): pass
 d["auto_open_browser"] = os.environ["AUTO_OPEN_BROWSER"] == "true"; p.write_text(json.dumps(d, indent=2) + "\n")'
 
 # Keep an existing non-default model choice intact; update only the shipped default.
-if [[ -f "$SCRIPT_DIR/config.json" && "$SELECTED_MODEL" != "llama3.2:1b" ]]; then
-  APP_DIR="$APP_DIR" SELECTED_MODEL="$SELECTED_MODEL" python3 -c 'import json, os; from pathlib import Path; p=Path(os.environ["APP_DIR"])/"config.json"; c=json.loads(p.read_text()); c["model"] = os.environ["SELECTED_MODEL"] if c.get("model") == "llama3.2:1b" else c.get("model", "llama3.2:1b"); p.write_text(json.dumps(c, indent=2) + "\n")'
+if [[ -f "$SCRIPT_DIR/config.json" && "$SELECTED_MODEL" != "llama3.2:1b-instruct-q4_K_M" ]]; then
+  APP_DIR="$APP_DIR" SELECTED_MODEL="$SELECTED_MODEL" python3 -c 'import json, os; from pathlib import Path; p=Path(os.environ["APP_DIR"])/"config.json"; c=json.loads(p.read_text()); c["model"] = os.environ["SELECTED_MODEL"] if c.get("model") == "llama3.2:1b-instruct-q4_K_M" else c.get("model", "llama3.2:1b-instruct-q4_K_M"); p.write_text(json.dumps(c, indent=2) + "\n")'
 fi
 
 # Start the dashboard at boot via a systemd user service (can be turned off in app settings).

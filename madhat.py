@@ -1050,6 +1050,12 @@ async def ollama_schedule_loop():
 
 
 
+class ContactRetrievalError(RuntimeError):
+    def __init__(self, payload):
+        super().__init__(str(payload))
+        self.payload = payload
+
+
 async def get_contacts_snapshot(instance):
     events = asyncio.Queue()
     subscriptions = []
@@ -1076,7 +1082,7 @@ async def get_contacts_snapshot(instance):
                     if instance is meshcore_instance and app_state["is_connected"]:
                         app_state["contacts"][str(public_key)] = event.payload
             if event.type == EventType.ERROR:
-                raise RuntimeError(str(event.payload))
+                raise ContactRetrievalError(event.payload)
     finally:
         for subscription in subscriptions:
             subscription.unsubscribe()
@@ -1085,11 +1091,30 @@ async def get_contacts_snapshot(instance):
 async def refresh_contacts():
     if not meshcore_instance or not app_state["is_connected"]:
         return
-    try:
-        async with paced_hardware_lock():
-            app_state["contacts"] = await get_contacts_snapshot(meshcore_instance)
-    except Exception as error:
-        log_to_dash(f"Failed to fetch nodes: {error}")
+    instance = meshcore_instance
+    for attempt in range(3):
+        if instance is not meshcore_instance or not app_state["is_connected"]:
+            return
+        try:
+            async with paced_hardware_lock():
+                contacts = await get_contacts_snapshot(instance)
+            if instance is meshcore_instance and app_state["is_connected"]:
+                app_state["contacts"] = contacts
+            return
+        except ContactRetrievalError as error:
+            payload = error.payload
+            busy = isinstance(payload, dict) and (
+                payload.get("error_code") == 4 or payload.get("code_string") == "ERR_CODE_BAD_STATE"
+            )
+            if busy and attempt < 2 and instance is meshcore_instance and app_state["is_connected"]:
+                log_to_dash("Radio busy while fetching nodes; retrying in 3s...")
+                await asyncio.sleep(3)
+                continue
+            log_to_dash(f"Failed to fetch nodes: {error}")
+            return
+        except Exception as error:
+            log_to_dash(f"Failed to fetch nodes: {error}")
+            return
 
 
 def is_private_mesh_channel(channel_name, channel_secret):
@@ -1120,20 +1145,36 @@ async def refresh_device_limits():
         log_to_dash(f"Could not read device limits: {error}")
 
 
-async def refresh_channels():
+async def refresh_channels(saved_only=False):
     if not meshcore_instance or not app_state["is_connected"]:
         return
 
-    commands = meshcore_instance.commands
+    instance = meshcore_instance
+    commands = instance.commands
 
     getter = getattr(commands, "get_channel", None)
     if getter is None:
         return
 
-    channels = {}
+    channels = dict(app_state["channels"]) if saved_only else {}
     seen_channels = set()
     try:
-        for channel_index in range(MAX_CHANNELS):
+        channel_limit = app_state["limits"].get("max_channels")
+        if not isinstance(channel_limit, int) or channel_limit <= 0:
+            channel_limit = MAX_CHANNELS
+        channel_limit = min(channel_limit, MAX_CHANNELS)
+        if saved_only:
+            channel_indices = sorted({
+                entry["channel_idx"] for entry in channels.values()
+                if isinstance(entry, dict)
+                and isinstance(entry.get("channel_idx"), int)
+                and 0 <= entry["channel_idx"] < channel_limit
+            })
+        else:
+            channel_indices = range(channel_limit)
+        for channel_index in channel_indices:
+            if instance is not meshcore_instance or not app_state["is_connected"]:
+                return
             try:
                 # Lock per-channel (not the whole scan) so a long scan of
                 # many empty channels doesn't block message sends for tens
@@ -1151,11 +1192,17 @@ async def refresh_channels():
 
             if result.type == EventType.ERROR or not result.payload:
                 continue
+            if instance is not meshcore_instance or not app_state["is_connected"]:
+                return
 
             raw_channel_name = result.payload.get("channel_name", "")
             if not isinstance(raw_channel_name, str):
                 continue
             channel_name = raw_channel_name.strip()
+            if not channel_name and saved_only:
+                channels.pop(str(channel_index), None)
+                app_state["channels"].pop(str(channel_index), None)
+                continue
             channel_secret = result.payload.get("channel_secret")
             if not isinstance(channel_secret, (bytes, bytearray)):
                 channel_secret = None
@@ -1174,8 +1221,11 @@ async def refresh_channels():
                         raw_channel_name, channel_secret
                     ),
                 }
+                app_state["channels"][str(channel_index)] = channels[str(channel_index)]
 
-        if not channels and app_state["channels"]:
+        if instance is not meshcore_instance or not app_state["is_connected"]:
+            return
+        if not saved_only and not channels and app_state["channels"]:
             # Every channel timed out/errored this pass; keep the last known
             # good list instead of blanking the dashboard on a flaky scan.
             log_to_dash("Channel scan returned nothing; keeping previous channel list.")
@@ -2864,15 +2914,11 @@ async def handle_incoming_message(event):
 
     async with paced_hardware_lock():
         try:
-            contacts = await meshcore_instance.commands.get_contacts()
-            recipient = sender
-            if contacts.type != EventType.ERROR and contacts.payload:
-                recipient = contacts.payload.get(sender, sender)
             for part_number, part in enumerate(reply_parts, start=1):
                 if part_number > 1:
                     await asyncio.sleep(HARDWARE_SEND_INTERVAL)
                 result, pending_delivery, hops = await send_to_target_with_pending_confirmation(
-                    recipient, "node", part
+                    sender, "node", part
                 )
                 if result.type == EventType.ERROR:
                     log_to_dash(
@@ -3013,9 +3059,8 @@ async def handle_advertisement(event):
 
 
 async def handle_new_contact(event):
-    contact = event.payload or {}
-    if contact.get("public_key"):
-        advert_seen_at[str(contact["public_key"])] = int(time.time())
+    contact = event.payload if isinstance(event.payload, dict) else {}
+    await handle_advertisement(event)
     if not meshcore_instance or not app_state["is_connected"]:
         return
     if not app_config["bot"]["greet_new_users"]:
@@ -3658,12 +3703,13 @@ async def connect_hardware():
                 EventType.CHANNEL_MSG_RECV,
                 handle_incoming_channel_message,
             )
+            meshcore_instance.subscribe(EventType.NEW_CONTACT, handle_new_contact)
+            meshcore_instance.subscribe(EventType.ADVERTISEMENT, handle_advertisement)
             app_state["is_connected"] = True
+            app_state["limits"] = {"max_contacts": None, "max_channels": MAX_CHANNELS}
             await refresh_device_limits()
             await refresh_contacts()
             await refresh_channels()
-            meshcore_instance.subscribe(EventType.NEW_CONTACT, handle_new_contact)
-            meshcore_instance.subscribe(EventType.ADVERTISEMENT, handle_advertisement)
             
             # Add device to known_devices list if it was successfully connected
             if app_state["connection_type"] == "bluetooth":
@@ -3692,7 +3738,7 @@ async def telemetry_loop():
                 # entire multi-second scan.
                 await refresh_contacts()
                 await refresh_gateway_telemetry()
-                await refresh_channels()
+                await refresh_channels(saved_only=True)
             await asyncio.sleep(30)
         except asyncio.CancelledError:
             raise
@@ -5796,8 +5842,12 @@ async def add_channel_handler(request):
     except Exception as error:
         return web.json_response({"error": f"Could not add channel: {error}"}, status=500)
 
+    app_state["channels"][str(index)] = {
+        "name": name,
+        "channel_idx": index,
+        "is_private": is_private_mesh_channel(name, secret),
+    }
     log_to_dash(f"Added {kind} channel {name} at slot {index}")
-    await refresh_channels()
     response = {"ok": True, "name": name, "index": index}
     if kind == "private":
         response["secret"] = secret.hex()
@@ -6138,7 +6188,7 @@ async def delete_target_handler(request):
     if target_type == "node":
         await refresh_contacts()
     else:
-        await refresh_channels()
+        app_state["channels"].pop(target, None)
     return web.json_response({"ok": True})
 
 
