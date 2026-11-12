@@ -5,6 +5,33 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$SCRIPT_DIR"
 DESKTOP_DIR="$HOME/Desktop"
 
+# Detect if running on a headless SBC (Single Board Computer)
+detect_headless_sbc() {
+  # Check for common SBC indicators
+  local is_sbc=false
+  local has_display=false
+
+  # Detect common SBC boards
+  if [ -f /proc/device-tree/model ]; then
+    local board=$(cat /proc/device-tree/model 2>/dev/null || echo "")
+    if [[ "$board" == *"Pi"* ]] || [[ "$board" == *"Orange Pi"* ]] || [[ "$board" == *"Banana Pi"* ]] || \
+       [[ "$board" == *"NanoPI"* ]] || [[ "$board" == *"Raspberry"* ]] || [[ "$board" == *"BeagleBone"* ]]; then
+      is_sbc=true
+    fi
+  fi
+
+  # Check for display/desktop environment
+  if [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
+    has_display=true
+  fi
+
+  # Return 0 (true) if it's an SBC without a display
+  if [[ "$is_sbc" == true ]] && [[ "$has_display" == false ]]; then
+    return 0
+  fi
+  return 1
+}
+
 # Detect OS and board type
 detect_board_and_os() {
   local board_name=""
@@ -225,7 +252,12 @@ browser_choice="2"
 if [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
   browser_choice="1"
 fi
-if [ -t 0 ] || [ -e /dev/tty ]; then
+
+# Skip browser prompt on headless SBCs
+if detect_headless_sbc; then
+  echo "[!] Headless SBC detected. Skipping browser auto-open prompt."
+  AUTO_OPEN_BROWSER="false"
+elif [ -t 0 ] || [ -e /dev/tty ]; then
   if command -v whiptail >/dev/null 2>&1; then
     browser_choice=$(whiptail --title "MeshCore AI Bot - Browser" \
       --default-item "$browser_choice" \
@@ -248,10 +280,12 @@ if [ -t 0 ] || [ -e /dev/tty ]; then
       browser_choice="2"
     fi
   fi
-fi
 
-if [[ "$browser_choice" == "1" ]]; then
-  AUTO_OPEN_BROWSER="true"
+  if [[ "$browser_choice" == "1" ]]; then
+    AUTO_OPEN_BROWSER="true"
+  else
+    AUTO_OPEN_BROWSER="false"
+  fi
 else
   AUTO_OPEN_BROWSER="false"
 fi
