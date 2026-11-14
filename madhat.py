@@ -131,6 +131,7 @@ def load_app_config():
         "theme": "midnight",
         "connection": {"type": "serial", "ble_mac": "", "ble_pin": "", "serial_port": DEFAULT_SERIAL_PORT},
         "known_devices": [],
+        "known_device_names": {},
         "weather": {"city": "", "state": ""},
         "bot": {**load_bot_settings(), "greet_new_users": False, "greet_channel": "", "admins": []},
         "ollama": {"schedule_enabled": False, "start_time": "07:00", "end_time": "17:00"},
@@ -169,6 +170,13 @@ def load_app_config():
             dev.strip() for dev in saved_known_devices
             if isinstance(dev, str) and dev.strip()
         ]
+    saved_names = saved_config.get("known_device_names")
+    if isinstance(saved_names, dict):
+        config["known_device_names"] = {
+            address: name.strip()[:120] for address, name in saved_names.items()
+            if isinstance(address, str) and address.strip()
+            and isinstance(name, str) and name.strip()
+        }
     saved_weather = saved_config.get("weather")
     if isinstance(saved_weather, dict):
         for key in ("city", "state"):
@@ -236,7 +244,7 @@ def load_app_config():
 def validate_app_config(value):
     if not isinstance(value, dict):
         raise ValueError("Configuration must be a JSON object")
-    unsupported = set(value) - {"model", "theme", "connection", "known_devices", "weather", "bot", "ollama", "auto_update"}
+    unsupported = set(value) - {"model", "theme", "connection", "known_devices", "known_device_names", "weather", "bot", "ollama", "auto_update"}
     if unsupported:
         raise ValueError(f"Unsupported configuration keys: {', '.join(sorted(unsupported))}")
 
@@ -334,6 +342,8 @@ def validate_app_config(value):
         "model": model.strip(),
         "theme": theme,
         "connection": connection_values,
+        "known_devices": list(app_config["known_devices"]),
+        "known_device_names": dict(app_config["known_device_names"]),
         "weather": weather_values,
         "bot": validated_bot,
         "ollama": ollama_values,
@@ -1174,6 +1184,7 @@ async def refresh_channels(saved_only=False):
 
     channels = dict(app_state["channels"]) if saved_only else {}
     seen_channels = set()
+    failed_queries = 0
     try:
         channel_limit = app_state["limits"].get("max_channels")
         if not isinstance(channel_limit, int) or channel_limit <= 0:
@@ -1204,9 +1215,13 @@ async def refresh_channels(saved_only=False):
             except asyncio.TimeoutError:
                 # Empty or unavailable channels commonly timeout; silence this
                 # noise so the console remains readable while the scan continues.
+                failed_queries += 1
                 continue
 
-            if result.type == EventType.ERROR or not result.payload:
+            if result.type == EventType.ERROR:
+                failed_queries += 1
+                continue
+            if not result.payload:
                 continue
             if instance is not meshcore_instance or not app_state["is_connected"]:
                 return
@@ -1245,6 +1260,8 @@ async def refresh_channels(saved_only=False):
             # Every channel timed out/errored this pass; keep the last known
             # good list instead of blanking the dashboard on a flaky scan.
             log_to_dash("Channel scan returned nothing; keeping previous channel list.")
+        elif not saved_only and not channels and failed_queries == len(channel_indices):
+            log_to_dash("Could not read any channels: all channel requests timed out or failed.")
         else:
             app_state["channels"] = channels
     except Exception as error:
@@ -3162,6 +3179,25 @@ async def _disconnect_hardware_locked():
         app_state["gateway_telemetry"] = {}
 
 
+def remember_known_device_name(address, name, overwrite=True):
+    if not isinstance(name, str) or not name.strip():
+        return
+    address = next(
+        (known for known in app_state["known_devices"] if known.casefold() == address.casefold()),
+        None,
+    )
+    if not address:
+        return
+    names = app_config["known_device_names"]
+    name = name.strip()[:120]
+    if names.get(address) == name or (not overwrite and names.get(address)):
+        return
+    names[address] = name
+    try:
+        write_app_config(app_config)
+    except OSError as error:
+        log_to_dash(f"Warning: Could not save known device name: {error}")
+
 
 async def bluetooth_scan_handler(request):
     try:
@@ -3173,9 +3209,12 @@ async def bluetooth_scan_handler(request):
         log_to_dash(f"Bluetooth scan failed: {error}")
         return web.json_response({"error": str(error)}, status=503)
 
+    for device, adv in devices.values():
+        remember_known_device_name(device.address, adv.local_name or device.name, overwrite=False)
+
     # Find devices starting with "MeshCore" in their name
     meshcore_devices = [
-        device
+        (device, adv.local_name or device.name)
         for device, adv in devices.values()
         if (adv.local_name or device.name or "").startswith("MeshCore")
     ]
@@ -3186,12 +3225,12 @@ async def bluetooth_scan_handler(request):
         return web.json_response({
             "devices": [
                 {
-                    "name": device.name or f"Unknown ({device.address})",
+                    "name": adv.local_name or device.name or f"Unknown ({device.address})",
                     "address": device.address,
                 }
-                for device in sorted(
-                    [dev for dev, _ in devices.values()],
-                    key=lambda device: (device.name or device.address).casefold(),
+                for device, adv in sorted(
+                    devices.values(),
+                    key=lambda item: (item[1].local_name or item[0].name or item[0].address).casefold(),
                 )
             ]
         })
@@ -3199,12 +3238,12 @@ async def bluetooth_scan_handler(request):
     return web.json_response({
         "devices": [
             {
-                "name": device.name or "Unnamed MeshCore device",
+                "name": name,
                 "address": device.address,
             }
-            for device in sorted(
+            for device, name in sorted(
                 meshcore_devices,
-                key=lambda device: (device.name or device.address).casefold(),
+                key=lambda item: item[1].casefold(),
             )
         ]
     })
@@ -3736,11 +3775,6 @@ async def connect_hardware():
             meshcore_instance.subscribe(EventType.ADVERTISEMENT, handle_advertisement)
             app_state["is_connected"] = True
             app_state["limits"] = {"max_contacts": None, "max_channels": MAX_CHANNELS}
-            await refresh_device_limits()
-            await refresh_contacts()
-            await refresh_channels()
-            
-            # Add device to known_devices list if it was successfully connected
             if app_state["connection_type"] == "bluetooth":
                 ble_mac = (app_state.get("ble_mac") or "").strip()
                 if ble_mac and ble_mac not in app_state.get("known_devices", []):
@@ -3750,6 +3784,12 @@ async def connect_hardware():
                         write_app_config(app_config)
                     except OSError as error:
                         log_to_dash(f"Warning: Could not save known device to config: {error}")
+                self_info = getattr(meshcore_instance, "self_info", None)
+                if isinstance(self_info, dict):
+                    remember_known_device_name(ble_mac, self_info.get("name"))
+            await refresh_device_limits()
+            await refresh_channels()
+            await refresh_contacts()
             
             log_to_dash("Hardware interface successfully linked and active.")
         except Exception as error:
@@ -3761,7 +3801,7 @@ async def connect_hardware():
 async def telemetry_loop():
     while True:
         try:
-            if app_state["is_connected"] and meshcore_instance:
+            if app_state["is_connected"] and meshcore_instance and not connection_lock.locked():
                 # Each refresh_* call locks its own hardware commands, so
                 # message sends can interleave instead of waiting out an
                 # entire multi-second scan.
@@ -3896,6 +3936,11 @@ body:has(#nodes-view:not([hidden])){height:100vh;overflow:hidden}
 .model-card{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;border:1px solid var(--border);border-radius:6px;background:var(--panel-bg);flex-wrap:wrap}
 .model-card-info{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .model-card-name{font-weight:600;font-family:ui-monospace,monospace;color:var(--text);font-size:12px}
+.known-devices{margin-top:16px}
+.known-devices h3{margin:0 0 8px;font-size:14px}
+.known-devices-list{display:flex;flex-direction:column;gap:8px;max-height:200px;overflow-y:auto}
+.known-device-info{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-width:0;overflow-wrap:anywhere}
+.known-device-address{color:var(--muted);font:11px ui-monospace,monospace}
 .model-card-size{color:var(--muted);font-size:11px;font-family:ui-monospace,monospace}
 .model-card-badge{display:inline-block;padding:2px 7px;border-radius:10px;background:var(--accent-dim);color:var(--accent);font-size:10px;font-weight:700;text-transform:uppercase;border:1px solid var(--accent)}
 .model-card-actions{display:flex;gap:6px;align-items:center}
@@ -4424,7 +4469,7 @@ async function loadTightvnc(){let status=document.getElementById('tightvnc-statu
 async function setTightvnc(action){let status=document.getElementById('tightvnc-status');status.textContent=`${action==='restart'?'Restarting':'Turning '+action} TightVNC...`;status.dataset.state='';for(let button of document.querySelectorAll('[data-tightvnc-action]'))button.disabled=true;try{let response=await fetch('/api/tightvnc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})}),data=await response.json();if(!response.ok)throw new Error(data.error||'TightVNC operation failed');status.textContent=`TightVNC: ${data.vnc_running?'on':'off'} · noVNC: ${data.novnc_running?'on':'off'} · ${hostUrl(6080,'/vnc.html')}`;status.dataset.state='success'}catch(error){status.textContent=error.message;status.dataset.state='error'}finally{for(let button of document.querySelectorAll('[data-tightvnc-action]'))button.disabled=false}}
 async function loadAppLogs(){let output=document.getElementById('app-log-output');try{let response=await fetch('/api/logs'),data=await response.json();output.textContent=(data.logs||[]).join('\n')||'No log entries.';output.scrollTop=output.scrollHeight}catch(error){output.textContent=error.message}}
 async function clearAppLogs(){if(!confirm('Delete all stored logs?'))return;let status=document.getElementById('app-log-status');try{let response=await fetch('/api/logs',{method:'DELETE'});if(!response.ok)throw new Error((await response.json()).error||'Failed');status.textContent='Logs cleared.';loadAppLogs()}catch(error){status.textContent=error.message}}
-function syncConfigControls(){let colorSelect=document.getElementById('theme-select'),savedClassicTheme=null;try{savedClassicTheme=localStorage.getItem('meshcore-classic-theme')}catch(error){}let validSavedClassicTheme=[...colorSelect.options].some(option=>option.value===savedClassicTheme),classicTheme=appConfig.theme==='tron'?(validSavedClassicTheme?savedClassicTheme:'midnight'):appConfig.theme;colorSelect.value=classicTheme;document.getElementById('weather-city').value=appConfig.weather.city;document.getElementById('weather-state').value=appConfig.weather.state;document.getElementById('bot-name').value=appConfig.bot.name;document.getElementById('bot-personality').value=appConfig.bot.personality;document.getElementById('bot-response-length').value=appConfig.bot.response_length;document.getElementById('ollama-schedule-enabled').checked=appConfig.ollama.schedule_enabled;document.getElementById('ollama-schedule-start').value=appConfig.ollama.start_time;document.getElementById('ollama-schedule-end').value=appConfig.ollama.end_time;document.getElementById('auto-update-enabled').checked=appConfig.auto_update.enabled;applyTheme(appConfig.theme,false)}
+function syncConfigControls(){let colorSelect=document.getElementById('theme-select'),savedClassicTheme=null;try{savedClassicTheme=localStorage.getItem('meshcore-classic-theme')}catch(error){}let validSavedClassicTheme=[...colorSelect.options].some(option=>option.value===savedClassicTheme),classicTheme=appConfig.theme==='tron'?(validSavedClassicTheme?savedClassicTheme:'midnight'):appConfig.theme;colorSelect.value=classicTheme;document.getElementById('weather-city').value=appConfig.weather.city;document.getElementById('weather-state').value=appConfig.weather.state;document.getElementById('bot-name').value=appConfig.bot.name;document.getElementById('bot-personality').value=appConfig.bot.personality;document.getElementById('bot-response-length').value=appConfig.bot.response_length;document.getElementById('ollama-schedule-enabled').checked=appConfig.ollama.schedule_enabled;document.getElementById('ollama-schedule-start').value=appConfig.ollama.start_time;document.getElementById('ollama-schedule-end').value=appConfig.ollama.end_time;document.getElementById('auto-update-enabled').checked=appConfig.auto_update.enabled;updateKnownDevicesList();applyTheme(appConfig.theme,false)}
 const weatherIcons={sun:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>',partly:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="16" cy="7" r="3"/><path d="M16 2v1m0 8v1m5-5h-1m-8 0h-1M5 19h12a3 3 0 0 0 .3-6A5 5 0 0 0 8 11.5 3.8 3.8 0 0 0 5 19Z"/></svg>',cloud:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19h13a4 4 0 0 0 .4-8A6 6 0 0 0 7 9.5 4.8 4.8 0 0 0 5 19Z"/></svg>',fog:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm-2 4h14m-10 3h14"/></svg>',rain:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 15h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 7 4 4 0 0 0 5 15Zm2 3-1 2m7-2-1 2m7-2-1 2"/></svg>',snow:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm2 4h.01M12 19h.01M18 18h.01"/></svg>',storm:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm8 1-3 4h3l-1 3 4-5h-3l1-2"/></svg>'};
 function weatherIconName(code){if(code===null||code===undefined||!Number.isFinite(Number(code)))return 'cloud';code=Number(code);if(code===0)return 'sun';if(code===1||code===2)return 'partly';if(code===45||code===48)return 'fog';if(code===51||code===53||code===55||code===56||code===57||code===61||code===63||code===65||code===66||code===67||code===80||code===81||code===82)return 'rain';if(code===71||code===73||code===75||code===77||code===85||code===86)return 'snow';if(code===95||code===96||code===99)return 'storm';return 'cloud'}
 function renderWeatherIcon(code,condition='Weather condition unavailable'){let icon=document.getElementById('weather-icon');icon.innerHTML=weatherIcons[weatherIconName(code)]||weatherIcons.cloud;icon.setAttribute('aria-label',condition);icon.title=condition}
@@ -4451,12 +4496,12 @@ function loadFavoriteNodes(){try{let saved=JSON.parse(localStorage.getItem('mesh
 function toggleNodeFavorite(id){let normalized=String(id);if(favoriteNodeIds.has(normalized))favoriteNodeIds.delete(normalized);else favoriteNodeIds.add(normalized);localStorage.setItem('meshcore-favorite-nodes',JSON.stringify([...favoriteNodeIds]));renderConversationTargets('node');renderKnownPeers();renderMapMarkers()}
 function createNodeFavoriteButton(id){let favorite=document.createElement('button'),isFavorite=favoriteNodeIds.has(String(id));favorite.type='button';favorite.className='favorite-toggle';favorite.textContent=isFavorite?'★':'☆';favorite.title=isFavorite?'Remove from favorites':'Add to favorites';favorite.setAttribute('aria-label',favorite.title);favorite.setAttribute('aria-pressed',String(isFavorite));favorite.onclick=()=>toggleNodeFavorite(id);return favorite}
 function fields(){let t=connection_type.value,bp=document.getElementById('ble_pin');if(bp)bp.value=appConfig.connection?.ble_pin||'';document.getElementById('ble-field').style.display=t==='bluetooth'?'block':'none';document.getElementById('serial-field').style.display=t==='serial'?'block':'none';updateKnownDevicesList()}
-function updateKnownDevicesList(){let section=document.getElementById('known-devices-section'),list=document.getElementById('known-devices-list');if(!section||!list)return;let known=[...new Set([...(appConfig?.known_devices||[]),...(appConfig?.connection?.ble_mac?[appConfig.connection.ble_mac]:[])])];if(known.length===0){section.style.display='none';return}section.style.display='block';list.innerHTML='';for(let device of known){let item=document.createElement('div');item.style.cssText='display:flex;justify-content:space-between;align-items:center;padding:6px;background:white;border-radius:3px;margin-bottom:4px;font-size:12px;border:1px solid #ddd';let label=document.createElement('span');label.textContent=device;let btn=document.createElement('button');btn.type='button';btn.textContent='Forget';btn.className='secondary';btn.style.cssText='padding:4px 8px;font-size:11px';btn.onclick=()=>forgetDevice(device);item.appendChild(label);item.appendChild(btn);list.appendChild(item)}}
+function updateKnownDevicesList(){let section=document.getElementById('known-devices-section'),list=document.getElementById('known-devices-list');if(!section||!list)return;let known=[...new Set([...(appConfig?.known_devices||[]),...(appConfig?.connection?.ble_mac?[appConfig.connection.ble_mac]:[])])];section.hidden=known.length===0;list.replaceChildren();for(let device of known){let item=document.createElement('div');item.className='model-card';let info=document.createElement('div');info.className='known-device-info';let label=document.createElement('strong');label.className='model-card-name';label.textContent=appConfig.known_device_names?.[device]||'Name unavailable';let address=document.createElement('span');address.className='known-device-address';address.textContent=device;let btn=document.createElement('button');btn.type='button';btn.textContent='Forget';btn.className='secondary';btn.onclick=()=>forgetDevice(device);info.append(label,address);item.append(info,btn);list.appendChild(item)}}
 async function forgetDevice(device_mac){if(!confirm(`Forget device ${device_mac}? It will no longer auto-connect.`))return;try{let r=await fetch('/api/forget-device',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_mac})}),d=await r.json();if(!r.ok)throw new Error(d.error||'Failed to forget device');appConfig.known_devices=d.known_devices;if(appConfig.connection.ble_mac===device_mac){appConfig.connection.ble_mac='';appConfig.connection.ble_pin='';let deviceSelect=document.getElementById('ble_mac');if(deviceSelect)deviceSelect.value=''}updateKnownDevicesList()}catch(error){alert('Error: '+error.message)}}
 async function scanDevices(kind){let bluetooth=kind==='bluetooth',select=document.getElementById(bluetooth?'ble_mac':'serial_port'),button=document.getElementById(bluetooth?'ble-scan':'serial-scan'),statusMessage=document.getElementById(bluetooth?'ble-scan-status':'serial-scan-status'),previous=select.value;button.disabled=true;button.textContent='Scanning';statusMessage.dataset.state='';statusMessage.textContent='Searching for available devices...';try{let response=await fetch('/api/scan/'+kind),data=await response.json();if(!response.ok)throw new Error(data.error||'Device scan failed');let devices=bluetooth?data.devices:data.ports;select.replaceChildren(new Option(bluetooth?'Select a Bluetooth device':'Select a serial port',''));for(let device of devices){let label=bluetooth?`${device.name} (${device.address})`:`${device.device} - ${device.description||'Serial port'}`;select.add(new Option(label,bluetooth?device.address:device.device))}if(previous&&[...select.options].some(option=>option.value===previous))select.value=previous;statusMessage.textContent=devices.length?`Found ${devices.length} device(s). Select one to connect.`:'No devices found. Check that the radio is powered and discoverable.'}catch(error){statusMessage.dataset.state='error';statusMessage.textContent=error.message}finally{button.disabled=false;button.textContent='Scan'}}
 function scanBluetooth(){return scanDevices('bluetooth')}
 function scanSerial(){return scanDevices('serial')}
-async function status(){let r=await fetch('/api/status'),d=await r.json();document.getElementById('current-datetime').textContent=d.current_datetime;let b=document.getElementById('status');b.textContent=d.is_connected?'CONNECTED':'DISCONNECTED';b.className='header-status '+(d.is_connected?'connected':'disconnected');document.getElementById('console').innerText=d.logs.join('\n');handleTraceEvents(d.trace_events||[]);renderOllamaPower(d.ollama_running);handleIncomingNotifications(d)}
+async function status(){let r=await fetch('/api/status'),d=await r.json();document.getElementById('current-datetime').textContent=d.current_datetime;let b=document.getElementById('status');b.textContent=d.is_connected?'CONNECTED':'DISCONNECTED';b.className='header-status '+(d.is_connected?'connected':'disconnected');if(Array.isArray(d.known_devices)&&d.known_device_names&&(JSON.stringify(appConfig.known_devices)!==JSON.stringify(d.known_devices)||JSON.stringify(appConfig.known_device_names)!==JSON.stringify(d.known_device_names))){appConfig.known_devices=d.known_devices;appConfig.known_device_names=d.known_device_names;updateKnownDevicesList()}document.getElementById('console').innerText=d.logs.join('\n');handleTraceEvents(d.trace_events||[]);renderOllamaPower(d.ollama_running);handleIncomingNotifications(d)}
 let ollamaToggleBusy=false;
 function renderOllamaPower(running){let button=document.getElementById('ollama-power-toggle'),status=document.getElementById('ollama-power-status');if(!button||ollamaToggleBusy)return;button.textContent=running?'Turn off':'Turn on';status.textContent=running?'Running. Turn it off between chats to save power.':'Stopped to save power. Replies will fail until it is turned back on.'}
 async function toggleOllama(){let button=document.getElementById('ollama-power-toggle'),status=document.getElementById('ollama-power-status'),running=button.textContent.trim()==='Turn off';ollamaToggleBusy=true;button.disabled=true;status.textContent=running?'Stopping Ollama...':'Starting Ollama...';try{let r=await fetch('/api/ollama/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!running})}),d=await r.json();if(!r.ok)throw new Error(d.error||'Could not change Ollama state');ollamaToggleBusy=false;renderOllamaPower(d.ollama_running);loadOllamaModels()}catch(error){ollamaToggleBusy=false;status.textContent=error.message}finally{button.disabled=false}}
@@ -4789,7 +4834,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 
 <div class="connection-actions"><button id="connect-btn" onclick="connect()">Connect</button><button onclick="disconnect()">Disconnect</button><button type="button" onclick="clearDevice()" class="secondary" title="Clear stored device and stop auto-connect">Clear Device</button></div>
 <div id="ble-pin-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1000;justify-content:center;align-items:center"><div style="background:white;padding:24px;border-radius:8px;box-shadow:0 4px 6px rgba(0,0,0,0.1);max-width:400px;width:90%"><h3 style="margin-top:0">Enter Bluetooth PIN</h3><p style="color:#666;margin-bottom:16px">Your device requires a PIN to complete pairing.</p><input id="ble-pin-input" type="text" inputmode="numeric" placeholder="Enter PIN" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:4px;font-size:16px;box-sizing:border-box;margin-bottom:16px"><div style="display:flex;gap:8px;justify-content:flex-end"><button type="button" onclick="closeBLEPinModal()" class="secondary">Cancel</button><button type="button" onclick="submitBLEPin()">Connect</button></div></div></div>
-<div id="known-devices-section" style="margin-top:16px;padding:12px;background:#f5f5f5;border-radius:4px;display:none"><p style="margin:0 0 8px 0;font-weight:bold;font-size:14px">Known Devices (will auto-connect)</p><div id="known-devices-list" style="max-height:200px;overflow-y:auto"></div></div>
+<div id="known-devices-section" class="settings-item known-devices" hidden><h3>Known Devices (will auto-connect)</h3><div id="known-devices-list" class="known-devices-list"></div></div>
 </section>
 <section class="card device-settings-card"><div class="panel-heading"><div><span class="eyebrow">IDENTITY</span><h2 id="device-identity-name">Connected device</h2></div><span id="device-identity-status" class="header-status disconnected">DISCONNECTED</span></div><button id="identity-toggle" class="device-setting-row" type="button" onclick="toggleDeviceIdentity()" aria-expanded="false"><span><strong>Device information</strong><small>Identifier, battery, firmware, key, contacts and channels</small></span><span id="identity-expand-icon">+</span></button><dl id="device-identity-details" class="device-info-grid" hidden></dl></section>
 <form id="device-settings-form" onsubmit="saveDeviceSettings(event)">
@@ -5148,6 +5193,8 @@ async def status_handler(request):
     return web.json_response({
         "current_datetime": datetime.now().astimezone().strftime("%x %I:%M:%S %p"),
         "is_connected": app_state["is_connected"],
+        "known_devices": app_state["known_devices"],
+        "known_device_names": app_config["known_device_names"],
         "logs": app_state["logs"],
         "trace_events": app_state["trace_events"],
         "ollama_running": app_state["ollama_running"],
@@ -6351,12 +6398,15 @@ async def device_settings_handler(request):
     if not meshcore_instance or not app_state["is_connected"]:
         return web.json_response({"error": "MeshCore is not connected"}, status=503)
 
+    instance = meshcore_instance
     try:
         async with paced_hardware_lock():
-            result = await meshcore_instance.commands.send_appstart()
+            result = await instance.commands.send_appstart()
         if result.type == EventType.ERROR:
             return web.json_response({"error": str(result.payload)}, status=502)
         settings = dict(result.payload or {})
+        if instance is meshcore_instance and app_state["is_connected"] and app_state["connection_type"] == "bluetooth":
+            remember_known_device_name(app_state["ble_mac"], settings.get("name"))
         get_tuning = getattr(meshcore_instance.commands, "get_tuning", None)
         if get_tuning:
             try:
@@ -6757,7 +6807,9 @@ async def forget_device_handler(request):
     if is_known or is_configured:
         if is_known:
             known_devices.remove(device_mac)
-        updated_config = {**app_config, "known_devices": known_devices}
+        names = dict(app_config["known_device_names"])
+        names.pop(device_mac, None)
+        updated_config = {**app_config, "known_devices": known_devices, "known_device_names": names}
         if is_configured:
             updated_config["connection"] = {
                 **app_config["connection"],

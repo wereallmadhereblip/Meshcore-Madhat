@@ -72,6 +72,7 @@ The bot confirms each change and saves its name and personality under
 `~/.config/meshcore-ollama-bot/bot_settings.json` so they persist across restarts.
 
 Use the dashboard to choose Bluetooth or Serial, enter the Device Bluetooth MAC address or serial port, and connect. The default values are `/dev/ttyACM0` and the MAC address defined near the top of the script.
+Known Bluetooth devices show their saved name and address. Older entries without a saved name show “Name unavailable” until the device is scanned or connected.
 
 Administrators can DM `/fastfetch` to receive the host's Fastfetch system summary. Fastfetch must be installed on the host.
 
