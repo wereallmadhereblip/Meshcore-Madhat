@@ -4357,6 +4357,10 @@ html[data-device="tablet"] button,html[data-device="tablet"] select{min-height:4
 html[data-device="tablet"] input,html[data-device="tablet"] select,html[data-device="tablet"] textarea{font-size:16px}
 html[data-device="mobile"] body{height:auto;min-height:100vh;min-height:100dvh;overflow-x:hidden;overflow-y:auto;padding-top:max(8px,env(safe-area-inset-top))}
 html[data-device="mobile"] body:has(#nodes-view:not([hidden])){height:auto;min-height:100vh;min-height:100dvh;overflow-x:hidden;overflow-y:auto}
+html[data-device="mobile"] .top-nav{width:100%;min-width:0;flex:0 1 auto;flex-wrap:wrap;overflow:visible}
+html[data-device="mobile"] .page-view{width:100%;flex:0 0 auto;min-height:0;padding:0 8px 8px}
+html[data-device="mobile"] .page-view>*:last-child{flex:0 0 auto;min-height:0}
+html[data-device="mobile"] #nodes-view .messages-layout,html[data-device="mobile"] #channels-view .messages-layout{flex:0 0 auto;min-height:0}
 html[data-device="mobile"] #nodes-view .conversation-rail,html[data-device="mobile"] #channels-view .conversation-rail{max-height:70vh;max-height:70dvh}
 html[data-device="mobile"] #nodes-view .chat-panel,html[data-device="mobile"] #channels-view .chat-panel{min-height:60vh;min-height:60dvh}
 html[data-device="mobile"] #map-canvas{height:55vh;height:55dvh}
