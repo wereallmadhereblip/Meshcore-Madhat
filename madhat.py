@@ -4355,6 +4355,14 @@ html[data-device="mobile"] .analyzer-table-wrap,html[data-device="mobile"] .anal
 html[data-device="tablet"] .conversation-rail{min-height:300px}
 html[data-device="tablet"] button,html[data-device="tablet"] select{min-height:40px}
 html[data-device="tablet"] input,html[data-device="tablet"] select,html[data-device="tablet"] textarea{font-size:16px}
+html[data-device="mobile"] body{height:auto;min-height:100vh;min-height:100dvh;overflow-x:hidden;overflow-y:auto;padding-top:max(8px,env(safe-area-inset-top))}
+html[data-device="mobile"] body:has(#nodes-view:not([hidden])){height:auto;min-height:100vh;min-height:100dvh;overflow-x:hidden;overflow-y:auto}
+html[data-device="mobile"] #nodes-view .conversation-rail,html[data-device="mobile"] #channels-view .conversation-rail{max-height:70vh;max-height:70dvh}
+html[data-device="mobile"] #nodes-view .chat-panel,html[data-device="mobile"] #channels-view .chat-panel{min-height:60vh;min-height:60dvh}
+html[data-device="mobile"] #map-canvas{height:55vh;height:55dvh}
+html[data-device="mobile"] #map-node-list{max-height:32vh;max-height:32dvh}
+html[data-device="mobile"] .console-dock{max-height:50vh;max-height:50dvh}
+html[data-device="mobile"] #add-dialog{max-height:90vh;max-height:90dvh}
 @media(hover:none){.conversation-entry button,.map-node-row,.nav-tab{min-height:44px}}
 .chat-message{cursor:default}
 #msg-actions{position:fixed;inset:0;z-index:1200;display:none;align-items:flex-end;justify-content:center;background:rgba(0,0,0,.55)}
