@@ -4357,6 +4357,9 @@ html[data-device="tablet"] button,html[data-device="tablet"] select{min-height:4
 html[data-device="tablet"] input,html[data-device="tablet"] select,html[data-device="tablet"] textarea{font-size:16px}
 html[data-device="mobile"] body{height:auto;min-height:100vh;min-height:100dvh;overflow-x:hidden;overflow-y:auto;padding-top:max(8px,env(safe-area-inset-top))}
 html[data-device="mobile"] body:has(#nodes-view:not([hidden])){height:auto;min-height:100vh;min-height:100dvh;overflow-x:hidden;overflow-y:auto}
+html[data-device="mobile"] body{padding-bottom:calc(112px + env(safe-area-inset-bottom))}
+html[data-device="mobile"] .top-nav,html[data-device="mobile"] body[data-theme="tron"] .top-nav{position:fixed;inset:auto 0 0;z-index:1100;display:grid;width:100%;min-width:0;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:6px 8px calc(6px + env(safe-area-inset-bottom));border-top:1px solid var(--border);background:var(--panel-bg);box-shadow:0 -6px 18px rgba(0,0,0,.3);overflow:visible}
+html[data-device="mobile"] .nav-tab,html[data-device="mobile"] body[data-theme="tron"] .nav-tab{width:100%;min-width:0;min-height:44px;padding:4px;justify-content:center;text-align:center;white-space:normal;line-height:1.2}
 html[data-device="mobile"] .top-nav{width:100%;min-width:0;flex:0 1 auto;flex-wrap:wrap;overflow:visible}
 html[data-device="mobile"] .page-view{width:100%;flex:0 0 auto;min-height:0;padding:0 8px 8px}
 html[data-device="mobile"] .page-view>*:last-child{flex:0 0 auto;min-height:0}
@@ -4654,7 +4657,7 @@ function saveMusicSetting(){try{localStorage.setItem('meshcore-music-enabled',do
 function applyBannerVisibility(){let prefs={link:true,battery:true,weather:true,time:true};try{prefs={...prefs,...JSON.parse(localStorage.getItem('meshcore-banner-visibility')||'{}')}}catch(error){}let map={link:'banner-item-link',battery:'banner-item-battery',weather:'banner-item-weather',time:'banner-item-time'};for(let key of Object.keys(map)){let item=document.getElementById(map[key]);if(item)item.hidden=!prefs[key];let checkbox=document.getElementById('banner-toggle-'+key);if(checkbox)checkbox.checked=prefs[key]}}
 function saveBannerVisibility(){let prefs={link:document.getElementById('banner-toggle-link').checked,battery:document.getElementById('banner-toggle-battery').checked,weather:document.getElementById('banner-toggle-weather').checked,time:document.getElementById('banner-toggle-time').checked};try{localStorage.setItem('meshcore-banner-visibility',JSON.stringify(prefs))}catch(error){}applyBannerVisibility()}
 window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();status();peers();loadAppConfig();loadOllamaModels();initConsoleDock();applyBannerVisibility();applyAdvertsVisibility();applyMusicSetting();syncNotificationControl();initTronLayout();pollNoiseFloor();setInterval(pollNoiseFloor,2000);pollCpuTemp();setInterval(pollCpuTemp,2000);setInterval(refreshActiveHistory,3000);setInterval(loadLocalWeather,30*60*1000)});setInterval(status,2000);setInterval(peers,10000);
-</script></head><body>
+</script></head><body data-theme="__INITIAL_THEME__">
 <header class="dashboard-header">
 <div class="brand-lockup"><img class="dashboard-logo" src="/dashboard-logo.png" alt="Dashboard logo"><div class="brand-copy"><span class="header-label">MESHCORE + OLLAMA</span><h1>DASHBOARD</h1></div></div>
 <section id="incoming-adverts-panel" class="incoming-adverts" aria-label="Incoming radio adverts"><div class="incoming-adverts-heading"><h3>Incoming Adverts</h3><span id="incoming-adverts-count" class="incoming-adverts-count">0</span></div><div id="incoming-adverts-list" class="incoming-adverts-list" aria-live="polite"><p class="incoming-advert-empty">Waiting for incoming adverts...</p></div></section>
@@ -5058,8 +5061,11 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape')box.classList.remove
 
 
 async def index_handler(request):
+    initial_theme = app_config.get("theme")
+    if initial_theme not in AVAILABLE_THEMES:
+        initial_theme = "tron"
     return web.Response(
-        text=PAGE,
+        text=PAGE.replace("__INITIAL_THEME__", initial_theme, 1),
         content_type="text/html",
     )
 
