@@ -4414,7 +4414,8 @@ async function loadAppConfig(){try{let response=await fetch('/api/config'),data=
 async function saveAppConfig(config,statusId='preferences-status'){let statusMessage=document.getElementById(statusId);statusMessage.dataset.state='';statusMessage.textContent='Saving config.json...';try{let response=await fetch('/api/config',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)}),data=await response.json();if(!response.ok)throw new Error(data.error||'Settings could not be saved');appConfig=data;syncConfigControls();if(statusId==='config-status'){document.getElementById('config-json-editor').value=JSON.stringify(appConfig,null,2);configEditorLoaded=true}statusMessage.textContent='Saved to config.json.';statusMessage.dataset.state='success'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
 async function savePreference(key,value){await saveAppConfig({...appConfig,[key]:value})}
 function botTerminalLine(cls,text){let out=document.getElementById('bot-terminal-output'),line=document.createElement('div');line.className=cls;line.textContent=text;out.appendChild(line);out.scrollTop=out.scrollHeight;return line}
-async function sendBotTerminal(event){event.preventDefault();let input=document.getElementById('bot-terminal-text'),send=document.getElementById('bot-terminal-send'),message=input.value.trim();if(!message)return;input.value='';botTerminalLine('you','> '+message);send.disabled=true;let pending=botTerminalLine('sys','thinking...');try{let response=await fetch('/api/bot-console',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message})}),data=await response.json();pending.remove();if(!response.ok)throw new Error(data.error||'Request failed');botTerminalLine('bot',data.reply||'(no reply)')}catch(error){pending.remove();botTerminalLine('err','Error: '+error.message)}finally{send.disabled=false;input.focus()}}
+async function typewriterEffect(element,text,speed=30){let index=0;element.textContent='';return new Promise(resolve=>{let interval=setInterval(()=>{if(index<text.length){element.textContent+=text[index];element.parentElement.scrollTop=element.parentElement.scrollHeight;index++}else{clearInterval(interval);resolve()}},speed)})}
+async function sendBotTerminal(event){event.preventDefault();let input=document.getElementById('bot-terminal-text'),send=document.getElementById('bot-terminal-send'),message=input.value.trim();if(!message)return;input.value='';botTerminalLine('you','> '+message);send.disabled=true;let pending=botTerminalLine('sys','thinking...');try{let response=await fetch('/api/bot-console',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message})}),data=await response.json();pending.remove();if(!response.ok)throw new Error(data.error||'Request failed');let botLine=botTerminalLine('bot','');await typewriterEffect(botLine,data.reply||'(no reply)',30)}catch(error){pending.remove();botTerminalLine('err','Error: '+error.message)}finally{send.disabled=false;input.focus()}}
 async function clearBotTerminal(){document.getElementById('bot-terminal-output').replaceChildren();try{await fetch('/api/bot-console',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reset:true})})}catch(error){}}
 async function saveBotSettings(event){event.preventDefault();let name=document.getElementById('bot-name').value.trim(),personality=document.getElementById('bot-personality').value.trim(),responseLength=document.getElementById('bot-response-length').value,greetNewUsers=document.getElementById('bot-greet-new-users').checked,statusMessage=document.getElementById('bot-settings-status');if(!name||!personality){statusMessage.textContent='Enter a bot name and personality.';statusMessage.dataset.state='error';return}await saveAppConfig({...appConfig,bot:{name,personality,response_length:responseLength,greet_new_users:greetNewUsers}},'bot-settings-status')}
 async function changeDashboardPassword(event){event.preventDefault();let form=event.currentTarget,currentPassword=document.getElementById('dashboard-current-password').value,newPassword=document.getElementById('dashboard-new-password').value,confirmPassword=document.getElementById('dashboard-confirm-password').value,statusMessage=document.getElementById('dashboard-password-status'),submitButton=form.querySelector('button[type="submit"]');statusMessage.dataset.state='';if(newPassword!==confirmPassword){statusMessage.textContent='New passwords do not match.';statusMessage.dataset.state='error';return}submitButton.disabled=true;statusMessage.textContent='Changing dashboard password...';try{let response=await fetch('/api/password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({current_password:currentPassword,new_password:newPassword,confirm_password:confirmPassword})}),data=await response.json();if(!response.ok)throw new Error(data.error||'Password could not be changed');statusMessage.textContent='Dashboard password changed.';statusMessage.dataset.state='success'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}finally{form.reset();submitButton.disabled=false}}
@@ -4431,8 +4432,8 @@ function loadFavoriteNodes(){try{let saved=JSON.parse(localStorage.getItem('mesh
 function toggleNodeFavorite(id){let normalized=String(id);if(favoriteNodeIds.has(normalized))favoriteNodeIds.delete(normalized);else favoriteNodeIds.add(normalized);localStorage.setItem('meshcore-favorite-nodes',JSON.stringify([...favoriteNodeIds]));renderConversationTargets('node');renderKnownPeers();renderMapMarkers()}
 function createNodeFavoriteButton(id){let favorite=document.createElement('button'),isFavorite=favoriteNodeIds.has(String(id));favorite.type='button';favorite.className='favorite-toggle';favorite.textContent=isFavorite?'★':'☆';favorite.title=isFavorite?'Remove from favorites':'Add to favorites';favorite.setAttribute('aria-label',favorite.title);favorite.setAttribute('aria-pressed',String(isFavorite));favorite.onclick=()=>toggleNodeFavorite(id);return favorite}
 function fields(){let t=connection_type.value,bp=document.getElementById('ble_pin');if(bp)bp.value=appConfig.connection?.ble_pin||'';document.getElementById('ble-field').style.display=t==='bluetooth'?'block':'none';document.getElementById('serial-field').style.display=t==='serial'?'block':'none';updateKnownDevicesList()}
-function updateKnownDevicesList(){let section=document.getElementById('known-devices-section'),list=document.getElementById('known-devices-list');if(!section||!list)return;let known=appConfig?.known_devices||[];if(known.length===0){section.style.display='none';return}section.style.display='block';list.innerHTML='';for(let device of known){let item=document.createElement('div');item.style.cssText='display:flex;justify-content:space-between;align-items:center;padding:6px;background:white;border-radius:3px;margin-bottom:4px;font-size:12px;border:1px solid #ddd';let label=document.createElement('span');label.textContent=device;let btn=document.createElement('button');btn.type='button';btn.textContent='Forget';btn.className='secondary';btn.style.cssText='padding:4px 8px;font-size:11px';btn.onclick=()=>forgetDevice(device);item.appendChild(label);item.appendChild(btn);list.appendChild(item)}}
-async function forgetDevice(device_mac){if(!confirm(`Forget device ${device_mac}? It will no longer auto-connect.`))return;try{let r=await fetch('/api/forget-device',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_mac})}),d=await r.json();if(!r.ok)throw new Error(d.error||'Failed to forget device');appConfig.known_devices=d.known_devices;updateKnownDevicesList()}catch(error){alert('Error: '+error.message)}}
+function updateKnownDevicesList(){let section=document.getElementById('known-devices-section'),list=document.getElementById('known-devices-list');if(!section||!list)return;let known=[...new Set([...(appConfig?.known_devices||[]),...(appConfig?.connection?.ble_mac?[appConfig.connection.ble_mac]:[])])];if(known.length===0){section.style.display='none';return}section.style.display='block';list.innerHTML='';for(let device of known){let item=document.createElement('div');item.style.cssText='display:flex;justify-content:space-between;align-items:center;padding:6px;background:white;border-radius:3px;margin-bottom:4px;font-size:12px;border:1px solid #ddd';let label=document.createElement('span');label.textContent=device;let btn=document.createElement('button');btn.type='button';btn.textContent='Forget';btn.className='secondary';btn.style.cssText='padding:4px 8px;font-size:11px';btn.onclick=()=>forgetDevice(device);item.appendChild(label);item.appendChild(btn);list.appendChild(item)}}
+async function forgetDevice(device_mac){if(!confirm(`Forget device ${device_mac}? It will no longer auto-connect.`))return;try{let r=await fetch('/api/forget-device',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_mac})}),d=await r.json();if(!r.ok)throw new Error(d.error||'Failed to forget device');appConfig.known_devices=d.known_devices;if(appConfig.connection.ble_mac===device_mac){appConfig.connection.ble_mac='';appConfig.connection.ble_pin='';let deviceSelect=document.getElementById('ble_mac');if(deviceSelect)deviceSelect.value=''}updateKnownDevicesList()}catch(error){alert('Error: '+error.message)}}
 async function scanDevices(kind){let bluetooth=kind==='bluetooth',select=document.getElementById(bluetooth?'ble_mac':'serial_port'),button=document.getElementById(bluetooth?'ble-scan':'serial-scan'),statusMessage=document.getElementById(bluetooth?'ble-scan-status':'serial-scan-status'),previous=select.value;button.disabled=true;button.textContent='Scanning';statusMessage.dataset.state='';statusMessage.textContent='Searching for available devices...';try{let response=await fetch('/api/scan/'+kind),data=await response.json();if(!response.ok)throw new Error(data.error||'Device scan failed');let devices=bluetooth?data.devices:data.ports;select.replaceChildren(new Option(bluetooth?'Select a Bluetooth device':'Select a serial port',''));for(let device of devices){let label=bluetooth?`${device.name} (${device.address})`:`${device.device} - ${device.description||'Serial port'}`;select.add(new Option(label,bluetooth?device.address:device.device))}if(previous&&[...select.options].some(option=>option.value===previous))select.value=previous;statusMessage.textContent=devices.length?`Found ${devices.length} device(s). Select one to connect.`:'No devices found. Check that the radio is powered and discoverable.'}catch(error){statusMessage.dataset.state='error';statusMessage.textContent=error.message}finally{button.disabled=false;button.textContent='Scan'}}
 function scanBluetooth(){return scanDevices('bluetooth')}
 function scanSerial(){return scanDevices('serial')}
@@ -4579,7 +4580,30 @@ function submitBLEPin(){let pin=document.getElementById('ble-pin-input').value.t
 document.addEventListener('DOMContentLoaded',()=>{document.getElementById('ble-pin-input')?.addEventListener('keypress',(e)=>{if(e.key==='Enter')submitBLEPin()})})
 async function disconnect(){await fetch('/api/disconnect',{method:'POST'});await status();await peers()}
 async function clearDevice(){if(!confirm('Clear the stored Bluetooth device and disable auto-connect?'))return;try{let response=await fetch('/api/clear-device',{method:'POST'}),data=await response.json();if(!response.ok){alert(data.error||'Failed to clear device');return}alert('Bluetooth device cleared. Use Scan to find and select a new device.');document.getElementById('ble_mac').value='';await status()}catch(error){alert('Error: '+error.message)}}
-async function sendMessage(event,type,messageId,historyId){event.preventDefault();let selected=type==='node'?selectedNodeId:selectedChannelId,input=document.getElementById(messageId);if(!selected)return;if(type==='node'&&isRepeaterNode(selected)){input.disabled=true;document.getElementById('node-send').disabled=true;return}let message=input.value.trim();if(!message)return;let response=await fetch('/api/transmit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:selected,target_type:type,text:message})}),data=await response.json();if(!response.ok){alert(data.error||'Message could not be sent');return}input.value='';await history(type,selected,historyId,true)}
+async function sendMessage(event,type,messageId,historyId){
+  event.preventDefault();
+  let selected=type==='node'?selectedNodeId:selectedChannelId,input=document.getElementById(messageId);
+  if(!selected)return;
+  if(type==='node'&&isRepeaterNode(selected)){input.disabled=true;document.getElementById('node-send').disabled=true;return}
+  let message=input.value.trim();
+  if(!message)return;
+  let send=document.getElementById(type==='node'?'node-send':'channel-send'),box=document.getElementById(historyId),item=document.createElement('div'),bubble=document.createElement('div'),body=document.createElement('div'),caption=document.createElement('div'),status=document.createElement('span'),time=document.createElement('span');
+  item.className='chat-message outgoing';bubble.className='chat-bubble';body.className='chat-message-body';body.textContent=message;bubble.append(body);caption.className='chat-caption';status.className='chat-status';status.textContent='Sending...';time.className='chat-time';time.textContent=fmtTime(new Date());caption.append(status,time);item.append(bubble,caption);box.appendChild(item);box.scrollTop=box.scrollHeight;
+  input.value='';send.disabled=true;
+  try{
+    let response=await fetch('/api/transmit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:selected,target_type:type,text:message})}),data=await response.json();
+    if(!response.ok)throw new Error(data.error||'Message could not be sent');
+    status.textContent='Sent';
+    if((type==='node'?selectedNodeId:selectedChannelId)===selected)history(type,selected,historyId,true);
+  }catch(error){
+    status.textContent='Failed';
+    alert(error.message||'Message could not be sent');
+    if(!input.value&&(type==='node'?selectedNodeId:selectedChannelId)===selected)input.value=message;
+  }finally{
+    send.disabled=false;
+    if((type==='node'?selectedNodeId:selectedChannelId)===selected)input.focus();
+  }
+}
 let consoleDrag=null;
 function clampConsolePosition(dock){if(!dock||dock.classList.contains('collapsed'))return;let header=document.querySelector('.dashboard-header');if(!header)return;let minTop=header.getBoundingClientRect().bottom+12;let rect=dock.getBoundingClientRect();if(rect.top<minTop){dock.style.top=minTop+'px';dock.style.bottom='auto'}}
 function toggleConsoleDock(){let dock=document.getElementById('console-dock'),toggle=document.getElementById('console-toggle');if(!dock||!toggle)return;let collapsed=dock.classList.toggle('collapsed');toggle.setAttribute('aria-expanded',String(!collapsed));if(!collapsed)clampConsolePosition(dock)}
@@ -6705,13 +6729,26 @@ async def forget_device_handler(request):
     if not device_mac:
         return web.json_response({"error": "Device MAC address required"}, status=400)
     
-    known_devices = app_state.get("known_devices", [])
-    if device_mac in known_devices:
-        known_devices.remove(device_mac)
-        app_state["known_devices"] = known_devices
-        app_config["known_devices"] = known_devices
+    known_devices = list(app_state.get("known_devices", []))
+    is_known = device_mac in known_devices
+    is_configured = device_mac == app_state["ble_mac"]
+    if is_known or is_configured:
+        if is_known:
+            known_devices.remove(device_mac)
+        updated_config = {**app_config, "known_devices": known_devices}
+        if is_configured:
+            updated_config["connection"] = {
+                **app_config["connection"],
+                "ble_mac": "",
+                "ble_pin": "",
+            }
         try:
-            write_app_config(app_config)
+            write_app_config(updated_config)
+            app_config.update(updated_config)
+            app_state["known_devices"] = known_devices
+            if is_configured:
+                app_state["ble_mac"] = ""
+                app_state["ble_pin"] = ""
             log_to_dash(f"Removed {device_mac} from known devices")
             return web.json_response({"success": True, "known_devices": known_devices})
         except OSError as error:
@@ -6778,9 +6815,8 @@ async def auto_connect_hardware():
             if app_state["auto_reconnect"] and not app_state["is_connected"] and not connection_lock.locked():
                 if app_state["connection_type"] == "bluetooth":
                     target = (app_state["ble_mac"] or "").strip()
-                    # Only auto-connect to devices that have been successfully connected before
-                    if target and target in app_state.get("known_devices", []):
-                        log_to_dash(f"Auto-connecting to known Bluetooth device {target}...")
+                    if target:
+                        log_to_dash(f"Auto-connecting to configured Bluetooth device {target}...")
                         await connect_hardware()
                 else:
                     target = app_state["serial_port"]
