@@ -4634,7 +4634,96 @@ function refreshActiveHistory(){if(['nodes','tron-overview'].includes(activeView
 function setCustomRadioMode(){let custom=document.getElementById('custom-radio-fields'),enabled=document.getElementById('radio-profile').value==='custom';custom.hidden=!enabled;custom.querySelectorAll('input,select').forEach(input=>input.disabled=!enabled)}
 function setCustomPowerMode(){let custom=document.getElementById('custom-power-field'),enabled=document.getElementById('tx-power-mode').value==='custom';custom.hidden=!enabled;custom.querySelector('input').disabled=!enabled}
 function populatePowerOptions(maximum,current){let select=document.getElementById('tx-power-mode'),common=[10,14,17,20];select.replaceChildren();for(let value of common){if(value<=maximum)select.add(new Option(value+' dBm',String(value)))}if(!common.includes(Number(current))&&Number(current)<=maximum)select.add(new Option(current+' dBm (current)',String(current)));let currentIsCommon=[...select.options].some(option=>Number(option.value)===Number(current));select.add(new Option('Custom...','custom'));select.value=currentIsCommon?String(current):'custom';document.getElementById('custom-tx-power').value=current??'';document.getElementById('custom-tx-power').max=maximum;setCustomPowerMode()}
-async function loadDeviceSettings(){deviceSettingsLoaded=false;loadedDeviceSettings=null;let statusMessage=document.getElementById('device-settings-status');statusMessage.dataset.state='';statusMessage.textContent='Loading settings from device...';try{let response=await fetch('/api/device-settings'),data=await response.json();if(!response.ok)throw new Error(data.error||'Device settings could not be loaded');loadedDeviceSettings=data;document.getElementById('device-name').value=data.name||'';document.getElementById('advert-lat').value=data.adv_lat??'';document.getElementById('advert-lon').value=data.adv_lon??'';document.getElementById('rx-delay').value=data.rx_delay??'';document.getElementById('airtime-factor').value=data.airtime_factor??'';document.getElementById('telemetry-mode-base').value=data.telemetry_mode_base??0;document.getElementById('telemetry-mode-loc').value=data.telemetry_mode_loc??0;document.getElementById('telemetry-mode-env').value=data.telemetry_mode_env??0;document.getElementById('advert-location-policy').value=data.adv_loc_policy??0;document.getElementById('manual-add-contacts').checked=Boolean(data.manual_add_contacts);document.getElementById('multi-acks').checked=Boolean(data.multi_acks);document.getElementById('custom-radio-frequency').value=data.radio_freq??'';document.getElementById('custom-radio-bandwidth').value=data.radio_bw??'';document.getElementById('custom-radio-spreading-factor').value=data.radio_sf??'';document.getElementById('custom-radio-coding-rate').value=data.radio_cr??'';let matchingProfile=Object.entries(commonRadioProfiles).find(([,profile])=>Number(profile.radio_bw)===Number(data.radio_bw)&&Number(profile.radio_sf)===Number(data.radio_sf)&&Number(profile.radio_cr)===Number(data.radio_cr));document.getElementById('radio-profile').value=matchingProfile?.[0]||'custom';setCustomRadioMode();let maximum=Number(data.max_tx_power??30);populatePowerOptions(maximum,data.tx_power);document.getElementById('tx-power-limit').textContent='Device maximum: '+maximum+' dBm';deviceSettingsLoaded=true;statusMessage.textContent='Settings loaded from device.';statusMessage.dataset.state='success'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
+
+let discoveredAdvertsCache=[],selectedDiscoveredKey=null;
+async function refreshDiscoveredNodes(){
+  let list=document.getElementById("discovered-nodes-list"),status=document.getElementById("discovered-nodes-status");
+  if(!list)return;
+  try{
+    let r=await fetch("/api/peers"),d=await r.json();
+    let seen=new Map();
+    for(let item of (d.incoming_adverts||[])){
+      let pk=String(item.public_key||item.id||"").toLowerCase();
+      if(pk&&!seen.has(pk))seen.set(pk,item);
+    }
+    discoveredAdvertsCache=[...seen.values()];
+    renderDiscoveredNodes();
+  }catch(e){if(status)status.textContent="Could not load advertised nodes."}
+}
+function renderDiscoveredNodes(){
+  let list=document.getElementById("discovered-nodes-list");
+  if(!list)return;
+  list.replaceChildren();
+  if(!discoveredAdvertsCache.length){
+    let empty=document.createElement("p");empty.className="settings-description";empty.style.padding="8px 0";empty.textContent="No advertisements received yet.";list.appendChild(empty);return;
+  }
+  let knownKeys=new Set((mapNodes||[]).map(n=>String(n.public_key||n.id||"").toLowerCase()));
+  for(let node of discoveredAdvertsCache){
+    let pk=String(node.public_key||node.id||"").toLowerCase();
+    let isSaved=knownKeys.has(pk)||[...knownKeys].some(k=>k&&pk&&(k.startsWith(pk)||pk.startsWith(k)));
+    let row=document.createElement("button");row.type="button";row.className="device-setting-row";
+    if(selectedDiscoveredKey===pk)row.style.background="var(--panel-raised)";
+    let left=document.createElement("span");
+    let title=document.createElement("strong");title.textContent=node.name||("Node "+pk.slice(0,8));
+    let sub=document.createElement("small");
+    let ago=node.last_heard?new Date(Number(node.last_heard)*1000).toLocaleTimeString():"Unknown";
+    sub.textContent=pk.slice(0,16)+"… · Hops: "+(node.hops??"?")+" · Heard: "+ago;
+    left.append(title,sub);
+    let badge=document.createElement("span");badge.className="live-tag";badge.textContent=isSaved?"CONTACT":"NEW";
+    row.append(left,badge);
+    row.onclick=()=>selectDiscoveredNode(node,isSaved);
+    list.appendChild(row);
+  }
+}
+function selectDiscoveredNode(node,isSaved){
+  let box=document.getElementById("discovered-node-detail");
+  if(!box)return;
+  let pk=String(node.public_key||node.id||"").toLowerCase();
+  selectedDiscoveredKey=pk;
+  renderDiscoveredNodes();
+  box.style.display="block";
+  box.replaceChildren();
+  let h=document.createElement("strong");h.style.display="block";h.style.marginBottom="6px";h.textContent=(node.name||"Unnamed Node");
+  let k=document.createElement("div");k.style.font="11px ui-monospace,monospace";k.style.wordBreak="break-all";k.style.marginBottom="8px";k.textContent="Key: "+pk;
+  let controls=document.createElement("div");controls.style.display="flex";controls.style.gap="8px";controls.style.flexWrap="wrap";controls.style.alignItems="center";
+  if(isSaved){
+    let note=document.createElement("span");note.style.color="var(--accent)";note.style.fontSize="12px";note.textContent="Already in your contacts.";controls.appendChild(note);
+  }else{
+    let sel=document.createElement("select");sel.id="disc-node-type";sel.style.width="auto";
+    [["user","User"],["repeater","Repeater"],["room","Room server"],["sensor","Sensor"]].forEach(([v,l])=>sel.add(new Option(l,v)));
+    let addBtn=document.createElement("button");addBtn.type="button";addBtn.textContent="Add as Contact";
+    addBtn.onclick=()=>addDiscoveredAsContact(node,sel.value,addBtn);
+    controls.append(sel,addBtn);
+  }
+  let closeBtn=document.createElement("button");closeBtn.type="button";closeBtn.className="secondary";closeBtn.textContent="Close";
+  closeBtn.onclick=()=>{selectedDiscoveredKey=null;box.style.display="none";renderDiscoveredNodes()};
+  controls.appendChild(closeBtn);
+  box.append(h,k,controls);
+}
+async function addDiscoveredAsContact(node,nodeType,btn){
+  let status=document.getElementById("discovered-nodes-status");
+  let pk=String(node.public_key||node.id||"").toLowerCase();
+  let name=String(node.name||("Node "+pk.slice(0,8))).slice(0,31);
+  if(btn)btn.disabled=true;
+  if(status){status.dataset.state="";status.textContent="Adding "+name+" to contacts..."}
+  try{
+    let r=await fetch("/api/contacts/add-heard",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({target:pk,name})});
+    if(!r.ok){
+      r=await fetch("/api/contacts/add",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({public_key:pk,name,node_type:nodeType})});
+    }
+    let d=await r.json();
+    if(!r.ok)throw new Error(d.error||"Could not add contact");
+    if(status){status.dataset.state="success";status.textContent="Added "+name+" to contacts!"}
+    if(typeof loadPeers==="function")await loadPeers();
+    await refreshDiscoveredNodes();
+    selectDiscoveredNode(node,true);
+  }catch(e){
+    if(status){status.dataset.state="error";status.textContent=e.message}
+    if(btn)btn.disabled=false;
+  }
+}
+
+async function loadDeviceSettings(){deviceSettingsLoaded=false;loadedDeviceSettings=null;let statusMessage=document.getElementById('device-settings-status');statusMessage.dataset.state='';statusMessage.textContent='Loading settings from device...';try{let response=await fetch('/api/device-settings'),data=await response.json();if(!response.ok)throw new Error(data.error||'Device settings could not be loaded');loadedDeviceSettings=data;document.getElementById('device-name').value=data.name||'';document.getElementById('advert-lat').value=data.adv_lat??'';document.getElementById('advert-lon').value=data.adv_lon??'';document.getElementById('rx-delay').value=data.rx_delay??'';document.getElementById('airtime-factor').value=data.airtime_factor??'';document.getElementById('telemetry-mode-base').value=data.telemetry_mode_base??0;document.getElementById('telemetry-mode-loc').value=data.telemetry_mode_loc??0;document.getElementById('telemetry-mode-env').value=data.telemetry_mode_env??0;document.getElementById('advert-location-policy').value=data.adv_loc_policy??0;document.getElementById('manual-add-contacts').checked=Boolean(data.manual_add_contacts);document.getElementById('multi-acks').checked=Boolean(data.multi_acks);document.getElementById('custom-radio-frequency').value=data.radio_freq??'';document.getElementById('custom-radio-bandwidth').value=data.radio_bw??'';document.getElementById('custom-radio-spreading-factor').value=data.radio_sf??'';document.getElementById('custom-radio-coding-rate').value=data.radio_cr??'';let matchingProfile=Object.entries(commonRadioProfiles).find(([,profile])=>Number(profile.radio_bw)===Number(data.radio_bw)&&Number(profile.radio_sf)===Number(data.radio_sf)&&Number(profile.radio_cr)===Number(data.radio_cr));document.getElementById('radio-profile').value=matchingProfile?.[0]||'custom';setCustomRadioMode();let maximum=Number(data.max_tx_power??30);populatePowerOptions(maximum,data.tx_power);document.getElementById('tx-power-limit').textContent='Device maximum: '+maximum+' dBm';deviceSettingsLoaded=true;refreshDiscoveredNodes();statusMessage.textContent='Settings loaded from device.';statusMessage.dataset.state='success'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
 async function saveDeviceSettings(event){event.preventDefault();let statusMessage=document.getElementById('device-settings-status'),form=new FormData(event.currentTarget);if(!loadedDeviceSettings){statusMessage.textContent='Load settings from the connected device first.';statusMessage.dataset.state='error';return}let profile=form.get('radio_profile'),values={name:String(form.get('name')||'').trim(),adv_lat:Number(form.get('adv_lat')),adv_lon:Number(form.get('adv_lon')),rx_delay:Number(form.get('rx_delay')),airtime_factor:Number(form.get('airtime_factor')),telemetry_mode_base:Number(form.get('telemetry_mode_base')),telemetry_mode_loc:Number(form.get('telemetry_mode_loc')),telemetry_mode_env:Number(form.get('telemetry_mode_env')),adv_loc_policy:Number(form.get('adv_loc_policy')),manual_add_contacts:form.get('manual_add_contacts')==='on',multi_acks:form.get('multi_acks')==='on'},radio=profile==='custom'?{radio_freq:Number(form.get('radio_freq')),radio_bw:Number(form.get('radio_bw')),radio_sf:Number(form.get('radio_sf')),radio_cr:Number(form.get('radio_cr'))}:{radio_freq:Number(loadedDeviceSettings.radio_freq),...commonRadioProfiles[profile]};Object.assign(values,radio);let powerMode=form.get('tx_power_mode');values.tx_power=Number(powerMode==='custom'?form.get('custom_tx_power'):powerMode);statusMessage.dataset.state='';statusMessage.textContent='Saving settings to device...';try{let response=await fetch('/api/device-settings',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({values})}),data=await response.json();if(!response.ok)throw new Error(data.error||'Settings could not be saved');deviceSettingsLoaded=false;await loadDeviceSettings();statusMessage.textContent='Device settings saved.';statusMessage.dataset.state='success'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
 let connectInFlight=false;
 async function connect(){if(connectInFlight)return;if(connection_type.value==='bluetooth'&&!ble_mac.value){alert('Please select a Bluetooth device first');return}if(connection_type.value==='bluetooth'){document.getElementById('ble-pin-modal').style.display='flex';document.getElementById('ble-pin-input').value='';document.getElementById('ble-pin-input').focus();return}await performConnect('')}
@@ -4848,6 +4937,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <section class="card device-settings-card"><div class="panel-heading"><div><span class="eyebrow">ACTIONS</span><h2>Device actions</h2></div></div><div class="device-action-grid"><button type="button" class="secondary" onclick="runDeviceAction('sync_time')">Sync time</button><button type="button" class="secondary" onclick="runDeviceAction('refresh_contacts')">Refresh contacts</button><button type="button" class="secondary" onclick="runDeviceAction('advert_zero_hop')">Send advert (zero hop)</button><button type="button" class="secondary" onclick="runDeviceAction('advert_flood')">Send advert (flood routed)</button><button type="button" class="secondary" onclick="runDeviceAction('reboot')">Reboot device</button><button type="button" class="secondary danger-action" onclick="runDeviceAction('delete_paths')">Delete all paths</button></div><p id="device-action-status" class="settings-status" aria-live="polite"></p></section>
 <section class="card device-settings-card"><div class="panel-heading"><div><span class="eyebrow">EXPORT</span><h2>GPX export</h2></div></div><div class="device-action-grid"><button type="button" class="secondary" onclick="exportDeviceGpx('repeaters')">Export repeaters</button><button type="button" class="secondary" onclick="exportDeviceGpx('contacts')">Export contacts</button><button type="button" class="secondary" onclick="exportDeviceGpx('all')">Export all</button></div><p id="gpx-export-status" class="settings-status" aria-live="polite"></p></section>
 <section class="card device-settings-card"><div class="panel-heading"><div><span class="eyebrow">DIAGNOSTICS</span><h2>Debug and statistics</h2></div></div><div class="device-action-grid"><button type="button" class="secondary" onclick="showDeviceLogs()">App debug log</button><button type="button" class="secondary" disabled title="BLE transport debug logs are not exposed by the Python client">Companion debug log</button><button type="button" class="secondary" onclick="runDeviceAction('stats',{stats_type:'radio'})">Radio statistics</button><button type="button" class="secondary" onclick="runDeviceAction('stats',{stats_type:'core'})">Core statistics</button><button type="button" class="secondary" onclick="runDeviceAction('stats',{stats_type:'packets'})">Packet statistics</button><button type="button" class="secondary" onclick="runDeviceAction('telemetry')">Self telemetry</button></div><pre id="device-debug-output" class="device-debug-output" hidden></pre></section>
+<section class="card device-settings-card" id="discovered-nodes-card"><div class="panel-heading"><div><span class="eyebrow">DISCOVERY</span><h2>Discovered nodes</h2></div><button type="button" class="secondary" onclick="refreshDiscoveredNodes()">Refresh</button></div><p class="settings-description">Nodes heard via MeshCore advertisements. Click a node to inspect or add it as a contact.</p><div id="discovered-nodes-list" class="known-devices-list" style="padding:0 16px 12px"></div><div id="discovered-node-detail" style="display:none;margin:0 16px 14px;padding:12px;border:1px solid var(--border);background:var(--panel-raised)"></div><p id="discovered-nodes-status" class="settings-status" aria-live="polite"></p></section>
 <section class="card device-settings-card"><div class="panel-heading"><div><span class="eyebrow">ABOUT</span><h2>MeshCore Dashboard</h2></div></div><p class="settings-description">MeshCore device control with the Ollama-powered local assistant.</p><button class="secondary" type="button" onclick="showDeviceAbout()">About this dashboard</button></section>
 </div>
 </main>
@@ -6495,7 +6585,7 @@ async def update_device_settings_handler(request):
             if updated["name"] != current.get("name"):
                 result = await commands.set_name(updated["name"])
                 if result.type == EventType.ERROR:
-                    raise RuntimeError(str(result.payload))
+                    raise RuntimeError(f"STEP_ERR L6498: {result.payload}")
 
             radio_keys = ("radio_freq", "radio_bw", "radio_sf", "radio_cr", "repeat")
             if any(updated[key] != current.get(key) for key in radio_keys):
@@ -6507,12 +6597,12 @@ async def update_device_settings_handler(request):
                     repeat=updated["repeat"] if current.get("repeat") is not None else None,
                 )
                 if result.type == EventType.ERROR:
-                    raise RuntimeError(str(result.payload))
+                    raise RuntimeError(f"STEP_ERR L6510: {result.payload}")
 
             if updated["tx_power"] != current.get("tx_power"):
                 result = await commands.set_tx_power(updated["tx_power"])
                 if result.type == EventType.ERROR:
-                    raise RuntimeError(str(result.payload))
+                    raise RuntimeError(f"STEP_ERR L6515: {result.payload}")
 
             if any(
                 updated[key] != current.get(key)
@@ -6520,7 +6610,7 @@ async def update_device_settings_handler(request):
             ):
                 result = await commands.set_coords(updated["adv_lat"], updated["adv_lon"])
                 if result.type == EventType.ERROR:
-                    raise RuntimeError(str(result.payload))
+                    raise RuntimeError(f"STEP_ERR L6523: {result.payload}")
 
             if current.get("rx_delay") is not None and current.get("airtime_factor") is not None and any(
                 updated[key] != current.get(key)
@@ -6530,68 +6620,82 @@ async def update_device_settings_handler(request):
                     updated["rx_delay"], updated["airtime_factor"]
                 )
                 if result.type == EventType.ERROR:
-                    raise RuntimeError(str(result.payload))
+                    raise RuntimeError(f"STEP_ERR L6533: {result.payload}")
+
+            if updated.get("manual_add_contacts") != current.get("manual_add_contacts"):
+                result = await commands.set_other_params(
+                    bool(updated["manual_add_contacts"]),
+                    int(updated.get("telemetry_mode_base") or 0),
+                    int(updated.get("telemetry_mode_loc") or 0),
+                    int(updated.get("telemetry_mode_env") or 0),
+                    int(updated.get("adv_loc_policy") or 0),
+                )
+                if result.type == EventType.ERROR:
+                    raise RuntimeError(f"STEP_ERR L6544: {result.payload}")
 
             other_keys = (
-                "manual_add_contacts", "telemetry_mode_base", "telemetry_mode_loc",
+                "telemetry_mode_base", "telemetry_mode_loc",
                 "telemetry_mode_env", "adv_loc_policy", "multi_acks",
             )
             if any(updated[key] != current.get(key) for key in other_keys):
+                safe_other = dict(updated)
+                for k in ("telemetry_mode_base", "telemetry_mode_loc", "telemetry_mode_env", "adv_loc_policy"):
+                    safe_other[k] = int(safe_other.get(k) or 0)
                 set_other = getattr(commands, "set_other_params_from_infos", None)
                 if set_other is None:
-                    set_other = commands.set_other_params
-                    result = await set_other(
-                        updated["manual_add_contacts"],
-                        updated["telemetry_mode_base"],
-                        updated["telemetry_mode_loc"],
-                        updated["telemetry_mode_env"],
-                        updated["adv_loc_policy"],
+                    result = await commands.set_other_params(
+                        bool(safe_other["manual_add_contacts"]),
+                        safe_other["telemetry_mode_base"],
+                        safe_other["telemetry_mode_loc"],
+                        safe_other["telemetry_mode_env"],
+                        safe_other["adv_loc_policy"],
                     )
                 else:
-                    result = await set_other(updated)
-                    # Older firmware rejects the 5-byte frame carrying multi_acks.
-                    if result.type == EventType.ERROR and updated["multi_acks"] == current.get("multi_acks"):
+                    result = await set_other(safe_other)
+                    if result.type == EventType.ERROR and safe_other.get("multi_acks") == current.get("multi_acks"):
                         result = await commands.set_other_params(
-                            updated["manual_add_contacts"],
-                            updated["telemetry_mode_base"],
-                            updated["telemetry_mode_loc"],
-                            updated["telemetry_mode_env"],
-                            updated["adv_loc_policy"],
+                            bool(safe_other["manual_add_contacts"]),
+                            safe_other["telemetry_mode_base"],
+                            safe_other["telemetry_mode_loc"],
+                            safe_other["telemetry_mode_env"],
+                            safe_other["adv_loc_policy"],
                         )
                 if result.type == EventType.ERROR:
-                    raise RuntimeError(str(result.payload))
+                    raise RuntimeError(f"STEP_ERR L6574: {result.payload}")
 
             if updated.get("device_pin") not in (None, ""):
                 result = await commands.set_devicepin(int(updated["device_pin"]))
                 if result.type == EventType.ERROR:
-                    raise RuntimeError(str(result.payload))
+                    raise RuntimeError(f"STEP_ERR L6579: {result.payload}")
 
-            if "gps_enabled" in values:
+            if "gps_enabled" in values and updated.get("gps_enabled") != current.get("gps_enabled"):
                 result = await commands.set_custom_var(
                     "gps", "1" if updated["gps_enabled"] else "0"
                 )
                 if result.type == EventType.ERROR:
-                    raise RuntimeError(str(result.payload))
+                    raise RuntimeError(f"STEP_ERR L6586: {result.payload}")
             if updated.get("gps_interval") not in (None, ""):
                 result = await commands.set_custom_var(
                     "gps_interval", str(updated["gps_interval"])
                 )
                 if result.type == EventType.ERROR:
-                    raise RuntimeError(str(result.payload))
-            if "auto_add_flags" in values:
+                    raise RuntimeError(f"STEP_ERR L6592: {result.payload}")
+            if "auto_add_flags" in values and updated.get("auto_add_flags") != current.get("auto_add_flags"):
                 set_auto_add = getattr(commands, "set_autoadd_config", None)
                 if set_auto_add is None:
                     raise RuntimeError("This MeshCore version cannot edit auto-add settings")
                 result = await set_auto_add(updated["auto_add_flags"])
+                if result.type == EventType.ERROR and "ILLEGAL_ARG" in str(result.payload):
+                    result = await commands.set_other_params(not bool(updated["auto_add_flags"] & 2), int(updated.get("telemetry_mode_base") or 0), int(updated.get("telemetry_mode_loc") or 0), int(updated.get("telemetry_mode_env") or 0), int(updated.get("adv_loc_policy") or 0))
                 if result.type == EventType.ERROR:
-                    raise RuntimeError(str(result.payload))
-            if "path_hash_mode" in values:
+                    raise RuntimeError(f"STEP_ERR L6601: {result.payload}")
+            if "path_hash_mode" in values and updated.get("path_hash_mode") != current.get("path_hash_mode"):
                 set_path_hash = getattr(commands, "set_path_hash_mode", None)
                 if set_path_hash is None:
                     raise RuntimeError("This MeshCore version cannot edit path hash mode")
                 result = await set_path_hash(updated["path_hash_mode"])
                 if result.type == EventType.ERROR:
-                    raise RuntimeError(str(result.payload))
+                    raise RuntimeError(f"STEP_ERR L6608: {result.payload}")
 
             refreshed = await commands.send_appstart()
             if refreshed.type == EventType.ERROR:
@@ -6646,7 +6750,7 @@ async def device_action_handler(request):
                         continue
                     result = await reset_path(public_key)
                     if result.type == EventType.ERROR:
-                        raise RuntimeError(str(result.payload))
+                        raise RuntimeError(f"STEP_ERR line: {result.payload}")
                     count += 1
                 return web.json_response({"message": f"Reset paths for {count} contacts."})
             elif action == "refresh_contacts":
