@@ -9,12 +9,13 @@ DESKTOP_DIR="$HOME/Desktop"
 detect_headless_sbc() {
   # Check for common SBC indicators
   local is_sbc=false
+  if detect_board_and_os >/dev/null 2>&1; then return 0; fi
   local has_display=false
   local is_server_os=false
 
   # Detect common SBC boards
   if [ -f /proc/device-tree/model ]; then
-    local board=$(cat /proc/device-tree/model 2>/dev/null || echo "")
+    local board=$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || echo "")
     if [[ "$board" == *"Pi"* ]] || [[ "$board" == *"Orange Pi"* ]] || [[ "$board" == *"Banana Pi"* ]] || \
        [[ "$board" == *"NanoPI"* ]] || [[ "$board" == *"Raspberry"* ]] || [[ "$board" == *"BeagleBone"* ]]; then
       is_sbc=true
@@ -46,7 +47,7 @@ detect_board_and_os() {
 
   # Try to detect Orange Pi Zero 4
   if [ -f /proc/device-tree/model ]; then
-    board_name=$(cat /proc/device-tree/model 2>/dev/null || echo "")
+    board_name=$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || echo "")
   fi
 
   # Detect Debian version
@@ -312,10 +313,10 @@ fi
 PREFERENCES_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/meshcore-ollama-bot"
 mkdir -p "$PREFERENCES_DIR"
 PREFERENCES_PATH="$PREFERENCES_DIR/preferences.json" \
-  AUTO_OPEN_BROWSER="$AUTO_OPEN_BROWSER" python3 -c 'import json, os; from pathlib import Path; p=Path(os.environ["PREFERENCES_PATH"]); d={};
+  IS_HEADLESS="$IS_HEADLESS" AUTO_OPEN_BROWSER="$AUTO_OPEN_BROWSER" python3 -c 'import json, os; from pathlib import Path; p=Path(os.environ["PREFERENCES_PATH"]); d={};
 try: d=json.loads(p.read_text())
 except (OSError, json.JSONDecodeError): pass
-d["auto_open_browser"] = os.environ["AUTO_OPEN_BROWSER"] == "true"; p.write_text(json.dumps(d, indent=2) + "\n")'
+d["auto_open_browser"] = os.environ["AUTO_OPEN_BROWSER"] == "true"; d["headless"] = os.environ.get("IS_HEADLESS") == "true"; p.write_text(json.dumps(d, indent=2) + "\n")'
 
 # Keep an existing non-default model choice intact; update only the shipped default.
 if [[ -f "$SCRIPT_DIR/config.json" && "$SELECTED_MODEL" != "llama3.2:1b-instruct-q4_K_M" ]]; then
