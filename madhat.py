@@ -2786,7 +2786,7 @@ async def handle_mesh_probe(raw_text: str, sender_label: str, packet: dict, info
             "Here is the exact trail of repeaters you just bothered:",
             "Routing receipts, as requested by management:",
         ])
-        return SingleMessage(f"{q} ({hops} hops, 2-byte) {route}")
+        return SingleMessage(f"{q} (0 hops) Direct" if hops == 0 else f"{q} ({hops} hops, 2-byte) {route}")
     return None
 
 
@@ -3139,6 +3139,7 @@ async def handle_incoming_channel_message(event):
     ch_sender = parse_channel_sender(text) or 'Node'
     allow_probe = _is_probe_allowed_channel(channel_target) or bool(re.match(r"^/bot\b", message_text.strip(), re.I))
     reply = await handle_mesh_probe(message_text, ch_sender, packet, ch_info) if allow_probe else None
+    is_probe = reply is not None
     if reply is None:
         reply = update_greeting_setting_from_message(message_text, channel_target)
     if reply is None:
@@ -3162,7 +3163,7 @@ async def handle_incoming_channel_message(event):
     log_to_dash(f"AI channel reply: {reply}")
     reply_parts = split_reply_into_messages(
         reply,
-        prefix=f"{bot_settings['name']}: ",
+        prefix="" if is_probe else f"{bot_settings['name']}: ",
         max_parts=current_reply_packet_limit(),
     )
 
