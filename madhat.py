@@ -2743,7 +2743,8 @@ def _format_2byte_repeaters(packet: dict, info: dict) -> str:
     return ", ".join(f"{hx} ({names[hx]})" if hx in names else hx for hx in hex_codes)
 
 def _is_probe_allowed_channel(channel_target: str) -> bool:
-    entry = app_state.get("channels", {}).get(str(channel_target), {})
+    ch_map = app_state.get("channels", {})
+    entry = ch_map.get(str(channel_target)) or (ch_map.get(int(channel_target)) if str(channel_target).isdigit() else {}) or {}
     ch_name = display_name(str(channel_target), entry).strip()
     low = ch_name.lower()
     if low in ("#test", "test"):
@@ -2753,7 +2754,8 @@ def _is_probe_allowed_channel(channel_target: str) -> bool:
     return not ch_name.startswith("#")
 
 async def handle_mesh_probe(raw_text: str, sender_label: str, packet: dict, info: dict):
-    clean = re.sub(r"^(?:/bot\s+|@\[[^\]]+\]\s*|@\S+\s*)", "", raw_text.strip(), flags=re.I)
+    no_sender = re.sub(r"^[^:\r\n]{1,40}:\s*", "", raw_text.strip())
+    clean = re.sub(r"^(?:/bot\s+|@\[[^\]]+\]\s*|@\S+\s*)", "", no_sender, flags=re.I)
     cmd = clean.lstrip("/").strip().lower()
     raw_h = len(info.get("path_nodes") or []) or packet.get("path_len", 0); hops = 0 if (not isinstance(raw_h, int) or raw_h >= 255 or raw_h < 0) else raw_h
     snr = info.get("snr", packet.get("snr", "N/A"))
