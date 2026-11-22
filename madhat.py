@@ -2674,6 +2674,7 @@ async def handle_slash_command(sender_id, prompt, allow_settings):
 
 import random, urllib.request
 
+_RECENT_QUIPS = []
 CMD_THEMES = [
     "cite HR policy", "mention office paperwork", "cite firmware restrictions",
     "mention low CPU enthusiasm", "mention 3 to 5 business days",
@@ -2699,17 +2700,18 @@ async def _snark_quip(prompt_hint: str, fallbacks: list[str]) -> str:
         ],
         "stream": False,
         "keep_alive": -1,
-        "options": {"temperature": 0.9, "num_predict": 30},
+        "options": {"temperature": 1.05, "repeat_penalty": 1.25, "num_predict": 30},
     }).encode("utf-8")
     req = urllib.request.Request("http://127.0.0", data=body, headers={"Content-Type": "application/json"})
     def _call():
-        with urllib.request.urlopen(req, timeout=6.0) as r:
+        with urllib.request.urlopen(req, timeout=15.0) as r:
             d = json.loads(r.read().decode("utf-8"))
             line = d["message"]["content"].strip().splitlines()[0].strip().strip('"')
             return line if line and len(line) <= 130 else None
     try:
         res = await asyncio.to_thread(_call)
-        if res:
+        if res and res not in _RECENT_QUIPS:
+            _RECENT_QUIPS.append(res); del _RECENT_QUIPS[:-10]
             return res
     except Exception:
         pass
@@ -2750,9 +2752,9 @@ def _is_probe_allowed_channel(channel_target: str) -> bool:
 async def handle_mesh_probe(raw_text: str, sender_label: str, packet: dict, info: dict):
     clean = re.sub(r"^(?:/bot\s+|@\[[^\]]+\]\s*|@\S+\s*)", "", raw_text.strip(), flags=re.I)
     cmd = clean.lstrip("/").strip().lower()
-    hops = len(info.get("path_nodes") or []) or packet.get("path_len", 0)
+    raw_h = len(info.get("path_nodes") or []) or packet.get("path_len", 0); hops = 0 if (not isinstance(raw_h, int) or raw_h >= 255 or raw_h < 0) else raw_h
     snr = info.get("snr", packet.get("snr", "N/A"))
-    now_str = datetime.now().astimezone().strftime("%H:%M:%Z")
+    now_str = datetime.now().astimezone().strftime("%I:%M:%S %p %Z")
     if cmd == "ping":
         q = await _snark_quip(f"{sender_label} sent ping. Start with 'Pong.' and add a reluctant corporate remark.", [
             "Pong. Per HR guidelines, I am suppressing an eye-roll and replying. ",
