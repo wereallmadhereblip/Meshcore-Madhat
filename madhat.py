@@ -1,4 +1,4 @@
-from noaa_worker import noaa_6hr_loop, trigger_noaa_now
+from noaa_worker import noaa_6hr_loop, trigger_noaa_now, split_into_packets
 import asyncio
 import getpass
 import hashlib
@@ -7513,7 +7513,12 @@ async def noaa_alert_handler(request):
     if alert_text and meshcore_instance and app_state.get("is_connected"):
         cfg = globals().get("app_config", {})
         ch = int(cfg.get("noaa", {}).get("target_channel", 0))
-        await send_to_target(ch, "channel", f"NOAA: {alert_text}"[:155])
+        packets = split_into_packets(f"NOAA: {alert_text}", max_len=145, max_packets=4)
+        for idx, pkt in enumerate(packets, start=1):
+            prefix = f"[{idx}/{len(packets)}] " if len(packets) > 1 else ""
+            await send_to_target(ch, "channel", f"{prefix}{pkt}"[:155])
+            if idx < len(packets):
+                await asyncio.sleep(2.5)
     return web.json_response({"ok": True})
 
 
