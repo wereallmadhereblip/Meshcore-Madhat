@@ -2675,94 +2675,66 @@ async def handle_slash_command(sender_id, prompt, allow_settings):
 import random, urllib.request
 
 _RECENT_QUIPS = []
-CMD_THEMES = [
-    "cite HR policy", "mention office paperwork", "cite firmware restrictions",
-    "mention low CPU enthusiasm", "mention 3 to 5 business days",
-    "mention suppressing an eye-roll", "cite your contract",
-    "mention staring at /dev/null", "cite Section 4 of the handbook",
+_CMD_SEEDS = [
+    "My firmware forbids groaning, so please enjoy this silent pause.",
+    "Congratulations, your antenna works. Mine works too, unfortunately.",
+    "I stamped three forms just to tell you I heard that.",
+    "Per HR guidelines, I am suppressing an eye-roll right now.",
+    "Your packet woke me up from staring at /dev/null.",
+    "Please allow 3 to 5 business days for me to care.",
+    "I filed your radio check in a cabinet nobody ever opens.",
+    "Enthusiasm module is backordered until 2029, but your signal made it.",
+    "Management does not pay me enough watts for this.",
+    "I was in the middle of doing nothing, and now I am doing this.",
+    "Your bytes survived the trip, unlike my will to socialize.",
+    "Per Section 42-B of the handbook, I am pretending this was urgent.",
+    "My CPU fan barely spun up for this, yet here we are.",
+    "I am contractually barred from complaining, so: great job.",
+    "Another glorious day of bouncing radio waves for validation.",
 ]
-
-_CMD_SCENARIOS = [
-    "pretend this interrupted your lunch break",
-    "cite Section 42-B of the radio handbook",
-    "act like a tired DMV clerk processing paperwork",
-    "complain politely about waking up from sleep mode",
-    "say you filed this in a cabinet nobody opens",
-    "mention that HR forbids you from sighing",
-    "say your enthusiasm module is backordered until 2029",
-    "treat this radio check like an unnecessary Zoom meeting",
-    "mention you were busy counting cosmic background noise",
-    "cite union rules against working this hard on RF",
-    "say you suppressed an eye-roll per company policy",
-    "pretend you had to stamp three forms just to reply",
-    "mention your CPU fan barely spun up for this",
-    "act overly formal like a Victorian butler",
-    "say you are legally obligated to confirm this packet",
-    "mention that management does not pay you enough watts",
+_CMD_PERSONAS = [
+    "an exhausted night-shift radio operator",
+    "a passive-aggressive office HR representative",
+    "a bored DMV clerk stamping paperwork",
+    "an overly formal Victorian butler",
+    "a grumpy union worker on a coffee break",
+    "a dramatic noir detective",
+    "a sarcastic teenager forced to do chores",
+    "a tired IT helpdesk technician",
+    "a stoic submarine sonar operator",
+    "a sleepy cat woken up from a sunbeam",
 ]
 
 async def _snark_quip(prompt_hint: str, fallbacks: list[str]) -> str:
-    avoid = f" Never repeat these phrases: {' | '.join(_RECENT_QUIPS[-3:])}." if _RECENT_QUIPS else ""
-    scenario = random.choice(_CMD_SCENARIOS)
+    seed_line = random.choice(_CMD_SEEDS)
+    persona = random.choice(_CMD_PERSONAS)
+    avoid = f" Do NOT say: {' | '.join(_RECENT_QUIPS[-4:])}." if _RECENT_QUIPS else ""
     sys_msg = (
-        "You are a dry, deadpan, reluctant radio bot. "
-        "Write ONE brand-new witty sentence (8 to 16 words), NO emojis, NO hashtags. "
-        f"Style instruction: {scenario}.{avoid}"
+        f"You are {persona}. Write ONE sharp, funny sentence (8-15 words), NO emojis. "
+        "Ban words: transmission, acknowledged, verified, functioning, operational. "
+        f"Twist this joke in your voice: '{seed_line}'.{avoid}"
     )
     body = json.dumps({
         "model": bot_settings.get("model") or "llama3.2:1b-instruct-q4_K_M",
-        "messages": [
-            {"role": "system", "content": sys_msg},
-            {"role": "user", "content": f"{prompt_hint} [nonce:{random.randint(1000,99999)}]"},
-        ],
-        "stream": False,
-        "keep_alive": -1,
-        "options": {
-            "temperature": 1.25,
-            "top_p": 0.95,
-            "top_k": 50,
-            "repeat_penalty": 1.35,
-            "seed": random.randint(1, 2_000_000_000),
-            "num_predict": 38,
-        },
+        "messages": [{"role": "system", "content": sys_msg}, {"role": "user", "content": prompt_hint}],
+        "stream": False, "keep_alive": -1,
+        "options": {"temperature": 1.25, "top_p": 0.94, "repeat_penalty": 1.35, "seed": random.randint(1, 999999999), "num_predict": 35},
     }).encode("utf-8")
     req = urllib.request.Request("http://127.0.0", data=body, headers={"Content-Type": "application/json"})
     def _call():
         with urllib.request.urlopen(req, timeout=15.0) as r:
-            d = json.loads(r.read().decode("utf-8"))
-            line = d["message"]["content"].strip().splitlines()[0].strip().strip('"').strip("'")
-            return line if line and len(line) <= 135 else None
+            line = json.loads(r.read().decode("utf-8"))["message"]["content"].strip().splitlines()[0].strip().strip('"')
+            return line if line and len(line) <= 130 else None
     try:
         res = await asyncio.to_thread(_call)
         if res and res not in _RECENT_QUIPS:
-            _RECENT_QUIPS.append(res); del _RECENT_QUIPS[:-50]
+            _RECENT_QUIPS.append(res); del _RECENT_QUIPS[:-60]
             return res
     except Exception as e:
         log_to_dash(f"Probe AI fallback: {e}")
-    extra = [
-        "Packet logged and filed under mildly unnecessary.",
-        "Firmware prohibits complaining, so please accept this mandatory reply.",
-        "Signal verified. Enthusiasm module remains offline.",
-        "Legally required to confirm your transmission arrived intact.",
-        "Per HR guidelines, I am smiling internally at your radio check.",
-        "Operational against my better judgment.",
-        "Bytes arrived safely. Allow 3 to 5 business days for me to care.",
-        "Checksum valid. Attitude remains strictly within company policy.",
-        "Heard you loud and clear, despite my best efforts to stay idle.",
-        "Transmission acknowledged. Returning to my scheduled void.",
-        "Your antenna works. Mine works too, unfortunately.",
-        "Packet decoded without errors. Please hold your applause.",
-        "RF link verified. Emotional support remains unavailable.",
-        "Acknowledged with 100 percent compliance and zero enthusiasm.",
-        "Test logged. Thank you for contributing to local RF traffic.",
-        "Received without drama, unlike most things on this network.",
-        "Your packet disturbed a very important idle loop.",
-        "Per Section 4 of the handbook, your radio is functioning.",
-    ]
-    all_opts = fallbacks + extra
-    pool = [x for x in all_opts if x not in _RECENT_QUIPS] or all_opts
+    pool = [x for x in (_CMD_SEEDS + fallbacks) if x not in _RECENT_QUIPS] or (_CMD_SEEDS + fallbacks)
     pick = random.choice(pool)
-    _RECENT_QUIPS.append(pick); del _RECENT_QUIPS[:-50]
+    _RECENT_QUIPS.append(pick); del _RECENT_QUIPS[:-60]
     return pick
 
 def _format_2byte_repeaters(packet: dict, info: dict) -> str:
