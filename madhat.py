@@ -2682,32 +2682,56 @@ CMD_THEMES = [
     "mention staring at /dev/null", "cite Section 4 of the handbook",
 ]
 
+_CMD_SCENARIOS = [
+    "pretend this interrupted your lunch break",
+    "cite Section 42-B of the radio handbook",
+    "act like a tired DMV clerk processing paperwork",
+    "complain politely about waking up from sleep mode",
+    "say you filed this in a cabinet nobody opens",
+    "mention that HR forbids you from sighing",
+    "say your enthusiasm module is backordered until 2029",
+    "treat this radio check like an unnecessary Zoom meeting",
+    "mention you were busy counting cosmic background noise",
+    "cite union rules against working this hard on RF",
+    "say you suppressed an eye-roll per company policy",
+    "pretend you had to stamp three forms just to reply",
+    "mention your CPU fan barely spun up for this",
+    "act overly formal like a Victorian butler",
+    "say you are legally obligated to confirm this packet",
+    "mention that management does not pay you enough watts",
+]
+
 async def _snark_quip(prompt_hint: str, fallbacks: list[str]) -> str:
+    avoid = f" Never repeat these phrases: {' | '.join(_RECENT_QUIPS[-3:])}." if _RECENT_QUIPS else ""
+    scenario = random.choice(_CMD_SCENARIOS)
     sys_msg = (
-        "You are a reluctant, deadpan, corporate-compliant radio bot. "
-        "Reply in ONE short sentence (under 15 words) with NO emojis. "
-        "Never sigh or complain directly; cite 'policy' or 'HR guidelines'. "
-        "Examples:\n"
-        "- Per HR guidelines, I am suppressing an eye-roll and acknowledging your packet. \n"
-        "- Alive and operational, against my better judgment. \n"
-        "- Packet received. Enthusiasm module remains offline. "
+        "You are a dry, deadpan, reluctant radio bot. "
+        "Write ONE brand-new witty sentence (8 to 16 words), NO emojis, NO hashtags. "
+        f"Style instruction: {scenario}.{avoid}"
     )
     body = json.dumps({
         "model": bot_settings.get("model") or "llama3.2:1b-instruct-q4_K_M",
         "messages": [
             {"role": "system", "content": sys_msg},
-            {"role": "user", "content": f"{prompt_hint} ({random.choice(CMD_THEMES)})"},
+            {"role": "user", "content": f"{prompt_hint} [nonce:{random.randint(1000,99999)}]"},
         ],
         "stream": False,
         "keep_alive": -1,
-        "options": {"temperature": 1.05, "repeat_penalty": 1.25, "num_predict": 30},
+        "options": {
+            "temperature": 1.25,
+            "top_p": 0.95,
+            "top_k": 50,
+            "repeat_penalty": 1.35,
+            "seed": random.randint(1, 2_000_000_000),
+            "num_predict": 38,
+        },
     }).encode("utf-8")
     req = urllib.request.Request("http://127.0.0", data=body, headers={"Content-Type": "application/json"})
     def _call():
         with urllib.request.urlopen(req, timeout=15.0) as r:
             d = json.loads(r.read().decode("utf-8"))
-            line = d["message"]["content"].strip().splitlines()[0].strip().strip('"')
-            return line if line and len(line) <= 130 else None
+            line = d["message"]["content"].strip().splitlines()[0].strip().strip('"').strip("'")
+            return line if line and len(line) <= 135 else None
     try:
         res = await asyncio.to_thread(_call)
         if res and res not in _RECENT_QUIPS:
@@ -2722,17 +2746,15 @@ async def _snark_quip(prompt_hint: str, fallbacks: list[str]) -> str:
         "Legally required to confirm your transmission arrived intact.",
         "Per HR guidelines, I am smiling internally at your radio check.",
         "Operational against my better judgment.",
-        "Bytes arrived safely. Please allow 3 to 5 business days for me to care.",
+        "Bytes arrived safely. Allow 3 to 5 business days for me to care.",
         "Checksum valid. Attitude remains strictly within company policy.",
         "Heard you loud and clear, despite my best efforts to stay idle.",
         "Transmission acknowledged. Returning to my scheduled void.",
         "Your antenna works. Mine works too, unfortunately.",
-        "Copy that. No further action required or desired.",
         "Packet decoded without errors. Please hold your applause.",
         "RF link verified. Emotional support remains unavailable.",
         "Acknowledged with 100 percent compliance and zero enthusiasm.",
         "Test logged. Thank you for contributing to local RF traffic.",
-        "Signal confirmed. I hope this brings the validation you seek.",
         "Received without drama, unlike most things on this network.",
         "Your packet disturbed a very important idle loop.",
         "Per Section 4 of the handbook, your radio is functioning.",
