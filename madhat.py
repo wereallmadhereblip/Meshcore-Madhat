@@ -2672,6 +2672,8 @@ async def handle_slash_command(sender_id, prompt, allow_settings):
 
 
 
+import random, urllib.request
+
 CMD_THEMES = [
     "cite HR policy", "mention office paperwork", "cite firmware restrictions",
     "mention low CPU enthusiasm", "mention 3 to 5 business days",
