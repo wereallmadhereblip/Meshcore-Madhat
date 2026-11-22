@@ -1,3 +1,4 @@
+from noaa_worker import noaa_6hr_loop
 import asyncio
 import getpass
 import hashlib
@@ -7260,12 +7261,16 @@ async def on_startup(app):
     app["ollama_task"] = asyncio.create_task(update_available_models())
     app["ollama_schedule_task"] = asyncio.create_task(ollama_schedule_loop())
     app["connection_task"] = asyncio.create_task(auto_connect_hardware())
+    async def _send_noaa_chan(ch, msg):
+        if meshcore_instance and app_state.get("is_connected"):
+            await send_to_target(ch, "channel", msg[:155])
+    app["noaa_task"] = asyncio.create_task(noaa_6hr_loop(lambda: globals().get("app_config", {}), _send_noaa_chan))
 
 
 async def on_cleanup(app):
     for task in (
         app["connection_task"], app["telemetry_task"], app["ollama_task"],
-        app["ollama_schedule_task"],
+        app["ollama_schedule_task"], app["noaa_task"],
     ):
         task.cancel()
         try:
@@ -7353,6 +7358,8 @@ def login_response(token):
 
 @web.middleware
 async def auth_middleware(request, handler):
+    if request.path == "/api/noaa-alert" and request.remote in ("127.0.0.1", "::1"):
+        return await handler(request)
     if request.path in AUTH_PUBLIC_PATHS or valid_session_token(request.cookies.get(AUTH_COOKIE)):
         return await handler(request)
     if request.path.startswith("/api/"):
@@ -7496,6 +7503,17 @@ $("reset").onsubmit=async e=>{e.preventDefault();const r=await post("/api/reset"
 </script></body></html>"""
 
 
+
+async def noaa_alert_handler(request):
+    if request.remote not in ("127.0.0.1", "::1"):
+        return web.json_response({"error": "Localhost only"}, status=403)
+    alert_text = (await request.text()).strip()
+    if alert_text and meshcore_instance and app_state.get("is_connected"):
+        cfg = globals().get("app_config", {})
+        ch = int(cfg.get("noaa", {}).get("target_channel", 0))
+        await send_to_target(ch, "channel", f"NOAA: {alert_text}"[:155])
+    return web.json_response({"ok": True})
+
 def create_app():
     app = web.Application(middlewares=[auth_middleware])
     app.router.add_get("/login", login_page_handler)
@@ -7513,6 +7531,7 @@ def create_app():
     app.router.add_get("/api/config", config_handler)
     app.router.add_patch("/api/config", update_config_handler)
     app.router.add_get("/api/local-weather", local_weather_handler)
+    app.router.add_post("/api/noaa-alert", noaa_alert_handler)
     app.router.add_post("/api/restart", restart_dashboard_handler)
     app.router.add_post("/api/update", update_app_handler)
     app.router.add_get("/api/update/check", check_for_update_handler)
