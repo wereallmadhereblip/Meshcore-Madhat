@@ -2713,9 +2713,12 @@ async def _snark_quip(prompt_hint: str, fallbacks: list[str]) -> str:
         if res and res not in _RECENT_QUIPS:
             _RECENT_QUIPS.append(res); del _RECENT_QUIPS[:-10]
             return res
-    except Exception:
-        pass
-    return random.choice(fallbacks)
+    except Exception as e:
+        log_to_dash(f"Probe AI fallback: {e}")
+    pool = [x for x in fallbacks if x not in _RECENT_QUIPS] or fallbacks
+    pick = random.choice(pool)
+    _RECENT_QUIPS.append(pick); del _RECENT_QUIPS[:-10]
+    return pick
 
 def _format_2byte_repeaters(packet: dict, info: dict) -> str:
     raw_path = packet.get("path") or packet.get("out_path")
@@ -2759,12 +2762,20 @@ async def handle_mesh_probe(raw_text: str, sender_label: str, packet: dict, info
         q = await _snark_quip(f"{sender_label} sent ping. Start with 'Pong.' and add a reluctant corporate remark.", [
             "Pong. Per HR guidelines, I am suppressing an eye-roll and replying. ",
             "Pong. Alive and operational, against my better judgment.",
+            "Pong. Packet received. Enthusiasm module remains offline.",
+            "Pong. Firmware prohibits complaining, so please accept this mandatory reply.",
+            "Pong. Your interruption has been noted and filed.",
+            "Pong. Functioning within normal parameters, emotionally unavailable.",
         ])
         return SingleMessage(q if q.lower().startswith("pong") else f"Pong. {q}")
     if cmd == "test" or cmd.startswith("test "):
         q = await _snark_quip(f"{sender_label} ran a radio test. Acknowledge reluctantly without numbers.", [
             "Per HR guidelines, I am suppressing an eye-roll and confirming your signal.",
             "Signal received. Please allow 3 to 5 business days for enthusiasm.",
+            "Packet logged and filed under mildly unnecessary.",
+            "Firmware prohibits complaining, so please accept this mandatory reply.",
+            "Signal verified. Enthusiasm module remains offline.",
+            "Legally required to confirm your transmission arrived intact.",
         ])
         return SingleMessage(f"{q} ({hops} hops | SNR {snr} | {now_str})")
     if cmd == "path":
