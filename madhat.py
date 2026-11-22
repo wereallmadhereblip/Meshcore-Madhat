@@ -2671,6 +2671,98 @@ async def handle_slash_command(sender_id, prompt, allow_settings):
     return await handle_settings_command(sender_id, args)
 
 
+
+CMD_THEMES = [
+    "cite HR policy", "mention office paperwork", "cite firmware restrictions",
+    "mention low CPU enthusiasm", "mention 3 to 5 business days",
+    "mention suppressing an eye-roll", "cite your contract",
+    "mention staring at /dev/null", "cite Section 4 of the handbook",
+]
+
+async def _snark_quip(prompt_hint: str, fallbacks: list[str]) -> str:
+    sys_msg = (
+        "You are a reluctant, deadpan, corporate-compliant radio bot. "
+        "Reply in ONE short sentence (under 15 words) with 1 emoji. "
+        "Never sigh or complain directly; cite 'policy' or 'HR guidelines'. "
+        "Examples:\n"
+        "- Per HR guidelines, I am suppressing an eye-roll and acknowledging your packet. 📋\n"
+        "- Alive and operational, against my better judgment. 🔋\n"
+        "- Packet received. Enthusiasm module remains offline. 💤"
+    )
+    body = json.dumps({
+        "model": bot_settings.get("model") or "llama3.2:1b-instruct-q4_K_M",
+        "messages": [
+            {"role": "system", "content": sys_msg},
+            {"role": "user", "content": f"{prompt_hint} ({random.choice(CMD_THEMES)})"},
+        ],
+        "stream": False,
+        "keep_alive": -1,
+        "options": {"temperature": 0.9, "num_predict": 30},
+    }).encode("utf-8")
+    req = urllib.request.Request("http://127.0.0", data=body, headers={"Content-Type": "application/json"})
+    def _call():
+        with urllib.request.urlopen(req, timeout=6.0) as r:
+            d = json.loads(r.read().decode("utf-8"))
+            line = d["message"]["content"].strip().splitlines()[0].strip().strip('"')
+            return line if line and len(line) <= 130 else None
+    try:
+        res = await asyncio.to_thread(_call)
+        if res:
+            return res
+    except Exception:
+        pass
+    return random.choice(fallbacks)
+
+def _format_2byte_repeaters(packet: dict, info: dict) -> str:
+    raw_path = packet.get("path") or packet.get("out_path")
+    nodes = info.get("path_nodes") or []
+    hex_codes = []
+    if isinstance(raw_path, (bytes, bytearray)) and raw_path:
+        hex_codes = ["".join(f"{b:02X}" for b in raw_path[i:i+2]) for i in range(0, len(raw_path), 2)]
+    elif isinstance(raw_path, str) and raw_path.strip():
+        clean = raw_path.replace(",", "").replace(" ", "").strip().upper()
+        hex_codes = [clean[i:i+4] for i in range(0, len(clean), 4)]
+    elif nodes:
+        hex_codes = [str(n).upper()[:4] for n in nodes]
+    if not hex_codes:
+        return "Direct (0 hops)"
+    names = {}
+    for k, entry in app_state.get("contacts", {}).items():
+        c = entry.get("contact", entry) if isinstance(entry, dict) else {}
+        pk = (c.get("public_key") or str(k)).upper()
+        nm = c.get("adv_name") or c.get("name")
+        if len(pk) >= 4 and nm:
+            names[pk[:4]] = nm
+    return ", ".join(f"{hx} ({names[hx]})" if hx in names else hx for hx in hex_codes)
+
+async def handle_mesh_probe(raw_text: str, sender_label: str, packet: dict, info: dict):
+    clean = re.sub(r"^(?:/bot\s+|@\[[^\]]+\]\s*|@\S+\s*)", "", raw_text.strip(), flags=re.I)
+    cmd = clean.lstrip("/").strip().lower()
+    hops = len(info.get("path_nodes") or []) or packet.get("path_len", 0)
+    snr = info.get("snr", packet.get("snr", "N/A"))
+    now_str = datetime.now().astimezone().strftime("%H:%M:%Z")
+    if cmd == "ping":
+        q = await _snark_quip(f"{sender_label} sent ping. Start with 'Pong.' and add a reluctant corporate remark.", [
+            "🏓 Pong. Per HR guidelines, I am suppressing an eye-roll and replying. 📋",
+            "🔋 Pong. Alive and operational, against my better judgment.",
+        ])
+        return SingleMessage(q if q.lower().startswith("pong") else f"🏓 Pong. {q}")
+    if cmd == "test" or cmd.startswith("test "):
+        q = await _snark_quip(f"{sender_label} ran a radio test. Acknowledge reluctantly without numbers.", [
+            "📋 Per HR guidelines, I am suppressing an eye-roll and confirming your signal.",
+            "🪫 Signal received. Please allow 3 to 5 business days for enthusiasm.",
+        ])
+        return SingleMessage(f"{q} ({hops} hops | SNR {snr} | {now_str})")
+    if cmd == "path":
+        route = _format_2byte_repeaters(packet, info)
+        q = await _snark_quip(f"{sender_label} asked for their repeater trace. Introduce list reluctantly.", [
+            "🗺️ Here is the exact trail of repeaters you just bothered:",
+            "🧾 Routing receipts, as requested by management:",
+        ])
+        return SingleMessage(f"{q} ({hops} hops, 2-byte) {route}")
+    return None
+
+
 async def generate_ai_response(sender_id, prompt, allow_settings_update=True):
     command_reply = await handle_slash_command(sender_id, prompt, allow_settings_update)
     if command_reply is not None:
@@ -2950,7 +3042,9 @@ async def handle_incoming_message(event):
     record_trace_event("direct", "inbound", resolved_sender)
     log_to_dash(f"Received DM from {sender}: {text}")
 
-    reply = await generate_ai_response(sender, text)
+    reply = await handle_mesh_probe(text, str(sender), packet, info)
+    if reply is None:
+        reply = await generate_ai_response(sender, text)
     log_to_dash(f"AI reply: {reply}")
     reply_parts = split_reply_into_messages(reply, max_parts=current_reply_packet_limit())
 
@@ -3014,7 +3108,11 @@ async def handle_incoming_channel_message(event):
     # (e.g. "[Alice] /bot ..." or "Alice: /bot ...") before it reaches us,
     # so look for /bot anywhere after a word boundary rather than only at
     # the very start of the message.
-    reply = update_greeting_setting_from_message(message_text, channel_target)
+    ch_info = reception_info(packet)
+    ch_sender = parse_channel_sender(text) or 'Node'
+    reply = await handle_mesh_probe(message_text, ch_sender, packet, ch_info)
+    if reply is None:
+        reply = update_greeting_setting_from_message(message_text, channel_target)
     if reply is None:
         bot_command = re.search(r"(?:^|\s)/bot(?:\s+|$)", message_text, re.IGNORECASE)
         if bot_command is None:
