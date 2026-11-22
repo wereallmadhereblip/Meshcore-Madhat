@@ -2735,6 +2735,16 @@ def _format_2byte_repeaters(packet: dict, info: dict) -> str:
             names[pk[:4]] = nm
     return ", ".join(f"{hx} ({names[hx]})" if hx in names else hx for hx in hex_codes)
 
+def _is_probe_allowed_channel(channel_target: str) -> bool:
+    entry = app_state.get("channels", {}).get(str(channel_target), {})
+    ch_name = display_name(str(channel_target), entry).strip()
+    low = ch_name.lower()
+    if low in ("#test", "test"):
+        return True
+    if str(channel_target) == "0" or low in ("public", "#public", "channel 0"):
+        return False
+    return not ch_name.startswith("#")
+
 async def handle_mesh_probe(raw_text: str, sender_label: str, packet: dict, info: dict):
     clean = re.sub(r"^(?:/bot\s+|@\[[^\]]+\]\s*|@\S+\s*)", "", raw_text.strip(), flags=re.I)
     cmd = clean.lstrip("/").strip().lower()
@@ -3110,7 +3120,8 @@ async def handle_incoming_channel_message(event):
     # the very start of the message.
     ch_info = reception_info(packet)
     ch_sender = parse_channel_sender(text) or 'Node'
-    reply = await handle_mesh_probe(message_text, ch_sender, packet, ch_info)
+    allow_probe = _is_probe_allowed_channel(channel_target) or bool(re.match(r"^/bot\b", message_text.strip(), re.I))
+    reply = await handle_mesh_probe(message_text, ch_sender, packet, ch_info) if allow_probe else None
     if reply is None:
         reply = update_greeting_setting_from_message(message_text, channel_target)
     if reply is None:
