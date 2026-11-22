@@ -45,10 +45,10 @@ def split_into_packets(text, max_len=145, max_packets=4):
 
 def summarize_with_ollama(raw_transcript, model_name="llama3.2:1b-instruct-q4_K_M"):
     prompt = (
-        "Condense this NOAA weather radio transcript into a clear, detailed weather report "
-        "under 500 characters. Include location, current conditions, highs/lows, wind, multi-day "
-        "forecast, and any watches or warnings. Output ONLY the weather report itself—do NOT "
-        "write 'Here is' or any introductory text:\n\n" + raw_transcript
+        "Summarize this NOAA weather radio transcript into a detailed weather report between "
+        "450 and 540 characters so it fills 4 short radio packets. Include station/location, "
+        "current temp, humidity, wind, pressure, today/tonight, full multi-day forecast, and "
+        "any warnings. Output ONLY the report with NO intro text:\n\n" + raw_transcript
     )
     payload = json.dumps({
         "model": model_name,
@@ -100,11 +100,11 @@ def _blocking_noaa_capture(noaa_cfg, ollama_model):
 
     raw_file = "/tmp/noaa_raw.pcm"
     cmd = (
-        f"timeout 90s rtl_fm -f {freq} -M fm -s 22050 -g {gain} - | "
+        f"timeout 110s rtl_fm -f {freq} -M fm -s 22050 -g {gain} - | "
         f"tee {raw_file} | "
         f"multimon-ng -t raw -a EAS - | "
-        f"python3 {DSAME_PATH} {same_flag} "
-        f"--call 'curl -s -X POST http://127.0.0 -d' "
+        f"/root/Meshcore-Ollama-bot/.venv/bin/python {DSAME_PATH} --skip_dependency {same_flag} "
+        f"--call /root/Meshcore-Ollama-bot/push_noaa_alert.sh "
         f"--command '\"{{event}} for {{area}} until {{end}}\"'"
     )
     subprocess.run(cmd, shell=True)
