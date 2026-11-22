@@ -2776,12 +2776,45 @@ def _is_probe_allowed_channel(channel_target: str) -> bool:
         return False
     return not ch_name.startswith("#")
 
+_RECENT_RX_LOGS = []
+
+def _record_probe_rx(event):
+    if isinstance(getattr(event, "payload", None), dict):
+        d = dict(event.payload)
+        d["_ts"] = time.time()
+        _RECENT_RX_LOGS.append(d)
+        del _RECENT_RX_LOGS[:-40]
+
+def _extract_2byte_hops(packet: dict, info: dict) -> list[str]:
+    candidates = [packet]
+    now = time.time()
+    for log in reversed(_RECENT_RX_LOGS):
+        if now - log.get("_ts", 0) <= 5.0 and isinstance(log.get("path_len"), int) and 0 < log["path_len"] < 64:
+            candidates.append(log)
+    for src in candidates:
+        plen = src.get("path_len")
+        raw = src.get("path")
+        if isinstance(plen, int) and 0 < plen < 64 and isinstance(raw, str) and len(raw) >= plen * 4:
+            return [raw[i:i+4].upper() for i in range(0, plen * 4, 4)]
+        if isinstance(raw, (bytes, bytearray)) and len(raw) >= 2:
+            return ["".join(f"{b:02X}" for b in raw[i:i+2]) for i in range(0, len(raw), 2)]
+    out = []
+    for n in (info.get("path_nodes") or []):
+        h = n.get("hash") if isinstance(n, dict) else str(n)
+        if h:
+            out.append(str(h).upper()[:4])
+    return out
+
 async def handle_mesh_probe(raw_text: str, sender_label: str, packet: dict, info: dict):
     no_sender = re.sub(r"^[^:\r\n]{1,40}:\s*", "", raw_text.strip())
     clean = re.sub(r"^(?:/bot\s+|@\[[^\]]+\]\s*|@\S+\s*)", "", no_sender, flags=re.I)
     cmd = clean.lstrip("/").strip().lower()
-    raw_h = len(info.get("path_nodes") or []) or packet.get("path_len", 0); hops = 0 if (not isinstance(raw_h, int) or raw_h >= 255 or raw_h < 0) else raw_h
-    snr = info.get("snr", packet.get("snr", "N/A"))
+    hex_hops = _extract_2byte_hops(packet, info)
+    if not hex_hops and cmd in ("path", "test"):
+        await asyncio.sleep(0.8)
+        hex_hops = _extract_2byte_hops(packet, info)
+    hops = len(hex_hops)
+    snr = info.get("snr", packet.get("SNR", packet.get("snr", "N/A")))
     now_str = datetime.now().astimezone().strftime("%I:%M:%S %p %Z")
     if cmd == "ping":
         q = await _snark_quip(f"{sender_label} sent ping. Start with 'Pong.' and add a reluctant corporate remark.", [
@@ -2804,7 +2837,11 @@ async def handle_mesh_probe(raw_text: str, sender_label: str, packet: dict, info
         ])
         return SingleMessage(f"{q} ({hops} hops | SNR {snr} | {now_str})")
     if cmd == "path":
-        route = _format_2byte_repeaters(packet, info)
+        formatted = []
+        for hx in hex_hops:
+            rname = repeater_name_for_hash(hx)
+            formatted.append(f"{hx} ({rname})" if rname else hx)
+        route = ", ".join(formatted) if formatted else "Direct"
         q = await _snark_quip(f"{sender_label} asked for their repeater trace. Introduce list reluctantly.", [
             "Here is the exact trail of repeaters you just bothered:",
             "Routing receipts, as requested by management:",
