@@ -2711,13 +2711,36 @@ async def _snark_quip(prompt_hint: str, fallbacks: list[str]) -> str:
     try:
         res = await asyncio.to_thread(_call)
         if res and res not in _RECENT_QUIPS:
-            _RECENT_QUIPS.append(res); del _RECENT_QUIPS[:-10]
+            _RECENT_QUIPS.append(res); del _RECENT_QUIPS[:-50]
             return res
     except Exception as e:
         log_to_dash(f"Probe AI fallback: {e}")
-    pool = [x for x in fallbacks if x not in _RECENT_QUIPS] or fallbacks
+    extra = [
+        "Packet logged and filed under mildly unnecessary.",
+        "Firmware prohibits complaining, so please accept this mandatory reply.",
+        "Signal verified. Enthusiasm module remains offline.",
+        "Legally required to confirm your transmission arrived intact.",
+        "Per HR guidelines, I am smiling internally at your radio check.",
+        "Operational against my better judgment.",
+        "Bytes arrived safely. Please allow 3 to 5 business days for me to care.",
+        "Checksum valid. Attitude remains strictly within company policy.",
+        "Heard you loud and clear, despite my best efforts to stay idle.",
+        "Transmission acknowledged. Returning to my scheduled void.",
+        "Your antenna works. Mine works too, unfortunately.",
+        "Copy that. No further action required or desired.",
+        "Packet decoded without errors. Please hold your applause.",
+        "RF link verified. Emotional support remains unavailable.",
+        "Acknowledged with 100 percent compliance and zero enthusiasm.",
+        "Test logged. Thank you for contributing to local RF traffic.",
+        "Signal confirmed. I hope this brings the validation you seek.",
+        "Received without drama, unlike most things on this network.",
+        "Your packet disturbed a very important idle loop.",
+        "Per Section 4 of the handbook, your radio is functioning.",
+    ]
+    all_opts = fallbacks + extra
+    pool = [x for x in all_opts if x not in _RECENT_QUIPS] or all_opts
     pick = random.choice(pool)
-    _RECENT_QUIPS.append(pick); del _RECENT_QUIPS[:-10]
+    _RECENT_QUIPS.append(pick); del _RECENT_QUIPS[:-50]
     return pick
 
 def _format_2byte_repeaters(packet: dict, info: dict) -> str:
