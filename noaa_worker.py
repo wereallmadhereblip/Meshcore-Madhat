@@ -114,3 +114,18 @@ async def noaa_6hr_loop(get_config_fn, send_channel_fn):
                 except Exception as e:
                     print(f"[NOAA Error] {e}")
         await asyncio.sleep(30)
+
+async def trigger_noaa_now(cfg, send_channel_fn):
+    noaa_cfg = cfg.get("noaa", {"enabled": True, "frequency": "162.475M", "gain": 40, "same_codes": ["009003"], "target_channel": 0})
+    loop = asyncio.get_running_loop()
+    summary = await loop.run_in_executor(
+        None,
+        _blocking_noaa_capture,
+        noaa_cfg,
+        cfg.get("ollama_model", "qwen2.5:0.5b")
+    )
+    if summary:
+        ch = int(noaa_cfg.get("target_channel", 0))
+        await send_channel_fn(ch, f"WX: {summary}")
+        return summary
+    return ""
