@@ -2684,12 +2684,12 @@ CMD_THEMES = [
 async def _snark_quip(prompt_hint: str, fallbacks: list[str]) -> str:
     sys_msg = (
         "You are a reluctant, deadpan, corporate-compliant radio bot. "
-        "Reply in ONE short sentence (under 15 words) with 1 emoji. "
+        "Reply in ONE short sentence (under 15 words) with NO emojis. "
         "Never sigh or complain directly; cite 'policy' or 'HR guidelines'. "
         "Examples:\n"
-        "- Per HR guidelines, I am suppressing an eye-roll and acknowledging your packet. 📋\n"
-        "- Alive and operational, against my better judgment. 🔋\n"
-        "- Packet received. Enthusiasm module remains offline. 💤"
+        "- Per HR guidelines, I am suppressing an eye-roll and acknowledging your packet. \n"
+        "- Alive and operational, against my better judgment. \n"
+        "- Packet received. Enthusiasm module remains offline. "
     )
     body = json.dumps({
         "model": bot_settings.get("model") or "llama3.2:1b-instruct-q4_K_M",
@@ -2755,21 +2755,21 @@ async def handle_mesh_probe(raw_text: str, sender_label: str, packet: dict, info
     now_str = datetime.now().astimezone().strftime("%H:%M:%Z")
     if cmd == "ping":
         q = await _snark_quip(f"{sender_label} sent ping. Start with 'Pong.' and add a reluctant corporate remark.", [
-            "🏓 Pong. Per HR guidelines, I am suppressing an eye-roll and replying. 📋",
-            "🔋 Pong. Alive and operational, against my better judgment.",
+            "Pong. Per HR guidelines, I am suppressing an eye-roll and replying. ",
+            "Pong. Alive and operational, against my better judgment.",
         ])
-        return SingleMessage(q if q.lower().startswith("pong") else f"🏓 Pong. {q}")
+        return SingleMessage(q if q.lower().startswith("pong") else f"Pong. {q}")
     if cmd == "test" or cmd.startswith("test "):
         q = await _snark_quip(f"{sender_label} ran a radio test. Acknowledge reluctantly without numbers.", [
-            "📋 Per HR guidelines, I am suppressing an eye-roll and confirming your signal.",
-            "🪫 Signal received. Please allow 3 to 5 business days for enthusiasm.",
+            "Per HR guidelines, I am suppressing an eye-roll and confirming your signal.",
+            "Signal received. Please allow 3 to 5 business days for enthusiasm.",
         ])
         return SingleMessage(f"{q} ({hops} hops | SNR {snr} | {now_str})")
     if cmd == "path":
         route = _format_2byte_repeaters(packet, info)
         q = await _snark_quip(f"{sender_label} asked for their repeater trace. Introduce list reluctantly.", [
-            "🗺️ Here is the exact trail of repeaters you just bothered:",
-            "🧾 Routing receipts, as requested by management:",
+            "Here is the exact trail of repeaters you just bothered:",
+            "Routing receipts, as requested by management:",
         ])
         return SingleMessage(f"{q} ({hops} hops, 2-byte) {route}")
     return None
