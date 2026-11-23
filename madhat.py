@@ -5387,6 +5387,8 @@ function showPaths(message,sender){
   let nodes=Array.isArray(message.path_nodes)?message.path_nodes:[];
   if(nodes.length){let route=document.createElement('div');route.className='muted';route.style.display='block';route.textContent='Route: '+[sender||'Sender',...nodes.map(n=>(n.name||'Unknown repeater')+' ('+n.hash+')'),'You'].join(' → ');box.append(route)}
   else{let note=document.createElement('div');note.className='muted';note.textContent=message.path_len===0?'Received directly, no repeaters in the path.':'The radio did not report the repeaters for this message.';box.append(note)}
+  let peerObj=(typeof mapNodes!=='undefined'?mapNodes:[]).find(p=>String(p.name||'').trim().toLowerCase()===String(sender||'').trim().toLowerCase()||String(p.id)===String(sender||''));
+  if(peerObj&&Number(peerObj.hops)>0&&peerObj.out_path){let outRow=document.createElement('div'),oa=document.createElement('span'),ob=document.createElement('strong');oa.textContent='Configured Outbound Path';ob.textContent=peerObj.hops+' hop'+(Number(peerObj.hops)===1?'':'s')+' ('+String(peerObj.out_path).toUpperCase()+')';outRow.append(oa,ob);box.append(outRow)}
   sheet.querySelector('.sheet-paths')?.remove();sheet.append(box);
 }
 window.openNodeActions=function(peer){
@@ -5424,8 +5426,8 @@ window.openMessageActions=function(type,id,message,sender,blocked,nodePeer){
     sheet.append(action('Set Path','path',()=>{
       sheet.querySelector('.sheet-setpath')?.remove();let box=document.createElement('div');box.className='sheet-paths sheet-setpath';
       let modeEl=document.getElementById('path-hash-mode');let hashBytes=modeEl&&['0','1','2'].includes(modeEl.value)?(Number(modeEl.value)+1):1;let hexLen=hashBytes*2;
-      let hops=[];let chips=document.createElement('div');chips.style.cssText='display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;align-items:center';
-      let inp=document.createElement('input');inp.placeholder='Repeater hashes in order, e.g. a1,b2 (or pick below)';
+      let existingHex=String(knownPeer.out_path||'').trim().toLowerCase();let existingLen=Number(knownPeer.hops||0);let stepHex=(existingLen>0&&existingHex.length>=existingLen*2)?Math.floor(existingHex.length/existingLen):hexLen;let hops=[];if(existingLen>0&&existingHex.length>=stepHex){for(let i=0;i<existingLen*stepHex;i+=stepHex){let h=existingHex.slice(i,i+stepHex);if(h)hops.push({hash:h,label:h.toUpperCase()})}}let chips=document.createElement('div');chips.style.cssText='display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;align-items:center';
+      let inp=document.createElement('input');inp.placeholder='Repeater hashes in order, e.g. a1,b2 (or pick below)';if(hops.length)inp.value=hops.map(x=>x.hash).join(',');
       let syncChips=()=>{chips.replaceChildren();if(!hops.length){let empty=document.createElement('small');empty.style.opacity='0.7';empty.textContent='No hops added yet ('+hashBytes+'-byte mode)';chips.append(empty);return}hops.forEach((h,i)=>{let tag=document.createElement('span');tag.style.cssText='display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:999px;background:rgba(54,209,220,0.16);border:1px solid rgba(54,209,220,0.4);font-size:12px';tag.textContent=(i+1)+'. '+h.label;let del=document.createElement('button');del.type='button';del.textContent='×';del.style.cssText='background:none;border:none;color:inherit;cursor:pointer;padding:0 2px;font-weight:700';del.onclick=()=>{hops.splice(i,1);inp.value=hops.map(x=>x.hash).join(',');syncChips()};tag.append(del);chips.append(tag)})};
       let search=document.createElement('input');search.placeholder='Search known repeaters by name or public key...';search.style.marginTop='6px';
       let results=document.createElement('div');results.style.cssText='display:flex;flex-direction:column;gap:4px;max-height:150px;overflow-y:auto;margin:6px 0';
@@ -6627,6 +6629,12 @@ async def contact_path_handler(request):
                 result = await commands.reset_path(contact["public_key"])
             if result.type == EventType.ERROR:
                 return web.json_response({"error": f"Device rejected reset: {result.payload}"}, status=502)
+            contact["out_path"] = ""
+            contact["out_path_len"] = -1
+            cfg = globals().get("app_config")
+            if isinstance(cfg, dict) and isinstance(cfg.get("custom_paths"), dict):
+                cfg["custom_paths"].pop(str(contact.get("public_key", "")), None)
+                save_config(cfg)
             log_to_dash(f"Path reset for {name}")
         elif action == "set":
             tokens = [t for t in re.split(r"[\s,>:-]+", str(data.get("path", "")).strip().lower()) if t]
@@ -6635,11 +6643,26 @@ async def contact_path_handler(request):
             size = len(tokens[0])
             if size not in (2, 4, 6) or any(len(t) != size or not re.fullmatch(r"[0-9a-f]+", t) for t in tokens):
                 return web.json_response({"error": "Each hash must be 2, 4 or 6 hex characters, all the same length"}, status=400)
+            hex_str = "".join(tokens)
             async with paced_hardware_lock():
-                result = await commands.change_contact_path(contact, "".join(tokens), path_hash_mode=size // 2 - 1)
+                try:
+                    result = await commands.change_contact_path(contact, hex_str, path_hash_mode=size // 2 - 1)
+                except TypeError:
+                    result = await commands.change_contact_path(contact, hex_str)
             if result.type == EventType.ERROR:
                 return web.json_response({"error": f"Device rejected path: {result.payload}"}, status=502)
-            log_to_dash(f"Path set for {name}: {len(tokens)} hop(s)")
+            contact["out_path"] = hex_str
+            contact["out_path_len"] = len(tokens)
+            contact["out_path_hash_bytes"] = size // 2
+            cfg = globals().get("app_config")
+            if isinstance(cfg, dict):
+                cfg.setdefault("custom_paths", {})[str(contact.get("public_key", ""))] = {
+                    "out_path": hex_str,
+                    "out_path_len": len(tokens),
+                    "out_path_hash_bytes": size // 2,
+                }
+                save_config(cfg)
+            log_to_dash(f"Path set for {name}: {len(tokens)} hop(s) ({size // 2}-byte)")
         else:
             return web.json_response({"error": "action must be set or reset"}, status=400)
     except Exception as error:
