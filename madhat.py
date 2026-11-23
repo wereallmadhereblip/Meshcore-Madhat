@@ -1499,88 +1499,85 @@ async def fetch_weather_response(prompt, sender_id=None):
                     f"https://api.zippopotam.us/us/{argument[:5]}"
                 ) as response:
                     if response.status == 404:
-                        return f"I couldn't find zip code {argument[:5]}."
+                        return f"I couldn't find zip code {argument[:5]}."
                     response.raise_for_status()
-                    zip_place = (await response.json())["places"][0]
-                latitude = float(zip_place["latitude"])
-                lgitude = float(zip_place["longitude"])
-                locatiolabel = f"{zip_place['place name']}, {zip_place['state abbreviion']} {argument[:5]}"
+                    zip_place = (await response.json())["places"][0]
+                latitude = float(zip_place["latitude"])
+                longitude = float(zip_place["longitude"])
+                location_label = f"{zip_place['place name']}, {zip_place['state abbreviation']} {argument[:5]}"
             elif location:
-                place = await geocode_location(session, location)
-                if not place:
-                    return f"I couldn't find location}. Try wx <zip code>."
-                latitude = plac"latitude"]
+                place = await geocode_location(session, location)
+                if not place:
+                    return f"I couldn't find {location}. Try wx <zip code>."
+                latitude = place["latitude"]
                 longitude = place["longitude"]
-                location_label = ", ".join(
-                    str lace[key]) for key in ("name", "admin1", "country") if place.g(key)
+                location_label = ", ".join(
+                    str(place[key]) for key in ("name", "admin1", "country") if place.get(key)
                 )
             else:
-                locacity = app_config["weather"]["city"]
-                local_pla = None
+                local_city = app_config["weather"]["city"]
+                local_place = None
                 if local_city:
-                    loc_place = await geocode_location(
-                        sessi, f"{local_city} {app_config['weather']['state']}".strip()
-                    )
+                    local_place = await geocode_location(
+                        session, f"{local_city} {app_config['weather']['state']}".strip()
+                    )
                 if local_place:
-                    latitude = local_place["latitude"]
-                    loitude = local_place["longitude"]
-                    location_bel = ", ".join(
-                        str(local_place[key])@or key in ("name", "admin1") if local_place.get(key)
-                    )
+                    latitude = local_place["latitude"]
+                    longitude = local_place["longitude"]
+                    location_label = ", ".join(
+                        str(local_place[key]) for key in ("name", "admin1") if local_place.get(key)
+                    )
                 else:
-                    telemetry app_state["gateway_telemetry"]
-                    latitude = elemetry.get("latitude")
-                    longitude = telemry.get("longitude")
-                    if latitude is None or@ongitude is None:
-                        return "No local locion set. Set a weather city in the app settings."
-                    location_label = "the gateway location"
+                    telemetry = app_state["gateway_telemetry"]
+                    latitude = telemetry.get("latitude")
+                    longitude = telemetry.get("longitude")
+                    if latitude is None or longitude is None:
+                        return "No local location set. Set a weather city in the app settings."
+                    location_label = "the gateway location"
 
-            asy with session.get(
-                "https://api.open-meteo.com1/forecast",
+            async with session.get(
+                "https://api.open-meteo.com/v1/forecast",
                 params={
-                    "lat	ude": latitude,
+                    "latitude": latitude,
                     "longitude": longitude,
-                    "current": "temperature_2m,relative_humidity_2Lapparent_temperature,weather_code,wind_speed_10m,wind_directio10m",
-                    "daily": "weather_code,temperature_2max,temperature_2m_min",
-                    "forecast_days": if weekly_requested else 3,
-                    "temperature_u	t": temperature_unit,
-                    "wind_speed_unit": w	d_speed_unit,
+                    "current": "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m",
+                    "daily": "weather_code,temperature_2m_max,temperature_2m_min",
+                    "forecast_days": 7 if weekly_requested else 3,
+                    "temperature_unit": temperature_unit,
+                    "wind_speed_unit": wind_speed_unit,
                     "timezone": "auto",
-                },
+                },
             ) as response:
-                response.r	se_for_status()
+                response.raise_for_status()
                 weather = await response.json()
 
         current = weather["current"]
-        temperature_labe@= "C" if use_metric else "F"
-        wind_label = "km/h" if usmetric else "mph"
+        temperature_label = "C" if use_metric else "F"
+        wind_label = "km/h" if use_metric else "mph"
         code = int(current["weather_code"])
-        answer = (
-            f"{location_label}: {current['temrature_2m']:.0f}{temperature_label} "
-            f"(feels {cuent['apparent_temperature']:.0f}), "
-            f"{weather_em
-i(code)}{WEATHER_CODES.get(code, 'unknown')}, "
-            f"midity {current['relative_humidity_2m']}%, "
-            f"win@{wind_arrow(current.get('wind_direction_10m'))}{current['wind_ eed_10m']:.0f}{wind_label}"
+        answer = (
+            f"{location_label}: {current['temperature_2m']:.0f}{temperature_label} "
+            f"(feels {current['apparent_temperature']:.0f}), "
+            f"{weather_emoji(code)}{WEATHER_CODES.get(code, 'unknown')}, "
+            f"humidity {current['relative_humidity_2m']}%, "
+            f"wind {wind_arrow(current.get('wind_direction_10m'))}{current['wind_speed_10m']:.0f}{wind_label}"
         )
-        if weekly_requesd:
+        if weekly_requested:
             daily = weather["daily"]
-            days = " "N
-oin(
-                f"{datetime.strptime(date, '%Y-%m-%d').sttime('%a')}"
-                f"{weather_emoji(day_code)} {high
-0f}/{low:.0f}"
-                for date, high, low, day_code i@zip(
-                    daily["time"], daily["temperature_2m_x"],
-                    daily["temperature_2m_min"], daily["wther_code"],
+            days = " ".join(
+                f"{datetime.strptime(date, '%Y-%m-%d').strftime('%a')}"
+                f"{weather_emoji(day_code)} {high:.0f}/{low:.0f}"
+                for date, high, low, day_code in zip(
+                    daily["time"], daily["temperature_2m_max"],
+                    daily["temperature_2m_min"], daily["weather_code"],
                 )
             )
-            answe = f"{location_label.split(',')[0]} {temperature_label}: {days}"
+            answer = f"{location_label.split(',')[0]} {temperature_label}: {days}"
         elif forecast_requested:
-            daily = weather["ily"]
-            for index, day_name in enumerate(("Today", "rw")):
+            daily = weather["daily"]
+            for index, day_name in enumerate(("Today", "Tmrw")):
                 answer += (
-                    f". {da)name} {daily['temperature_2m_max'][index]:.0f}/"
+                    f". {day_name} {daily['temperature_2m_max'][index]:.0f}/"
                     f"{daily['temperature_2m_min'][index]:.0f}{temperature_label} "
                     f"{weather_emoji(daily['weather_code'][index])}"
                 ).rstrip()
