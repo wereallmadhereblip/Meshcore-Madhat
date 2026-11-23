@@ -7923,7 +7923,7 @@ async def _stop_sdr_stream_proc():
         except Exception:
             pass
     try:
-        subprocess.run(["sudo", "-n", "pkill", "-9", "-f", "rtl_fm.*-s "], capture_output=True)
+        subprocess.run(["sudo", "-n", "pkill", "-9", "-x", "rtl_fm"], capture_output=True)
     except Exception:
         pass
     if (app_config.get("noaa") or {}).get("enabled", True):
@@ -7952,7 +7952,7 @@ async def sdr_stream_handler(request):
     await _stop_sdr_stream_proc()
     try:
         subprocess.run(["sudo", "-n", "systemctl", "stop", "noaa-same.service"], capture_output=True)
-        subprocess.run(["sudo", "-n", "pkill", "-9", "-f", "rtl_fm"], capture_output=True)
+        subprocess.run(["sudo", "-n", "pkill", "-9", "-x", "rtl_fm"], capture_output=True)
         await asyncio.sleep(0.4)
     except Exception:
         pass
@@ -7961,7 +7961,7 @@ async def sdr_stream_handler(request):
     sq_arg = f"-l {squelch}" if squelch > 0 else ""
     shell_cmd = (
         f"rtl_fm -f {freq} -M {mod} -s {sample_rate} -g {gain} {sq_arg} - | "
-        f"ffmpeg -hide_banner -loglevel error -f s16le -ar {sample_rate} -ac 1 -i pipe:0 -af 'highpass=f=200,lowpass=f=3500,volume=3.5' -f mp3 -b:a 64k -flush_packets 1 pipe:1"
+        f"ffmpeg -hide_banner -loglevel error -f s16le -ar {sample_rate} -ac 1 -i pipe:0 -af 'highpass=f=200,lowpass=f=3500,volume=4.0' -ar 44100 -ac 1 -f mp3 -b:a 64k -flush_packets 1 pipe:1"
     )
 
     try:
