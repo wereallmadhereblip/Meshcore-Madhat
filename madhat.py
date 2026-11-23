@@ -1724,17 +1724,25 @@ async def fetch_weather_response(prompt, sender_id=None):
 
 
 def sync_generate(messages, model, max_chars=None):
-    options = {"temperature": 0.2, "num_ctx": 4096, "repeat_penalty": 1.0}
+    use_model = model or bot_settings.get("model") or DEFAULT_MODEL
+    options = {"temperature": 0.65, "num_ctx": 1024, "repeat_penalty": 1.15}
     if max_chars:
-        # Keep generation within Ollama's former default while avoiding excess output.
-        options["num_predict"] = min(128, max(48, max_chars // 6 + 16))
-    result = ollama.chat(
-        model=model,
-        messages=messages,
-        options=options,
-        keep_alive="30m",
+        options["num_predict"] = min(110, max(48, max_chars // 5 + 16))
+    payload = json.dumps({
+        "model": use_model,
+        "messages": messages,
+        "stream": False,
+        "keep_alive": "30m",
+        "options": options,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "http://" + "127.0.0.1" + ":11434/api/chat",
+        data=payload,
+        headers={"Content-Type": "application/json"},
     )
-    return result["message"]["content"]
+    with urllib.request.urlopen(req, timeout=35.0) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    return data["message"]["content"]
 
 
 def looks_like_gibberish(text, prompt=""):
