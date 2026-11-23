@@ -4942,7 +4942,12 @@ function syncConfigControls(){let colorSelect=document.getElementById('theme-sel
 const weatherIcons={sun:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>',partly:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="16" cy="7" r="3"/><path d="M16 2v1m0 8v1m5-5h-1m-8 0h-1M5 19h12a3 3 0 0 0 .3-6A5 5 0 0 0 8 11.5 3.8 3.8 0 0 0 5 19Z"/></svg>',cloud:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19h13a4 4 0 0 0 .4-8A6 6 0 0 0 7 9.5 4.8 4.8 0 0 0 5 19Z"/></svg>',fog:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm-2 4h14m-10 3h14"/></svg>',rain:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 15h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 7 4 4 0 0 0 5 15Zm2 3-1 2m7-2-1 2m7-2-1 2"/></svg>',snow:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm2 4h.01M12 19h.01M18 18h.01"/></svg>',storm:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm8 1-3 4h3l-1 3 4-5h-3l1-2"/></svg>'};
 function weatherIconName(code){if(code===null||code===undefined||!Number.isFinite(Number(code)))return 'cloud';code=Number(code);if(code===0)return 'sun';if(code===1||code===2)return 'partly';if(code===45||code===48)return 'fog';if(code===51||code===53||code===55||code===56||code===57||code===61||code===63||code===65||code===66||code===67||code===80||code===81||code===82)return 'rain';if(code===71||code===73||code===75||code===77||code===85||code===86)return 'snow';if(code===95||code===96||code===99)return 'storm';return 'cloud'}
 function renderWeatherIcon(code,condition='Weather condition unavailable'){let icon=document.getElementById('weather-icon');icon.innerHTML=weatherIcons[weatherIconName(code)]||weatherIcons.cloud;icon.setAttribute('aria-label',condition);icon.title=condition}
-function syncNoaaControls(){let n=(appConfig&&appConfig.noaa)||{enabled:true,frequency:"162.475M",gain:40,same_codes:["009003"],target_channel:0};let elEn=document.getElementById("noaa-enabled");if(!elEn)return;elEn.checked=n.enabled!==false;document.getElementById("noaa-freq").value=n.frequency||"162.475M";document.getElementById("noaa-gain").value=n.gain??40;document.getElementById("noaa-same").value=Array.isArray(n.same_codes)?n.same_codes.join(","):"009003";let hEl=document.getElementById("noaa-hours");if(hEl)hEl.value=Array.isArray(n.hours)?n.hours.join(","):"5,11,17,23";let chSel=document.getElementById("noaa-channel");let savedCh=String(n.target_channel??0);fetch("/api/status").then(r=>r.json()).then(st=>{if(st&&st.channels&&Object.keys(st.channels).length){chSel.innerHTML="";Object.entries(st.channels).sort((a,b)=>Number(a[0])-Number(b[0])).forEach(([idx,info])=>{let opt=document.createElement("option");opt.value=String(idx);let cname=(info&&(info.channel_name||info.name))||(idx==="0"?"Public":"Channel "+idx);opt.textContent=idx+" — "+cname;chSel.appendChild(opt);});}chSel.value=savedCh;}).catch(()=>{chSel.value=savedCh;});}async function saveNoaaSettings(e){e.preventDefault();let codes=document.getElementById("noaa-same").value.split(",").map(s=>s.trim()).filter(Boolean);let noaa={enabled:document.getElementById("noaa-enabled").checked,frequency:document.getElementById("noaa-freq").value,gain:Number(document.getElementById("noaa-gain").value||40),same_codes:codes,hours:(document.getElementById("noaa-hours")?.value||"5,11,17,23").split(",").map(s=>Number(s.trim())).filter(n=>Number.isInteger(n)&&n>=0&&n<=23),target_channels:[...document.querySelectorAll(".noaa-ch-cb:checked")].map(cb=>Number(cb.value))};await saveAppConfig({...appConfig,noaa},"noaa-settings-status");}async function runNoaaCaptureNow(){let btn=document.getElementById("noaa-test-btn"),st=document.getElementById("noaa-settings-status");btn.disabled=true;st.dataset.state="";st.textContent="Capturing 90s of NOAA audio & summarizing...";try{let r=await fetch("/api/noaa-test",{method:"POST"}),d=await r.json();if(!r.ok)throw new Error(d.error||"Failed");st.dataset.state="success";st.textContent="Sent: "+d.summary;}catch(err){st.dataset.state="error";st.textContent=err.message;}finally{btn.disabled=false;}}
+function syncNoaaControls(){let n=(appConfig&&appConfig.noaa)||{enabled:true,frequency:"162.475M",gain:40,same_codes:["009003"],target_channel:0};let elEn=document.getElementById("noaa-enabled");if(!elEn)return;elEn.checked=n.enabled!==false;document.getElementById("noaa-freq").value=n.frequency||"162.475M";document.getElementById("noaa-gain").value=n.gain??40;document.getElementById("noaa-same").value=Array.isArray(n.same_codes)?n.same_codes.join(","):"009003";let hEl=document.getElementById("noaa-hours");if(hEl)hEl.value=Array.isArray(n.hours)?n.hours.join(","):"5,11,17,23";let chSel=document.getElementById("noaa-channel");let savedCh=String(n.target_channel??0);fetch("/api/status").then(r=>r.json()).then(st=>{if(st&&st.channels&&Object.keys(st.channels).length){chSel.innerHTML="";Object.entries(st.channels).sort((a,b)=>Number(a[0])-Number(b[0])).forEach(([idx,info])=>{let opt=document.createElement("option");opt.value=String(idx);let cname=(info&&(info.channel_name||info.name))||(idx==="0"?"Public":"Channel "+idx);opt.textContent=idx+" — "+cname;chSel.appendChild(opt);});}chSel.value=savedCh;}).catch(()=>{chSel.value=savedCh;});}async function saveNoaaSettings(e){e.preventDefault();let codes=document.getElementById("noaa-same").value.split(",").map(s=>s.trim()).filter(Boolean);let noaa={enabled:document.getElementById("noaa-enabled").checked,frequency:document.getElementById("noaa-freq").value,gain:Number(document.getElementById("noaa-gain").value||40),same_codes:codes,hours:(document.getElementById("noaa-hours")?.value||"5,11,17,23").split(",").map(s=>Number(s.trim())).filter(n=>Number.isInteger(n)&&n>=0&&n<=23),target_channels:[...document.querySelectorAll(".noaa-ch-cb:checked")].map(cb=>Number(cb.value))};await saveAppConfig({...appConfig,noaa},"noaa-settings-status");}function stopSdrLive(){['noaa-live-audio','sdr-analyzer-audio'].forEach(id=>{let a=document.getElementById(id);if(a){a.pause();a.removeAttribute('src');a.load();}});fetch('/api/sdr/stop',{method:'POST'}).catch(()=>{});let s1=document.getElementById('noaa-live-status');if(s1)s1.textContent='Stopped (SAME monitor resumed)';let s2=document.getElementById('sdr-analyzer-status');if(s2)s2.textContent='Stopped';}
+function tuneNoaaLive(freq,label){stopSdrLive();let gain=document.getElementById('noaa-gain')?.value||40;let a=document.getElementById('noaa-live-audio'),st=document.getElementById('noaa-live-status');if(st)st.textContent='Streaming '+label+'...';if(a){a.src='/api/sdr/stream?freq='+encodeURIComponent(freq)+'&mod=fm&gain='+encodeURIComponent(gain)+'&_='+Date.now();a.play().catch(()=>{});}}
+function setSdrPreset(freq,mod){document.getElementById('sdr-freq-input').value=freq;document.getElementById('sdr-mod-select').value=mod;tuneSdrAnalyzer();}
+function tuneSdrAnalyzer(){stopSdrLive();let freq=document.getElementById('sdr-freq-input').value.trim()||'162.475M',mod=document.getElementById('sdr-mod-select').value||'fm',gain=document.getElementById('sdr-gain-input').value||40,sq=document.getElementById('sdr-squelch-input').value||0;let a=document.getElementById('sdr-analyzer-audio'),st=document.getElementById('sdr-analyzer-status');if(st)st.textContent='Tuned to '+freq+' ('+mod.toUpperCase()+')...';if(a){a.src='/api/sdr/stream?freq='+encodeURIComponent(freq)+'&mod='+encodeURIComponent(mod)+'&gain='+encodeURIComponent(gain)+'&squelch='+encodeURIComponent(sq)+'&_='+Date.now();a.play().catch(()=>{});}}
+async function runSdrSweep(){stopSdrLive();let btn=document.getElementById('sdr-sweep-btn'),st=document.getElementById('sdr-sweep-status'),span=document.getElementById('sdr-sweep-span').value.trim()||'162.35M:162.60M:5k',gain=document.getElementById('sdr-gain-input')?.value||40;btn.disabled=true;st.textContent='Scanning '+span+'...';try{let r=await fetch('/api/sdr/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({span,gain})}),d=await r.json();if(!r.ok)throw new Error(d.error||'Sweep failed');let bins=d.bins||[];st.textContent='Captured '+bins.length+' bins across '+span;let c=document.getElementById('sdr-spectrum-canvas'),ctx=c.getContext('2d'),w=c.width,h=c.height;ctx.clearRect(0,0,w,h);if(bins.length<2)return;let dbs=bins.map(b=>b.db),lo=Math.min(...dbs)-2,hi=Math.max(...dbs)+2,rng=Math.max(1,hi-lo);ctx.strokeStyle='rgba(54,209,220,0.9)';ctx.lineWidth=2;ctx.beginPath();bins.forEach((b,i)=>{let x=(i/(bins.length-1))*(w-40)+20,y=h-24-((b.db-lo)/rng)*(h-44);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();let peak=bins.reduce((a,b)=>b.db>a.db?b:a,bins);ctx.fillStyle='#e2f1f8';ctx.font='12px monospace';ctx.fillText('Start: '+bins.mhz+' MHz',20,h-6);ctx.fillText('Peak: '+peak.mhz+' MHz ('+peak.db+' dB)',w/2-90,16);ctx.fillText('End: '+bins[bins.length-1].mhz+' MHz',w-155,h-6);}catch(e){st.textContent=e.message;}finally{btn.disabled=false;}}
+async function runNoaaCaptureNow(){let btn=document.getElementById("noaa-test-btn"),st=document.getElementById("noaa-settings-status");btn.disabled=true;st.dataset.state="";st.textContent="Capturing 90s of NOAA audio & summarizing...";try{let r=await fetch("/api/noaa-test",{method:"POST"}),d=await r.json();if(!r.ok)throw new Error(d.error||"Failed");st.dataset.state="success";st.textContent="Sent: "+d.summary;}catch(err){st.dataset.state="error";st.textContent=err.message;}finally{btn.disabled=false;}}
 async function loadLocalWeather(){let temperature=document.getElementById('weather-temperature'),condition=document.getElementById('weather-condition'),location=document.getElementById('weather-location'),extra=document.getElementById('weather-extra'),widget=document.getElementById('banner-item-weather');condition.textContent='Loading';try{let response=await fetch('/api/local-weather'),data=await response.json();if(!response.ok)throw new Error(data.error||'Weather unavailable');temperature.textContent=Math.round(data.temperature_f)+'°F';condition.textContent=data.condition;location.textContent=data.short_location||data.location;if(extra)extra.textContent=[data.humidity!=null?'💧'+Math.round(data.humidity)+'%':'',data.wind_mph!=null?'💨'+Math.round(data.wind_mph)+' mph':''].filter(Boolean).join(' ');if(widget)widget.title=data.location;renderWeatherIcon(data.weather_code,data.condition)}catch(error){temperature.textContent='--°F';condition.textContent=error.message.includes('Enter a city')?'Set location':'Unavailable';if(extra)extra.textContent='';location.textContent=appConfig.weather.city?(appConfig.weather.state?appConfig.weather.city+', '+appConfig.weather.state:appConfig.weather.city):'Location not set';if(widget)widget.title=location.textContent;renderWeatherIcon(null,condition.textContent)}}
 async function loadAppConfig(){try{let response=await fetch('/api/config'),data=await response.json();if(!response.ok)throw new Error(data.error||'Settings could not be loaded');appConfig=data;syncConfigControls();if(new URLSearchParams(window.location.search).get('preview')==='tron')applyTheme('tron',false);loadLocalWeather();maybeCheckForUpdates()}catch(error){let statusMessage=document.getElementById('preferences-status');statusMessage.dataset.state='error';statusMessage.textContent=error.message}}
 async function saveAppConfig(config,statusId='preferences-status'){let statusMessage=document.getElementById(statusId);statusMessage.dataset.state='';statusMessage.textContent='Saving config.json...';try{let response=await fetch('/api/config',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)}),data=await response.json();if(!response.ok)throw new Error(data.error||'Settings could not be saved');appConfig=data;syncConfigControls();if(statusId==='config-status'){document.getElementById('config-json-editor').value=JSON.stringify(appConfig,null,2);configEditorLoaded=true}statusMessage.textContent='Saved to config.json.';statusMessage.dataset.state='success'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
@@ -5367,7 +5372,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <button type="button" class="tron-settings-back" onclick="showView('nodes')">Dashboard</button>
 <div class="settings-layout">
 <section class="card"><div class="panel-heading"><div><span class="eyebrow">APPLICATION</span><h2>Settings</h2></div><span class="panel-index">04</span></div>
-<div class="settings-tabs" role="tablist" aria-label="Settings sections"><button type="button" class="settings-tab" role="tab" data-settings-tab="preferences" aria-pressed="true" onclick="showSettingsTab('preferences')">Themes</button><button type="button" class="settings-tab" role="tab" data-settings-tab="ollama" aria-pressed="false" onclick="showSettingsTab('ollama')">Ollama</button><button type="button" class="settings-tab" role="tab" data-settings-tab="bot" aria-pressed="false" onclick="showSettingsTab('bot')">Bot</button><button type="button" class="settings-tab" role="tab" data-settings-tab="tightvnc" aria-pressed="false" onclick="showSettingsTab('tightvnc')">Remote Desktop</button><button type="button" class="settings-tab" role="tab" data-settings-tab="weather" aria-pressed="false" onclick="showSettingsTab('weather')">Weather</button><button type="button" class="settings-tab" role="tab" data-settings-tab="config" aria-pressed="false" onclick="showSettingsTab('config')">Update</button><button type="button" class="settings-tab" role="tab" data-settings-tab="banner" aria-pressed="false" onclick="showSettingsTab('banner')">Banner</button><button type="button" class="settings-tab" role="tab" data-settings-tab="logs" aria-pressed="false" onclick="showSettingsTab('logs')">Logs</button><button type="button" class="settings-tab" role="tab" data-settings-tab="security" aria-pressed="false" onclick="showSettingsTab('security')">Security</button></div>
+<div class="settings-tabs" role="tablist" aria-label="Settings sections"><button type="button" class="settings-tab" role="tab" data-settings-tab="preferences" aria-pressed="true" onclick="showSettingsTab('preferences')">Themes</button><button type="button" class="settings-tab" role="tab" data-settings-tab="ollama" aria-pressed="false" onclick="showSettingsTab('ollama')">Ollama</button><button type="button" class="settings-tab" role="tab" data-settings-tab="bot" aria-pressed="false" onclick="showSettingsTab('bot')">Bot</button><button type="button" class="settings-tab" role="tab" data-settings-tab="tightvnc" aria-pressed="false" onclick="showSettingsTab('tightvnc')">Remote Desktop</button><button type="button" class="settings-tab" role="tab" data-settings-tab="weather" aria-pressed="false" onclick="showSettingsTab('weather')">Weather</button><button type="button" class="settings-tab" role="tab" data-settings-tab="sdr" aria-pressed="false" onclick="showSettingsTab('sdr')">RTL-SDR Analyzer</button><button type="button" class="settings-tab" role="tab" data-settings-tab="config" aria-pressed="false" onclick="showSettingsTab('config')">Update</button><button type="button" class="settings-tab" role="tab" data-settings-tab="banner" aria-pressed="false" onclick="showSettingsTab('banner')">Banner</button><button type="button" class="settings-tab" role="tab" data-settings-tab="logs" aria-pressed="false" onclick="showSettingsTab('logs')">Logs</button><button type="button" class="settings-tab" role="tab" data-settings-tab="security" aria-pressed="false" onclick="showSettingsTab('security')">Security</button></div>
 <section id="settings-preferences-panel" class="settings-tab-panel">
 <div class="settings-grid">
 <div class="settings-item"><div class="theme-control-row"><label for="theme-mode-select">Theme</label><select id="theme-mode-select" onchange="selectThemeMode(this.value)"><option value="tron">TRON</option><option value="classic">Classic</option></select></div><div id="classic-theme-control" class="theme-control-row"><label for="theme-select">Colors</label><select id="theme-select" onchange="selectClassicTheme(this.value)"><option value="midnight">Midnight</option><option value="light">Light</option><option value="ocean">Ocean</option><option value="amber">Amber</option><option value="linux">Linux Console</option><option value="macos">macOS</option><option value="cyberpunk">Hacker Cyberpunk</option></select></div><p class="settings-description">Select TRON mode or choose Classic with a color palette.</p></div>
@@ -5426,8 +5431,9 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <label for="weather-state">State (optional)<input id="weather-state" name="state" maxlength="80" value="" placeholder="Optional"></label>
 <div class="settings-actions"><button type="submit">Save location</button><p id="weather-settings-status" class="preferences-status" aria-live="polite"></p></div>
 </form>
-<hr style="margin:18px 0;opacity:0.2"><form class="weather-settings-layout" onsubmit="saveNoaaSettings(event)"><h3 style="margin:0 0 8px">NOAA USB SDR Weather Radio (6-Hour Schedule)</h3><label class="settings-item-full"><input type="checkbox" id="noaa-enabled" checked> Enable 6-hour SDR capture (05:00, 11:00, 17:00, 23:00) + SAME alerts</label><label for="noaa-freq">NOAA Frequency<select id="noaa-freq"><option value="162.400M">162.400 MHz (WX2)</option><option value="162.425M">162.425 MHz (WX4)</option><option value="162.450M">162.450 MHz (WX5)</option><option value="162.475M" selected>162.475 MHz (WX3 - Hartford/Burlington)</option><option value="162.500M">162.500 MHz (WX6)</option><option value="162.525M">162.525 MHz (WX7)</option><option value="162.550M">162.550 MHz (WX1)</option></select></label><label for="noaa-gain">SDR Gain (0-50)<input id="noaa-gain" type="number" min="0" max="50" value="40"></label><label for="noaa-same">SAME County FIPS Codes<input id="noaa-same" value="009003" placeholder="009003"></label><label for="noaa-hours">Broadcast Hours (24h, comma-separated)<input id="noaa-hours" value="5,11,17,23" placeholder="5,11,17,23"></label><div class="settings-item-full"><span style="display:block;margin-bottom:6px;font-weight:600">Channels to Broadcast</span><div id="noaa-channels-box" style="display:flex;flex-wrap:wrap;gap:10px"><label><input type="checkbox" class="noaa-ch-cb" value="0"> 0 — Public</label><label><input type="checkbox" class="noaa-ch-cb" value="1"> 1 — Channel 1</label><label><input type="checkbox" class="noaa-ch-cb" value="2"> 2 — Channel 2</label><label><input type="checkbox" class="noaa-ch-cb" value="3"> 3 — Channel 3</label><label><input type="checkbox" class="noaa-ch-cb" value="4"> 4 — Channel 4</label><label><input type="checkbox" class="noaa-ch-cb" value="5" checked> 5 — Channel 5</label><label><input type="checkbox" class="noaa-ch-cb" value="6"> 6 — Channel 6</label><label><input type="checkbox" class="noaa-ch-cb" value="7"> 7 — Channel 7</label></div></div><div class="settings-actions"><button type="submit">Save NOAA settings</button><button type="button" class="secondary" id="noaa-test-btn" onclick="runNoaaCaptureNow()">Run 90s Capture Now</button><p id="noaa-settings-status" class="preferences-status" aria-live="polite"></p></div></form>
+<hr style="margin:18px 0;opacity:0.2"><form class="weather-settings-layout" onsubmit="saveNoaaSettings(event)"><h3 style="margin:0 0 8px">NOAA USB SDR Weather Radio (6-Hour Schedule)</h3><label class="settings-item-full"><input type="checkbox" id="noaa-enabled" checked> Enable 6-hour SDR capture (05:00, 11:00, 17:00, 23:00) + SAME alerts</label><label for="noaa-freq">NOAA Frequency<select id="noaa-freq"><option value="162.400M">162.400 MHz (WX2)</option><option value="162.425M">162.425 MHz (WX4)</option><option value="162.450M">162.450 MHz (WX5)</option><option value="162.475M" selected>162.475 MHz (WX3 - Hartford/Burlington)</option><option value="162.500M">162.500 MHz (WX6)</option><option value="162.525M">162.525 MHz (WX7)</option><option value="162.550M">162.550 MHz (WX1)</option></select></label><label for="noaa-gain">SDR Gain (0-50)<input id="noaa-gain" type="number" min="0" max="50" value="40"></label><label for="noaa-same">SAME County FIPS Codes<input id="noaa-same" value="009003" placeholder="009003"></label><label for="noaa-hours">Broadcast Hours (24h, comma-separated)<input id="noaa-hours" value="5,11,17,23" placeholder="5,11,17,23"></label><div class="settings-item-full"><span style="display:block;margin-bottom:6px;font-weight:600">Channels to Broadcast</span><div id="noaa-channels-box" style="display:flex;flex-wrap:wrap;gap:10px"><label><input type="checkbox" class="noaa-ch-cb" value="0"> 0 — Public</label><label><input type="checkbox" class="noaa-ch-cb" value="1"> 1 — Channel 1</label><label><input type="checkbox" class="noaa-ch-cb" value="2"> 2 — Channel 2</label><label><input type="checkbox" class="noaa-ch-cb" value="3"> 3 — Channel 3</label><label><input type="checkbox" class="noaa-ch-cb" value="4"> 4 — Channel 4</label><label><input type="checkbox" class="noaa-ch-cb" value="5" checked> 5 — Channel 5</label><label><input type="checkbox" class="noaa-ch-cb" value="6"> 6 — Channel 6</label><label><input type="checkbox" class="noaa-ch-cb" value="7"> 7 — Channel 7</label></div></div><div class="settings-actions"><button type="submit">Save NOAA settings</button><button type="button" class="secondary" id="noaa-test-btn" onclick="runNoaaCaptureNow()">Run 90s Capture Now</button><p id="noaa-settings-status" class="preferences-status" aria-live="polite"></p></div></form><hr style="margin:18px 0;opacity:0.2"><div class="weather-settings-layout"><h3 style="margin:0 0 6px">Listen Live to NOAA Weather Radio (7 Channels)</h3><p class="settings-description" style="margin:0 0 10px">Click any NOAA frequency to stream live audio from your USB SDR (pauses SAME monitor while listening and resumes when stopped).</p><div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px"><button type="button" class="secondary" onclick="tuneNoaaLive('162.400M','162.400 MHz (WX2)')">162.400 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.425M','162.425 MHz (WX4)')">162.425 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.450M','162.450 MHz (WX5)')">162.450 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.475M','162.475 MHz (WX3 Hartford)')">162.475 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.500M','162.500 MHz (WX6)')">162.500 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.525M','162.525 MHz (WX7)')">162.525 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.550M','162.550 MHz (WX1)')">162.550 MHz</button><button type="button" onclick="stopSdrLive()">Stop Audio</button></div><audio id="noaa-live-audio" controls style="width:100%;max-width:460px;margin-bottom:6px"></audio><p id="noaa-live-status" class="preferences-status" aria-live="polite">Idle</p></div>
 </section>
+<section id="settings-sdr-panel" class="settings-tab-panel" hidden><div class="weather-settings-layout"><h3 style="margin:0 0 6px">RTL-SDR Live Frequency Tuner &amp; RF Spectrum Analyzer</h3><p class="settings-description" style="margin:0 0 12px">Tune your RTL2838 USB SDR to any frequency (24 MHz – 1766 MHz) for live audio or run a wideband RF power sweep.</p><div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px"><button type="button" class="secondary" onclick="setSdrPreset('162.475M','fm')">162.475 MHz (NOAA)</button><button type="button" class="secondary" onclick="setSdrPreset('146.520M','fm')">146.520 MHz (2m Calling)</button><button type="button" class="secondary" onclick="setSdrPreset('446.000M','fm')">446.000 MHz (UHF)</button><button type="button" class="secondary" onclick="setSdrPreset('906.875M','fm')">906.875 MHz (LoRa US)</button><button type="button" class="secondary" onclick="setSdrPreset('100.5M','wbfm')">100.5 MHz (FM Radio)</button></div><div class="settings-grid" style="margin-bottom:10px"><label for="sdr-freq-input">Frequency (e.g. 162.475M, 100.5M)<input id="sdr-freq-input" value="162.475M"></label><label for="sdr-mod-select">Modulation<select id="sdr-mod-select"><option value="fm" selected>NFM (Narrowband FM)</option><option value="wbfm">WFM (Broadcast FM)</option><option value="am">AM (Aviation)</option></select></label><label for="sdr-gain-input">RF Gain (0–50 dB)<input id="sdr-gain-input" type="number" min="0" max="50" value="40"></label><label for="sdr-squelch-input">Squelch (0 = open)<input id="sdr-squelch-input" type="number" min="0" max="200" value="0"></label></div><div class="settings-actions" style="margin-bottom:10px"><button type="button" onclick="tuneSdrAnalyzer()">Listen Live</button><button type="button" class="secondary" onclick="stopSdrLive()">Stop</button><p id="sdr-analyzer-status" class="preferences-status" aria-live="polite">Ready</p></div><audio id="sdr-analyzer-audio" controls style="width:100%;max-width:480px;margin-bottom:16px"></audio><hr style="margin:14px 0;opacity:0.2"><h4 style="margin:0 0 6px">RF Band Spectrum Sweep (rtl_power)</h4><div class="settings-grid" style="margin-bottom:8px"><label for="sdr-sweep-span">Range (start:stop:step)<input id="sdr-sweep-span" value="162.35M:162.60M:5k"></label></div><div class="settings-actions" style="margin-bottom:10px"><button type="button" id="sdr-sweep-btn" onclick="runSdrSweep()">Scan RF Spectrum</button><button type="button" class="secondary" onclick="document.getElementById('sdr-sweep-span').value='902M:928M:50k';runSdrSweep()">Scan 915 MHz LoRa Band</button><p id="sdr-sweep-status" class="preferences-status" aria-live="polite"></p></div><canvas id="sdr-spectrum-canvas" width="760" height="210" style="width:100%;max-width:760px;height:210px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:rgba(0,0,0,0.28)"></canvas></div></section>
 <section id="settings-logs-panel" class="settings-tab-panel" hidden>
 <pre id="app-log-output" class="device-debug-output" style="max-height:60vh;margin:0 0 12px">Loading...</pre>
 <div class="config-actions"><button type="button" onclick="loadAppLogs()">Refresh</button><button type="button" class="secondary" onclick="clearAppLogs()">Clear logs</button><p id="app-log-status" class="config-status" aria-live="polite"></p></div>
@@ -7890,6 +7896,150 @@ async def noaa_test_handler(request):
         return web.json_response({"error": str(e)}, status=500)
 
 
+import struct as _sdr_struct
+
+_SDR_ACTIVE_PROC = None
+_SDR_ACTIVE_FREQ = ""
+
+def _wav_stream_header(sample_rate=22050):
+    byte_rate = sample_rate * 2
+    data_size = 0x7FFFF000
+    return _sdr_struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF", data_size + 36, b"WAVE",
+        b"fmt ", 16, 1, 1, sample_rate, byte_rate, 2, 16,
+        b"data", data_size
+    )
+
+async def _stop_sdr_stream_proc():
+    global _SDR_ACTIVE_PROC, _SDR_ACTIVE_FREQ
+    proc = _SDR_ACTIVE_PROC
+    _SDR_ACTIVE_PROC = None
+    _SDR_ACTIVE_FREQ = ""
+    if proc is not None:
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:
+            pass
+    try:
+        subprocess.run(["pkill", "-9", "-f", "rtl_fm.*-s 22050"], capture_output=True)
+    except Exception:
+        pass
+    if (app_config.get("noaa") or {}).get("enabled", True):
+        try:
+            subprocess.run(["systemctl", "start", "noaa-same.service"], capture_output=True)
+        except Exception:
+            pass
+
+async def sdr_stream_handler(request):
+    global _SDR_ACTIVE_PROC, _SDR_ACTIVE_FREQ
+    freq = str(request.query.get("freq", "162.475M")).strip()
+    mod = str(request.query.get("mod", "fm")).strip().lower()
+    if mod not in ("fm", "wbfm", "am"):
+        mod = "fm"
+    try:
+        gain = max(0, min(50, int(float(request.query.get("gain", 40)))))
+    except Exception:
+        gain = 40
+    try:
+        squelch = max(0, min(200, int(float(request.query.get("squelch", 0)))))
+    except Exception:
+        squelch = 0
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?[kKmMgG]?", freq):
+        return web.json_response({"error": "Invalid frequency"}, status=400)
+
+    await _stop_sdr_stream_proc()
+    try:
+        subprocess.run(["systemctl", "stop", "noaa-same.service"], capture_output=True)
+        await asyncio.sleep(0.3)
+    except Exception:
+        pass
+
+    sample_rate = 32000 if mod == "wbfm" else 22050
+    cmd = ["rtl_fm", "-f", freq, "-M", mod, "-s", str(sample_rate), "-g", str(gain)]
+    if squelch > 0:
+        cmd += ["-l", str(squelch)]
+    cmd.append("-")
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    except Exception as err:
+        await _stop_sdr_stream_proc()
+        return web.json_response({"error": f"Failed to start rtl_fm: {err}"}, status=500)
+
+    _SDR_ACTIVE_PROC = proc
+    _SDR_ACTIVE_FREQ = f"{freq} ({mod.upper()})"
+    resp = web.StreamResponse(
+        status=200,
+        headers={
+            "Content-Type": "audio/wav",
+            "Cache-Control": "no-store, no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+    await resp.prepare(request)
+    try:
+        await resp.write(_wav_stream_header(sample_rate))
+        while True:
+            chunk = await proc.stdout.read(4096)
+            if not chunk:
+                break
+            await resp.write(chunk)
+    except (asyncio.CancelledError, ConnectionResetError, Exception):
+        pass
+    finally:
+        if _SDR_ACTIVE_PROC is proc:
+            await _stop_sdr_stream_proc()
+    return resp
+
+async def sdr_stop_handler(request):
+    await _stop_sdr_stream_proc()
+    return web.json_response({"ok": True})
+
+async def sdr_scan_handler(request):
+    data = await read_json_object(request) or {}
+    span = str(data.get("span", "162.35M:162.60M:5k")).strip()
+    if not re.fullmatch(r"[0-9.]+[kKmMgG]?:[0-9.]+[kKmMgG]?:[0-9.]+[kKmMgG]?", span):
+        return web.json_response({"error": "Use format start:stop:step, e.g. 162.35M:162.60M:5k"}, status=400)
+    try:
+        gain = max(0, min(50, int(float(data.get("gain", 40)))))
+    except Exception:
+        gain = 40
+
+    await _stop_sdr_stream_proc()
+    try:
+        subprocess.run(["systemctl", "stop", "noaa-same.service"], capture_output=True)
+        await asyncio.sleep(0.3)
+        proc = await asyncio.create_subprocess_exec(
+            "rtl_power", "-f", span, "-g", str(gain), "-i", "1", "-1", "-",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=15.0)
+        bins = []
+        for line in out.decode("utf-8", errors="ignore").splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) >= 7:
+                f_low = float(parts[2])
+                f_step = float(parts[4])
+                for idx, val in enumerate(parts[6:]):
+                    try:
+                        bins.append({"mhz": round((f_low + idx * f_step) / 1e6, 4), "db": round(float(val), 2)})
+                    except ValueError:
+                        pass
+        return web.json_response({"ok": True, "bins": bins, "span": span})
+    except Exception as err:
+        return web.json_response({"error": f"Spectrum sweep failed: {err}"}, status=500)
+    finally:
+        if (app_config.get("noaa") or {}).get("enabled", True):
+            subprocess.run(["systemctl", "start", "noaa-same.service"], capture_output=True)
+
+
 def create_app():
     app = web.Application(middlewares=[auth_middleware])
     app.router.add_get("/login", login_page_handler)
@@ -7925,6 +8075,9 @@ def create_app():
     app.router.add_get("/api/tightvnc", tightvnc_handler)
     app.router.add_post("/api/tightvnc", update_tightvnc_handler)
     app.router.add_get("/api/logs", logs_handler)
+    app.router.add_get("/api/sdr/stream", sdr_stream_handler)
+    app.router.add_post("/api/sdr/stop", sdr_stop_handler)
+    app.router.add_post("/api/sdr/scan", sdr_scan_handler)
     app.router.add_delete("/api/logs", clear_logs_handler)
     app.router.add_get("/api/scan/bluetooth", bluetooth_scan_handler)
     app.router.add_get("/api/scan/serial", serial_scan_handler)
