@@ -7591,6 +7591,8 @@ $("login").onsubmit=async e=>{e.preventDefault();const r=await post("/api/login"
 $("forgot").onclick=async()=>{$("msg").textContent="Sending code...";const r=await post("/api/forgot",{});if(r.ok){$("login").hidden=true;$("reset").hidden=false}else $("msg").textContent=r.d.error||"Failed"};
 $("back").onclick=()=>{$("reset").hidden=true;$("login").hidden=false};
 $("reset").onsubmit=async e=>{e.preventDefault();const r=await post("/api/reset",{code:$("code").value,password:$("npw").value});if(r.ok)location="/";else $("msg2").textContent=r.d.error||"Reset failed"};
+
+document.addEventListener('click',e=>{document.querySelectorAll('details[open]').forEach(d=>{if(!d.contains(e.target)||e.target.closest('button,a,[role="menuitem"]'))d.open=false;});});
 </script></body></html>"""
 
 
