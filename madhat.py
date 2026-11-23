@@ -4656,7 +4656,7 @@ function syncConfigControls(){let colorSelect=document.getElementById('theme-sel
 const weatherIcons={sun:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>',partly:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="16" cy="7" r="3"/><path d="M16 2v1m0 8v1m5-5h-1m-8 0h-1M5 19h12a3 3 0 0 0 .3-6A5 5 0 0 0 8 11.5 3.8 3.8 0 0 0 5 19Z"/></svg>',cloud:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19h13a4 4 0 0 0 .4-8A6 6 0 0 0 7 9.5 4.8 4.8 0 0 0 5 19Z"/></svg>',fog:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm-2 4h14m-10 3h14"/></svg>',rain:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 15h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 7 4 4 0 0 0 5 15Zm2 3-1 2m7-2-1 2m7-2-1 2"/></svg>',snow:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm2 4h.01M12 19h.01M18 18h.01"/></svg>',storm:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm8 1-3 4h3l-1 3 4-5h-3l1-2"/></svg>'};
 function weatherIconName(code){if(code===null||code===undefined||!Number.isFinite(Number(code)))return 'cloud';code=Number(code);if(code===0)return 'sun';if(code===1||code===2)return 'partly';if(code===45||code===48)return 'fog';if(code===51||code===53||code===55||code===56||code===57||code===61||code===63||code===65||code===66||code===67||code===80||code===81||code===82)return 'rain';if(code===71||code===73||code===75||code===77||code===85||code===86)return 'snow';if(code===95||code===96||code===99)return 'storm';return 'cloud'}
 function renderWeatherIcon(code,condition='Weather condition unavailable'){let icon=document.getElementById('weather-icon');icon.innerHTML=weatherIcons[weatherIconName(code)]||weatherIcons.cloud;icon.setAttribute('aria-label',condition);icon.title=condition}
-function syncNoaaControls(){let n=(appConfig&&appConfig.noaa)||{enabled:true,frequency:"162.475M",gain:40,same_codes:["009003"],target_channel:0};let elEn=document.getElementById("noaa-enabled");if(!elEn)return;elEn.checked=n.enabled!==false;document.getElementById("noaa-freq").value=n.frequency||"162.475M";document.getElementById("noaa-gain").value=n.gain??40;document.getElementById("noaa-same").value=Array.isArray(n.same_codes)?n.same_codes.join(","):"009003";let chSel=document.getElementById("noaa-channel");let savedCh=String(n.target_channel??0);fetch("/api/status").then(r=>r.json()).then(st=>{if(st&&st.channels&&Object.keys(st.channels).length){chSel.innerHTML="";Object.entries(st.channels).sort((a,b)=>Number(a[0])-Number(b[0])).forEach(([idx,info])=>{let opt=document.createElement("option");opt.value=String(idx);let cname=(info&&(info.channel_name||info.name))||(idx==="0"?"Public":"Channel "+idx);opt.textContent=idx+" — "+cname;chSel.appendChild(opt);});}chSel.value=savedCh;}).catch(()=>{chSel.value=savedCh;});}async function saveNoaaSettings(e){e.preventDefault();let codes=document.getElementById("noaa-same").value.split(",").map(s=>s.trim()).filter(Boolean);let noaa={enabled:document.getElementById("noaa-enabled").checked,frequency:document.getElementById("noaa-freq").value,gain:Number(document.getElementById("noaa-gain").value||40),same_codes:codes,target_channel:Number(document.getElementById("noaa-channel").value||0)};await saveAppConfig({...appConfig,noaa},"noaa-settings-status");}async function runNoaaCaptureNow(){let btn=document.getElementById("noaa-test-btn"),st=document.getElementById("noaa-settings-status");btn.disabled=true;st.dataset.state="";st.textContent="Capturing 90s of NOAA audio & summarizing...";try{let r=await fetch("/api/noaa-test",{method:"POST"}),d=await r.json();if(!r.ok)throw new Error(d.error||"Failed");st.dataset.state="success";st.textContent="Sent: "+d.summary;}catch(err){st.dataset.state="error";st.textContent=err.message;}finally{btn.disabled=false;}}
+function syncNoaaControls(){let n=(appConfig&&appConfig.noaa)||{enabled:true,frequency:"162.475M",gain:40,same_codes:["009003"],target_channel:0};let elEn=document.getElementById("noaa-enabled");if(!elEn)return;elEn.checked=n.enabled!==false;document.getElementById("noaa-freq").value=n.frequency||"162.475M";document.getElementById("noaa-gain").value=n.gain??40;document.getElementById("noaa-same").value=Array.isArray(n.same_codes)?n.same_codes.join(","):"009003";let chSel=document.getElementById("noaa-channel");let savedCh=String(n.target_channel??0);fetch("/api/status").then(r=>r.json()).then(st=>{if(st&&st.channels&&Object.keys(st.channels).length){chSel.innerHTML="";Object.entries(st.channels).sort((a,b)=>Number(a[0])-Number(b[0])).forEach(([idx,info])=>{let opt=document.createElement("option");opt.value=String(idx);let cname=(info&&(info.channel_name||info.name))||(idx==="0"?"Public":"Channel "+idx);opt.textContent=idx+" — "+cname;chSel.appendChild(opt);});}chSel.value=savedCh;}).catch(()=>{chSel.value=savedCh;});}async function saveNoaaSettings(e){e.preventDefault();let codes=document.getElementById("noaa-same").value.split(",").map(s=>s.trim()).filter(Boolean);let noaa={enabled:document.getElementById("noaa-enabled").checked,frequency:document.getElementById("noaa-freq").value,gain:Number(document.getElementById("noaa-gain").value||40),same_codes:codes,target_channels:[...document.querySelectorAll(".noaa-ch-cb:checked")].map(cb=>Number(cb.value))};await saveAppConfig({...appConfig,noaa},"noaa-settings-status");}async function runNoaaCaptureNow(){let btn=document.getElementById("noaa-test-btn"),st=document.getElementById("noaa-settings-status");btn.disabled=true;st.dataset.state="";st.textContent="Capturing 90s of NOAA audio & summarizing...";try{let r=await fetch("/api/noaa-test",{method:"POST"}),d=await r.json();if(!r.ok)throw new Error(d.error||"Failed");st.dataset.state="success";st.textContent="Sent: "+d.summary;}catch(err){st.dataset.state="error";st.textContent=err.message;}finally{btn.disabled=false;}}
 async function loadLocalWeather(){let temperature=document.getElementById('weather-temperature'),condition=document.getElementById('weather-condition'),location=document.getElementById('weather-location'),extra=document.getElementById('weather-extra'),widget=document.getElementById('banner-item-weather');condition.textContent='Loading';try{let response=await fetch('/api/local-weather'),data=await response.json();if(!response.ok)throw new Error(data.error||'Weather unavailable');temperature.textContent=Math.round(data.temperature_f)+'°F';condition.textContent=data.condition;location.textContent=data.short_location||data.location;if(extra)extra.textContent=[data.humidity!=null?'💧'+Math.round(data.humidity)+'%':'',data.wind_mph!=null?'💨'+Math.round(data.wind_mph)+' mph':''].filter(Boolean).join(' ');if(widget)widget.title=data.location;renderWeatherIcon(data.weather_code,data.condition)}catch(error){temperature.textContent='--°F';condition.textContent=error.message.includes('Enter a city')?'Set location':'Unavailable';if(extra)extra.textContent='';location.textContent=appConfig.weather.city?(appConfig.weather.state?appConfig.weather.city+', '+appConfig.weather.state:appConfig.weather.city):'Location not set';if(widget)widget.title=location.textContent;renderWeatherIcon(null,condition.textContent)}}
 async function loadAppConfig(){try{let response=await fetch('/api/config'),data=await response.json();if(!response.ok)throw new Error(data.error||'Settings could not be loaded');appConfig=data;syncConfigControls();if(new URLSearchParams(window.location.search).get('preview')==='tron')applyTheme('tron',false);loadLocalWeather();maybeCheckForUpdates()}catch(error){let statusMessage=document.getElementById('preferences-status');statusMessage.dataset.state='error';statusMessage.textContent=error.message}}
 async function saveAppConfig(config,statusId='preferences-status'){let statusMessage=document.getElementById(statusId);statusMessage.dataset.state='';statusMessage.textContent='Saving config.json...';try{let response=await fetch('/api/config',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)}),data=await response.json();if(!response.ok)throw new Error(data.error||'Settings could not be saved');appConfig=data;syncConfigControls();if(statusId==='config-status'){document.getElementById('config-json-editor').value=JSON.stringify(appConfig,null,2);configEditorLoaded=true}statusMessage.textContent='Saved to config.json.';statusMessage.dataset.state='success'}catch(error){statusMessage.textContent=error.message;statusMessage.dataset.state='error'}}
@@ -5138,7 +5138,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <label for="weather-state">State (optional)<input id="weather-state" name="state" maxlength="80" value="" placeholder="Optional"></label>
 <div class="settings-actions"><button type="submit">Save location</button><p id="weather-settings-status" class="preferences-status" aria-live="polite"></p></div>
 </form>
-<hr style="margin:18px 0;opacity:0.2"><form class="weather-settings-layout" onsubmit="saveNoaaSettings(event)"><h3 style="margin:0 0 8px">NOAA USB SDR Weather Radio (6-Hour Schedule)</h3><label class="settings-item-full"><input type="checkbox" id="noaa-enabled" checked> Enable 6-hour SDR capture (05:00, 11:00, 17:00, 23:00) + SAME alerts</label><label for="noaa-freq">NOAA Frequency<select id="noaa-freq"><option value="162.400M">162.400 MHz (WX2)</option><option value="162.425M">162.425 MHz (WX4)</option><option value="162.450M">162.450 MHz (WX5)</option><option value="162.475M" selected>162.475 MHz (WX3 - Hartford/Burlington)</option><option value="162.500M">162.500 MHz (WX6)</option><option value="162.525M">162.525 MHz (WX7)</option><option value="162.550M">162.550 MHz (WX1)</option></select></label><label for="noaa-gain">SDR Gain (0-50)<input id="noaa-gain" type="number" min="0" max="50" value="40"></label><label for="noaa-same">SAME County FIPS Codes<input id="noaa-same" value="009003" placeholder="009003"></label><label for="noaa-channel">Target MeshCore Channel<select id="noaa-channel"><option value="0">0 — Public (Default)</option><option value="1">1 — Channel 1 (#test)</option><option value="2">2 — Channel 2</option><option value="3">3 — Channel 3</option><option value="4">4 — Channel 4</option><option value="5">5 — Channel 5</option><option value="6">6 — Channel 6</option><option value="7">7 — Channel 7</option></select></label><div class="settings-actions"><button type="submit">Save NOAA settings</button><button type="button" class="secondary" id="noaa-test-btn" onclick="runNoaaCaptureNow()">Run 90s Capture Now</button><p id="noaa-settings-status" class="preferences-status" aria-live="polite"></p></div></form>
+<hr style="margin:18px 0;opacity:0.2"><form class="weather-settings-layout" onsubmit="saveNoaaSettings(event)"><h3 style="margin:0 0 8px">NOAA USB SDR Weather Radio (6-Hour Schedule)</h3><label class="settings-item-full"><input type="checkbox" id="noaa-enabled" checked> Enable 6-hour SDR capture (05:00, 11:00, 17:00, 23:00) + SAME alerts</label><label for="noaa-freq">NOAA Frequency<select id="noaa-freq"><option value="162.400M">162.400 MHz (WX2)</option><option value="162.425M">162.425 MHz (WX4)</option><option value="162.450M">162.450 MHz (WX5)</option><option value="162.475M" selected>162.475 MHz (WX3 - Hartford/Burlington)</option><option value="162.500M">162.500 MHz (WX6)</option><option value="162.525M">162.525 MHz (WX7)</option><option value="162.550M">162.550 MHz (WX1)</option></select></label><label for="noaa-gain">SDR Gain (0-50)<input id="noaa-gain" type="number" min="0" max="50" value="40"></label><label for="noaa-same">SAME County FIPS Codes<input id="noaa-same" value="009003" placeholder="009003"></label><div class="settings-item-full"><span style="display:block;margin-bottom:6px;font-weight:600">Channels to Broadcast</span><div id="noaa-channels-box" style="display:flex;flex-wrap:wrap;gap:10px"><label><input type="checkbox" class="noaa-ch-cb" value="0"> 0 — Public</label><label><input type="checkbox" class="noaa-ch-cb" value="1"> 1 — Channel 1</label><label><input type="checkbox" class="noaa-ch-cb" value="2"> 2 — Channel 2</label><label><input type="checkbox" class="noaa-ch-cb" value="3"> 3 — Channel 3</label><label><input type="checkbox" class="noaa-ch-cb" value="4"> 4 — Channel 4</label><label><input type="checkbox" class="noaa-ch-cb" value="5" checked> 5 — Channel 5</label><label><input type="checkbox" class="noaa-ch-cb" value="6"> 6 — Channel 6</label><label><input type="checkbox" class="noaa-ch-cb" value="7"> 7 — Channel 7</label></div></div><div class="settings-actions"><button type="submit">Save NOAA settings</button><button type="button" class="secondary" id="noaa-test-btn" onclick="runNoaaCaptureNow()">Run 90s Capture Now</button><p id="noaa-settings-status" class="preferences-status" aria-live="polite"></p></div></form>
 </section>
 <section id="settings-logs-panel" class="settings-tab-panel" hidden>
 <pre id="app-log-output" class="device-debug-output" style="max-height:60vh;margin:0 0 12px">Loading...</pre>
@@ -7263,10 +7263,7 @@ async def on_startup(app):
     app["ollama_task"] = asyncio.create_task(update_available_models())
     app["ollama_schedule_task"] = asyncio.create_task(ollama_schedule_loop())
     app["connection_task"] = asyncio.create_task(auto_connect_hardware())
-    async def _send_noaa_chan(ch, msg):
-        if meshcore_instance and app_state.get("is_connected"):
-            await send_to_target(ch, "channel", msg[:155])
-    app["noaa_task"] = asyncio.create_task(noaa_6hr_loop(lambda: globals().get("app_config", {}), _send_noaa_chan))
+    app["noaa_task"] = asyncio.create_task(noaa_6hr_loop(lambda: globals().get("app_config", {}), send_noaa_channel_message))
 
 
 async def on_cleanup(app):
@@ -7506,34 +7503,54 @@ $("reset").onsubmit=async e=>{e.preventDefault();const r=await post("/api/reset"
 
 
 
+async def send_noaa_channel_message(ch, message):
+    if not meshcore_instance or not app_state.get("is_connected"):
+        return
+    target = str(int(ch))
+    msg = str(message)[:155]
+    async with paced_hardware_lock():
+        result, pending_delivery, hops = await send_to_target_with_pending_confirmation(
+            target, "channel", msg
+        )
+    if result.type == EventType.ERROR:
+        log_to_dash(f"NOAA transmit error on channel {target}: {result.payload}")
+        return
+    sent_message = add_chat_message("channel", target, "outgoing", msg)
+    update_chat_message_status(sent_message, "sent")
+    schedule_delivery_status_update(sent_message, pending_delivery, hops)
+    record_trace_event("channel", "outbound", target)
+    log_to_dash(f"NOAA message sent to channel {target}")
+
+
 async def noaa_alert_handler(request):
     if request.remote not in ("127.0.0.1", "::1"):
         return web.json_response({"error": "Localhost only"}, status=403)
     alert_text = (await request.text()).strip()
     if alert_text and meshcore_instance and app_state.get("is_connected"):
         cfg = globals().get("app_config", {})
-        ch = int(cfg.get("noaa", {}).get("target_channel", 0))
-        packets = split_into_packets(f"NOAA: {alert_text}", max_len=145, max_packets=4)
-        for idx, pkt in enumerate(packets, start=1):
-            prefix = f"[{idx}/{len(packets)}] " if len(packets) > 1 else ""
-            await send_to_target(ch, "channel", f"{prefix}{pkt}"[:155])
-            if idx < len(packets):
-                await asyncio.sleep(2.5)
+        noaa_cfg = cfg.get("noaa", {})
+        chs = noaa_cfg.get("target_channels")
+        channels = chs if isinstance(chs, list) and len(chs) > 0 else list((5,))
+        packets = split_into_packets(f"NOAA: {alert_text}", max_len=145, max_packets=6)
+        for ch in channels:
+            for idx, pkt in enumerate(packets, start=1):
+                prefix = f"[{idx}/{len(packets)}] " if len(packets) > 1 else ""
+                await send_noaa_channel_message(int(ch), f"{prefix}{pkt}")
+                if idx < len(packets):
+                    await asyncio.sleep(3.0)
     return web.json_response({"ok": True})
 
 
 async def noaa_test_handler(request):
     cfg = globals().get("app_config", {})
-    async def _send_chan(ch, msg):
-        if meshcore_instance and app_state.get("is_connected"):
-            await send_to_target(ch, "channel", msg[:155])
     try:
-        summary = await trigger_noaa_now(cfg, _send_chan)
+        summary = await trigger_noaa_now(cfg, send_noaa_channel_message)
         if summary:
             return web.json_response({"ok": True, "summary": summary})
-        return web.json_response({"ok": True, "summary": "Capture finished (no speech decoded - check antenna/gain)"})
+        return web.json_response({"ok": True, "summary": "Capture finished (no speech decoded)"})
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)
+
 
 def create_app():
     app = web.Application(middlewares=[auth_middleware])
