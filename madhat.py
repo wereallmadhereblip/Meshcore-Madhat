@@ -794,10 +794,13 @@ def reception_info(packet):
     if isinstance(snr, (int, float)):
         info["snr"] = snr
     if "path_len" in info:
+        hash_bytes = (packet.get("path_hash_mode") + 1) if isinstance(packet.get("path_hash_mode"), int) else (packet.get("path_hash_size") if packet.get("path_hash_size") in (1, 2, 3) else None)
+        if hash_bytes in (1, 2, 3):
+            info["path_hash_bytes"] = hash_bytes
         nodes = path_nodes(
             packet.get("path"),
             info["path_len"],
-            packet.get("path_hash_mode") + 1 if isinstance(packet.get("path_hash_mode"), int) else None,
+            hash_bytes,
         )
         if nodes:
             info["path_nodes"] = nodes
@@ -2789,15 +2792,33 @@ def _extract_2byte_hops(packet: dict, info: dict) -> list[str]:
     for src in candidates:
         plen = src.get("path_len")
         raw = src.get("path")
-        if isinstance(plen, int) and 0 < plen < 64 and isinstance(raw, str) and len(raw) >= plen * 4:
-            return [raw[i:i+4].upper() for i in range(0, plen * 4, 4)]
-        if isinstance(raw, (bytes, bytearray)) and len(raw) >= 2:
-            return ["".join(f"{b:02X}" for b in raw[i:i+2]) for i in range(0, len(raw), 2)]
+        hmode = src.get("path_hash_mode")
+        hsize = (hmode + 1) if isinstance(hmode, int) and hmode in (0, 1, 2) else src.get("path_hash_size")
+        if isinstance(plen, int) and 0 < plen < 64 and isinstance(raw, str) and len(raw) >= plen * 2:
+            if hsize in (1, 2, 3):
+                step = hsize * 2
+            elif len(raw) >= plen * 6:
+                step = 6
+            elif len(raw) >= plen * 4:
+                step = 4
+            else:
+                step = 2
+            return [raw[i:i+step].upper() for i in range(0, plen * step, step)]
+        if isinstance(raw, (bytes, bytearray)) and len(raw) >= 1:
+            if hsize in (1, 2, 3):
+                step = hsize
+            elif isinstance(plen, int) and plen > 0 and len(raw) >= plen * 3:
+                step = 3
+            elif isinstance(plen, int) and plen > 0 and len(raw) >= plen * 2:
+                step = 2
+            else:
+                step = 1
+            return ["".join(f"{b:02X}" for b in raw[i:i+step]) for i in range(0, len(raw), step)]
     out = []
     for n in (info.get("path_nodes") or []):
         h = n.get("hash") if isinstance(n, dict) else str(n)
         if h:
-            out.append(str(h).upper()[:4])
+            out.append(str(h).upper()[:6])
     return out
 
 async def handle_mesh_probe(raw_text: str, sender_label: str, packet: dict, info: dict):
@@ -2841,7 +2862,9 @@ async def handle_mesh_probe(raw_text: str, sender_label: str, packet: dict, info
             "Here is the exact trail of repeaters you just bothered:",
             "Routing receipts, as requested by management:",
         ])
-        return SingleMessage(f"{q} (0 hops) Direct" if hops == 0 else f"{q} ({hops} hops, 2-byte) {route}")
+        hop_word = "hop" if hops == 1 else "hops"
+        byte_len = (len(hex_hops[0]) // 2) if hex_hops else 1
+        return SingleMessage(f"{q} (0 hops) Direct" if hops == 0 else f"{q} ({hops} {hop_word}, {byte_len}-byte) {route}")
     return None
 
 
@@ -3029,7 +3052,7 @@ async def send_to_target_with_pending_confirmation(target, target_type, message)
         if target_type == "channel":
             return [
                 log for log in echoes
-                if log.get("sender_timestamp") == send_timestamp
+                if abs(int(log.get("sender_timestamp") or 0) - int(send_timestamp or 0)) <= 3
                 and str(log.get("message", "")).endswith(message)
             ]
         if ack_code is None:
@@ -3065,7 +3088,7 @@ async def send_to_target_with_pending_confirmation(target, target_type, message)
                         ]
                         update_chat_message_status(chat_message, "delivered")
                 await asyncio.sleep(0.5)
-            if not delivered:
+            if not delivered and target_type != "channel":
                 update_chat_message_status(chat_message, "failed")
         finally:
             cleanup()
@@ -4769,7 +4792,7 @@ setInterval(()=>{if(activeView==='analyzer')loadAnalyzerRadioStatus();else if(ac
 function updateSearchPlaceholders(){let contactPlaceholder='Search '+mapNodes.length+' contacts';for(let id of ['node-search','map-node-search']){let input=document.getElementById(id);if(input)input.placeholder=contactPlaceholder}let channelSearch=document.getElementById('channel-search');if(channelSearch)channelSearch.placeholder='Search '+meshChannels.length+' channels'}
 async function peers(){let r=await fetch('/api/peers'),d=await r.json();gatewayTelemetry=d.gateway_telemetry||{};mapNodes=d.nodes||[];meshChannels=d.channels||[];peerLimits=d.limits||{};updateAddCapacity();updateSearchPlaceholders();gateway_battery.textContent=gatewayTelemetry.battery!=null?gatewayTelemetry.battery+'%':'Unavailable';system_battery.textContent=d.system_battery!=null?d.system_battery+'%':'Unavailable';if(!mapNodes.some(item=>String(item.id)===selectedNodeId))selectedNodeId='';if(!meshChannels.some(item=>String(item.id)===selectedChannelId))selectedChannelId='';renderConversationTargets('node');renderConversationTargets('channel');renderKnownPeers();renderMapMarkers();renderAnalyzerStats();renderIncomingAdverts(d.incoming_adverts||[]);if(liveTraceMap)renderLiveTraceMarkers()}
 function parseChannelSender(text){let bracket=text.match(/^\[([^\]]{1,24})\]\s*/);if(bracket)return bracket[1];let colon=text.match(/^([A-Za-z0-9 _-]{1,24}):\s/);if(colon)return colon[1];return null}
-async function history(type,id,boxId,scrollToLatest=false){let box=document.getElementById(boxId);if(!id){box.replaceChildren();updateConversationMenu(type);return}if(type==='node'&&isRepeaterNode(id)){if(manageNodeId===String(id))return;let note=document.createElement('p');note.className='map-empty';note.textContent='Direct messages are not supported for repeater nodes.';box.replaceChildren(note);return}try{let response=await fetch('/api/chat-history?target_type='+encodeURIComponent(type)+'&target='+encodeURIComponent(id)),data=await response.json();if(!response.ok)throw new Error(data.error||'Message history could not be loaded');updateConversationMenu(type,data.metadata||{});let wasAtLatest=box.scrollHeight-box.clientHeight-box.scrollTop<=40,previousTop=box.scrollTop,previousBehavior=box.style.scrollBehavior;box.style.scrollBehavior='auto';box.replaceChildren();let peerName=type==='node'?(mapNodes.find(item=>String(item.id)===id)?.name||id):(meshChannels.find(item=>String(item.id)===id)?.name||('Channel '+id));for(let message of data.messages||[]){let outgoing=message.direction==='outgoing';let item=document.createElement('div');item.className='chat-message '+(outgoing?'outgoing':'incoming');let sender=outgoing?'You':(type==='channel'?(parseChannelSender(message.text)||peerName):peerName);let meta=document.createElement('div');meta.className='chat-message-meta';let avatar=document.createElement('span');avatar.className='chat-avatar';avatar.style.background=hashColor(outgoing?'you':id);avatar.textContent=sender.charAt(0)||'?';let senderLabel=document.createElement('span');senderLabel.className='chat-sender';senderLabel.textContent=sender;let time=document.createElement('span');time.className='chat-time';time.textContent=fmtTime(message.timestamp);let status=document.createElement('span');status.className='chat-status';let statusLabels={sent:'Sent',delivered:'Delivered',failed:'Failed',received:'Received'},heardCount=Number(message.heard);status.textContent=message.status==='delivered'&&Number.isInteger(heardCount)&&heardCount>0?'Delivered · '+heardCount+' heard':statusLabels[message.status]||statusLabels[outgoing?'sent':'received'];let body=document.createElement('div');body.className='chat-message-body';body.textContent=message.text;if(outgoing){let bubble=document.createElement('div');bubble.className='chat-bubble';bubble.append(body);meta.className='chat-caption';meta.append(status,time);item.append(bubble,meta)}else{let bubble=document.createElement('div'),caption=document.createElement('div');bubble.className='chat-bubble';bubble.append(body);meta.append(avatar,senderLabel);caption.className='chat-caption';caption.append(time,status);item.append(meta,bubble,caption)}item.tabIndex=0;item.setAttribute('role','button');item.oncontextmenu=event=>{event.preventDefault();openMessageActions(type,id,message,sender,data.blocked||[])};item.onkeydown=event=>{if(event.key==='Enter')openMessageActions(type,id,message,sender,data.blocked||[])};box.appendChild(item)}box.scrollTop=scrollToLatest||wasAtLatest?box.scrollHeight:previousTop;box.style.scrollBehavior=previousBehavior}catch(error){box.textContent=error.message}}
+async function history(type,id,boxId,scrollToLatest=false){let box=document.getElementById(boxId);if(!id){box.replaceChildren();updateConversationMenu(type);return}if(type==='node'&&isRepeaterNode(id)){if(manageNodeId===String(id))return;let note=document.createElement('p');note.className='map-empty';note.textContent='Direct messages are not supported for repeater nodes.';box.replaceChildren(note);return}try{let response=await fetch('/api/chat-history?target_type='+encodeURIComponent(type)+'&target='+encodeURIComponent(id)),data=await response.json();if(!response.ok)throw new Error(data.error||'Message history could not be loaded');updateConversationMenu(type,data.metadata||{});let wasAtLatest=box.scrollHeight-box.clientHeight-box.scrollTop<=40,previousTop=box.scrollTop,previousBehavior=box.style.scrollBehavior;box.style.scrollBehavior='auto';box.replaceChildren();let peerName=type==='node'?(mapNodes.find(item=>String(item.id)===id)?.name||id):(meshChannels.find(item=>String(item.id)===id)?.name||('Channel '+id));for(let message of data.messages||[]){let outgoing=message.direction==='outgoing';let item=document.createElement('div');item.className='chat-message '+(outgoing?'outgoing':'incoming');let sender=outgoing?'You':(type==='channel'?(parseChannelSender(message.text)||peerName):peerName);let meta=document.createElement('div');meta.className='chat-message-meta';let avatar=document.createElement('span');avatar.className='chat-avatar';avatar.style.background=hashColor(outgoing?'you':id);avatar.textContent=sender.charAt(0)||'?';let senderLabel=document.createElement('span');senderLabel.className='chat-sender';senderLabel.textContent=sender;let time=document.createElement('span');time.className='chat-time';let timeStr=fmtTime(message.timestamp);if(!outgoing&&Number.isInteger(Number(message.path_len))&&Number(message.path_len)>=0){let hLen=Number(message.path_len);if(hLen===0){timeStr+=' · Direct'}else{let hBytes=Number(message.path_hash_bytes)||(Array.isArray(message.path_nodes)&&message.path_nodes[0]?Math.max(1,Math.round(String(message.path_nodes[0]).length/2)):null);timeStr+=' · '+hLen+(hLen===1?' hop':' hops')+(hBytes?' ('+hBytes+'-byte)':'')}}time.textContent=timeStr;let body=document.createElement('div');body.className='chat-message-body';body.textContent=message.text;if(outgoing){let status=document.createElement('span');status.className='chat-status';let statusLabels={sent:'Sent',delivered:'Delivered',failed:'Failed'},heardCount=Number(message.heard);status.textContent=message.status==='delivered'&&Number.isInteger(heardCount)&&heardCount>0?'Delivered · '+heardCount+' heard':(statusLabels[message.status]||'Sent');let bubble=document.createElement('div');bubble.className='chat-bubble';bubble.append(body);meta.className='chat-caption';meta.append(status,time);item.append(bubble,meta)}else{let bubble=document.createElement('div'),caption=document.createElement('div');bubble.className='chat-bubble';bubble.append(body);meta.append(avatar,senderLabel);caption.className='chat-caption';caption.append(time);item.append(meta,bubble,caption)}item.tabIndex=0;item.setAttribute('role','button');item.oncontextmenu=event=>{event.preventDefault();openMessageActions(type,id,message,sender,data.blocked||[])};item.onkeydown=event=>{if(event.key==='Enter')openMessageActions(type,id,message,sender,data.blocked||[])};box.appendChild(item)}box.scrollTop=scrollToLatest||wasAtLatest?box.scrollHeight:previousTop;box.style.scrollBehavior=previousBehavior}catch(error){box.textContent=error.message}}
 async function deleteTarget(type){let selected=type==='node'?selectedNodeId:selectedChannelId;if(!selected)return;if(!confirm('Delete this '+type+' from the device? This cannot be undone.'))return;let response=await fetch('/api/delete-target',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_type:type,target:selected})}),data=await response.json();if(!response.ok){alert(data.error||'Delete failed');return}if(type==='node'){selectedNodeId=null;document.getElementById('node-chat-title').textContent='Select a node';document.getElementById('node-chat-detail').textContent='Choose a node to view its conversation.';document.getElementById('node-send').disabled=true;document.getElementById('node-chat-history').replaceChildren()}else{selectedChannelId=null;document.getElementById('channel-chat-title').textContent='Select a channel';document.getElementById('channel-chat-detail').textContent='Choose a channel to view its conversation.';document.getElementById('channel-send').disabled=true;document.getElementById('channel-chat-history').replaceChildren()}updateConversationMenu(type);let menu=document.getElementById(type+'-chat-options');if(menu)menu.open=false;await peers()}
 async function manageConversation(type,action){let selected=type==='node'?selectedNodeId:selectedChannelId;if(!selected)return;if(action==='clear'&&!confirm('Clear this conversation history? This cannot be undone.'))return;let response=await fetch('/api/chat-management',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_type:type,target:selected,action})}),data=await response.json();if(!response.ok){alert(data.error||'Conversation could not be updated');return}let menu=document.querySelector('#'+(type==='node'?'node':'channel')+'-chat-options');if(menu)menu.open=false;await history(type,selected,type==='node'?'node-chat-history':'channel-chat-history');await peers()}
 const REPEATER_OPTION_GROUPS=[
