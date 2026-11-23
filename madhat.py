@@ -787,21 +787,37 @@ def parse_channel_sender(text):
 
 def reception_info(packet):
     info = {}
+    src = packet
     path_len = packet.get("path_len")
+    if not (isinstance(path_len, int) and 0 < path_len < 64):
+        now = time.time()
+        for log in reversed(globals().get("_RECENT_RX_LOGS", [])):
+            if now - log.get("_ts", 0) <= 3.5 and isinstance(log.get("path_len"), int) and 0 < log["path_len"] < 64:
+                src = log
+                path_len = log["path_len"]
+                break
     if isinstance(path_len, int) and 0 <= path_len < 64:
         info["path_len"] = path_len
     snr = packet.get("SNR")
     if isinstance(snr, (int, float)):
         info["snr"] = snr
     if "path_len" in info:
-        hash_bytes = (packet.get("path_hash_mode") + 1) if isinstance(packet.get("path_hash_mode"), int) else (packet.get("path_hash_size") if packet.get("path_hash_size") in (1, 2, 3) else None)
+        hmode = src.get("path_hash_mode")
+        hsize = src.get("path_hash_size")
+        hash_bytes = (hmode + 1) if isinstance(hmode, int) and hmode in (0, 1, 2) else (hsize if hsize in (1, 2, 3) else None)
         if hash_bytes in (1, 2, 3):
             info["path_hash_bytes"] = hash_bytes
         nodes = path_nodes(
-            packet.get("path"),
+            src.get("path"),
             info["path_len"],
             hash_bytes,
         )
+        if nodes and "path_hash_bytes" not in info:
+            first_n = nodes.pop(0)
+            nodes.insert(0, first_n)
+            first_h = first_n.get("hash") if isinstance(first_n, dict) else str(first_n)
+            if first_h:
+                info["path_hash_bytes"] = max(1, min(3, len(str(first_h)) // 2))
         if nodes:
             info["path_nodes"] = nodes
     return info
@@ -5407,10 +5423,17 @@ window.openMessageActions=function(type,id,message,sender,blocked,nodePeer){
     let post=async(url,body)=>{let r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});let d=await r.json().catch(()=>({}));d._status=r.status;return d};
     sheet.append(action('Set Path','path',()=>{
       sheet.querySelector('.sheet-setpath')?.remove();let box=document.createElement('div');box.className='sheet-paths sheet-setpath';
-      let inp=document.createElement('input');inp.placeholder='Repeater hashes in order, e.g. a1,b2,c3';
+      let modeEl=document.getElementById('path-hash-mode');let hashBytes=modeEl&&['0','1','2'].includes(modeEl.value)?(Number(modeEl.value)+1):1;let hexLen=hashBytes*2;
+      let hops=[];let chips=document.createElement('div');chips.style.cssText='display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;align-items:center';
+      let inp=document.createElement('input');inp.placeholder='Repeater hashes in order, e.g. a1,b2 (or pick below)';
+      let syncChips=()=>{chips.replaceChildren();if(!hops.length){let empty=document.createElement('small');empty.style.opacity='0.7';empty.textContent='No hops added yet ('+hashBytes+'-byte mode)';chips.append(empty);return}hops.forEach((h,i)=>{let tag=document.createElement('span');tag.style.cssText='display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:999px;background:rgba(54,209,220,0.16);border:1px solid rgba(54,209,220,0.4);font-size:12px';tag.textContent=(i+1)+'. '+h.label;let del=document.createElement('button');del.type='button';del.textContent='×';del.style.cssText='background:none;border:none;color:inherit;cursor:pointer;padding:0 2px;font-weight:700';del.onclick=()=>{hops.splice(i,1);inp.value=hops.map(x=>x.hash).join(',');syncChips()};tag.append(del);chips.append(tag)})};
+      let search=document.createElement('input');search.placeholder='Search known repeaters by name or public key...';search.style.marginTop='6px';
+      let results=document.createElement('div');results.style.cssText='display:flex;flex-direction:column;gap:4px;max-height:150px;overflow-y:auto;margin:6px 0';
+      let renderRepeaters=()=>{results.replaceChildren();let q=search.value.trim().toLowerCase();let reps=(typeof mapNodes!=='undefined'?mapNodes:[]).filter(n=>Number(n.type)===2&&String(n.id)!==String(knownPeer.id));let matched=reps.filter(r=>!q||String(r.name||'').toLowerCase().includes(q)||String(r.id||'').toLowerCase().includes(q)||String(r.public_key||'').toLowerCase().includes(q)).slice(0,8);if(!matched.length){let none=document.createElement('small');none.style.opacity='0.7';none.textContent=reps.length?'No matching repeaters':'No known repeaters discovered yet';results.append(none);return}matched.forEach(r=>{let pub=String(r.public_key||r.id||'').replace(/[^0-9a-fA-F]/g,'').toLowerCase();let h=pub.slice(0,hexLen);let row=document.createElement('button');row.type='button';row.style.cssText='display:flex;justify-content:space-between;align-items:center;text-align:left;padding:6px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.04);cursor:pointer;font-size:13px';let left=document.createElement('span');left.textContent=(r.name||'Repeater')+' ('+h.toUpperCase()+')';let add=document.createElement('strong');add.textContent='+ Add';add.style.color='var(--accent,#36d1dc)';row.append(left,add);row.onclick=()=>{if(h){hops.push({hash:h,label:(r.name||h.toUpperCase())+' ['+h.toUpperCase()+']'});inp.value=hops.map(x=>x.hash).join(',');syncChips()}};results.append(row)})};
+      search.oninput=renderRepeaters;inp.oninput=()=>{let parts=inp.value.split(',').map(s=>s.trim().toLowerCase()).filter(Boolean);hops=parts.map(p=>({hash:p,label:p.toUpperCase()}));syncChips()};
       let save=document.createElement('button');save.type='button';save.textContent='Save path';
       save.onclick=async()=>{let d=await post('/api/contacts/path',{target:String(knownPeer.id),action:'set',path:inp.value});if(d._status===200){close();showToast('Path set',(knownPeer.name||knownPeer.id)+': route saved');if(typeof peers==='function')peers()}else showToast('Error',d.error||'Could not set path')};
-      box.append(inp,save);sheet.append(box);inp.focus()}));
+      syncChips();renderRepeaters();box.append(chips,search,results,inp,save);sheet.append(box);search.focus()}));
     sheet.append(action('Reset Path','path',async()=>{if(!confirm('Reset the route to '+(knownPeer.name||knownPeer.id)+'? The next message will use flood routing.'))return;let d=await post('/api/contacts/path',{target:String(knownPeer.id),action:'reset'});close();if(d._status===200){showToast('Path reset',(knownPeer.name||knownPeer.id)+' will be re-discovered');if(typeof peers==='function')peers()}else showToast('Error',d.error||'Could not reset path')}));
     if(Number(knownPeer.type)===2)sheet.append(action('Ping','signal',async()=>{showToast('Ping','Pinging '+(knownPeer.name||knownPeer.id)+'...');let d=await post('/api/contacts/ping',{target:String(knownPeer.id)});close();if(d.ok)showToast('Ping reply',(knownPeer.name||knownPeer.id)+': '+d.rtt_ms+' ms'+(Number.isInteger(d.hops)&&d.hops>=0?', '+d.hops+' hop'+(d.hops===1?'':'s'):''));else showToast('Ping failed',d.error||'No reply')}));
     if([2,3].includes(Number(knownPeer.type)))sheet.append(action('Manage','user',()=>{
