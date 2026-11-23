@@ -468,7 +468,7 @@ hardware_lock = asyncio.Lock()
 connection_lock = asyncio.Lock()
 # Sending back-to-back before the radio finishes the previous transmit
 # trips firmware's ERR_CODE_BAD_STATE, so pace multi-part replies.
-HARDWARE_SEND_INTERVAL = 1.5
+HARDWARE_SEND_INTERVAL = 3.0
 # The firmware also returns ERR_CODE_BAD_STATE (or drops the response
 # entirely) when a new command lands too soon after the previous one, even
 # for unrelated commands like get_contacts/get_channel, so every command
@@ -3219,7 +3219,8 @@ async def handle_incoming_message(event):
     if reply is None:
         reply = await generate_ai_response(sender, text)
     log_to_dash(f"AI reply: {reply}")
-    reply_parts = split_reply_into_messages(reply, max_parts=current_reply_packet_limit())
+    dm_limit = max(6, current_reply_packet_limit()) if text.strip().lower().startswith('/help') else current_reply_packet_limit()
+    reply_parts = split_reply_into_messages(reply, max_parts=dm_limit)
 
     async with paced_hardware_lock():
         try:
