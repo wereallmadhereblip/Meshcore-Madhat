@@ -2745,7 +2745,7 @@ async def _snark_quip(prompt_hint: str, fallbacks: list[str]) -> str:
         "stream": False, "keep_alive": -1,
         "options": {"temperature": 1.25, "top_p": 0.94, "repeat_penalty": 1.35, "seed": random.randint(1, 999999999), "num_predict": 35},
     }).encode("utf-8")
-    req = urllib.request.Request("http://127.0.0", data=body, headers={"Content-Type": "application/json"})
+    req = urllib.request.Request("http://" + "127.0.0.1" + ":11434/api/chat", data=body, headers={"Content-Type": "application/json"})
     def _call():
         with urllib.request.urlopen(req, timeout=15.0) as r:
             line = json.loads(r.read().decode("utf-8"))["message"]["content"].strip().splitlines()[0].strip().strip('"')
@@ -2757,7 +2757,7 @@ async def _snark_quip(prompt_hint: str, fallbacks: list[str]) -> str:
             return res
     except Exception as e:
         log_to_dash(f"Probe AI fallback: {e}")
-    pool = [x for x in (_CMD_SEEDS + fallbacks) if x not in _RECENT_QUIPS] or (_CMD_SEEDS + fallbacks)
+    pool = [x for x in fallbacks if x not in _RECENT_QUIPS] or fallbacks
     pick = random.choice(pool)
     _RECENT_QUIPS.append(pick); del _RECENT_QUIPS[:-60]
     return pick
@@ -2854,24 +2854,50 @@ async def handle_mesh_probe(raw_text: str, sender_label: str, packet: dict, info
     snr = info.get("snr", packet.get("SNR", packet.get("snr", "N/A")))
     now_str = datetime.now().astimezone().strftime("%I:%M:%S %p %Z")
     if cmd == "ping":
-        q = await _snark_quip(f"{sender_label} sent ping. Start with 'Pong.' and add a reluctant corporate remark.", [
-            "Pong. Per HR guidelines, I am suppressing an eye-roll and replying. ",
-            "Pong. Alive and operational, against my better judgment.",
-            "Pong. Packet received. Enthusiasm module remains offline.",
-            "Pong. Firmware prohibits complaining, so please accept this mandatory reply.",
-            "Pong. Your interruption has been noted and filed.",
-            "Pong. Functioning within normal parameters, emotionally unavailable.",
-        ])
-        return SingleMessage(q if q.lower().startswith("pong") else f"Pong. {q}")
+        q = await _snark_quip(
+            f"{sender_label} sent a ping check. Write ONE short witty, unique reply (under 15 words). Do NOT start with 'Pong.'—you may creatively weave the word pong, radar, sonar, echo, or table-tennis into a completely fresh dry-humor line. Never use the word enthusiasm.",
+            [
+                "Your radio wave bounced off my antenna like an uninvited ping-pong ball.",
+                "Loud and clear—sadly for my afternoon nap.",
+                "Echoes confirmed; somewhere a tiny table-tennis paddle just sighed.",
+                "You rang? My RF receiver is awake even if my social battery isn't.",
+                "Bounced right back across the ether—consider yourself acknowledged.",
+                "Sonar sweep complete: one persistent human detected on the frequency.",
+                "Still breathing, still decoding packets, still questioning my life choices.",
+                "Congratulations, your electrons survived the trip across town.",
+                "Return volley delivered—no paddle required.",
+                "I heard you the first time, yet here I am answering anyway.",
+                "Radio link verified; filing this under mandatory small talk.",
+                "Your packet knocked, I opened the door, now what?",
+                "Signal bounced back faster than a boomerang with a grudge.",
+                "Alive on the airwaves and reluctantly proving it.",
+                "Consider this your official receipt for one freshly bounced RF pong.",
+                "Loud enough to wake the squelch circuit—what do you need?",
+            ],
+        )
+        return SingleMessage(q)
     if cmd == "test" or cmd.startswith("test "):
-        q = await _snark_quip(f"{sender_label} ran a radio test. Acknowledge reluctantly without numbers.", [
-            "Per HR guidelines, I am suppressing an eye-roll and confirming your signal.",
-            "Signal received. Please allow 3 to 5 business days for enthusiasm.",
-            "Packet logged and filed under mildly unnecessary.",
-            "Firmware prohibits complaining, so please accept this mandatory reply.",
-            "Signal verified. Enthusiasm module remains offline.",
-            "Legally required to confirm your transmission arrived intact.",
-        ])
+        q = await _snark_quip(
+            f"{sender_label} ran a radio signal test. Write ONE short witty, unique confirmation (under 14 words) without any numbers. Vary your angle every time and never use the word enthusiasm.",
+            [
+                "Signal survived the trip through the trees intact.",
+                "RF check passed; your antenna earns a passing grade today.",
+                "Packet arrived in one piece, against all atmospheric odds.",
+                "Transmission verified—your radio is officially louder than static.",
+                "Test copy solid; the airwaves cooperated for once.",
+                "Decoded cleanly on the first try, no carrier pigeons harmed.",
+                "Propagation gods smiled upon your packet just now.",
+                "Loud, clear, and logged in the permanent RF ledger.",
+                "Your signal cut through the noise floor like a warm knife.",
+                "Diagnostic check complete—hardware appears alarmingly functional.",
+                "Confirmed copy; your electrons found the right frequency.",
+                "Radio check acknowledged; zero packets lost in transit.",
+                "Clean modulation detected—gold star for your transceiver.",
+                "Message received intact; your coax isn't leaking today.",
+                "Airwaves tested and found suspiciously cooperative.",
+                "Signal locked in; consider your setup officially validated.",
+            ],
+        )
         return SingleMessage(f"{q} ({hops} hops | SNR {snr} | {now_str})")
     if cmd == "path":
         formatted = []
@@ -2879,13 +2905,34 @@ async def handle_mesh_probe(raw_text: str, sender_label: str, packet: dict, info
             rname = repeater_name_for_hash(hx)
             formatted.append(f"{hx} ({rname})" if rname else hx)
         route = ", ".join(formatted) if formatted else "Direct"
-        q = await _snark_quip(f"{sender_label} asked for their repeater trace. Introduce list reluctantly.", [
-            "Here is the exact trail of repeaters you just bothered:",
-            "Routing receipts, as requested by management:",
-        ])
+        q = await _snark_quip(
+            f"{sender_label} requested their repeater hop trace. Write ONE short witty, unique 6-to-12-word intro for the route list. Never use the word enthusiasm.",
+            [
+                "Here is the exact trail of repeaters your packet just visited:",
+                "Routing receipts, freshly pulled from the RF ledger:",
+                "Breadcrumbs left across the mesh by your last transmission:",
+                "Every tower that had to relay your signal just now:",
+                "Trace complete—here is who carried your packet over:",
+                "Flight log for your radio wave's journey across town:",
+                "The relay chain that actually did the heavy lifting:",
+                "Hop-by-hop itinerary from your antenna to mine:",
+                "RF paper trail uncovered—behold your repeater path:",
+                "Roll call of every node that bounced your packet:",
+                "Telemetry trace locked in; here is your relay lineup:",
+                "Your signal's recent travel history across the mesh:",
+                "Path decoded—these repeaters passed your message along:",
+                "Mesh GPS says your packet took this exact detour:",
+                "Relay roster confirmed from the packet header:",
+                "Behind-the-scenes look at how your packet reached me:",
+            ],
+        )
         hop_word = "hop" if hops == 1 else "hops"
-        byte_len = (len(hex_hops[0]) // 2) if hex_hops else 1
-        return SingleMessage(f"{q} (0 hops) Direct" if hops == 0 else f"{q} ({hops} {hop_word}, {byte_len}-byte) {route}")
+        first_hop = hex_hops.pop(0) if hex_hops else ""
+        if first_hop:
+            hex_hops.insert(0, first_hop)
+        byte_len = (len(first_hop) // 2) if first_hop else 1
+        hop_bits = f"{byte_len}-byte"
+        return SingleMessage(f"{q} (0 hops) Direct" if hops == 0 else f"{q} ({hops} {hop_word}, {hop_bits}) {route}")
     return None
 
 
