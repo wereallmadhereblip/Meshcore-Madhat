@@ -40,12 +40,50 @@ def split_into_packets(text, max_len=145, max_packets=6):
         packets.append(current)
     return packets
 
+
+def words_to_digits(text):
+    """Converts spoken English numbers from Vosk transcripts into compact digits."""
+    ones = {
+        "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+        "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+        "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+        "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17,
+        "eighteen": 18, "nineteen": 19
+    }
+    tens = {
+        "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+        "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90
+    }
+    decades = {
+        "twenties": "20s", "thirties": "30s", "forties": "40s",
+        "fifties": "50s", "sixties": "60s", "seventies": "70s",
+        "eighties": "80s", "nineties": "90s"
+    }
+    # Replace decades like "forties" -> "40s"
+    for w, d in decades.items():
+        text = re.sub(rf"\b{w}\b", d, text, flags=re.IGNORECASE)
+    # Replace compound tens + ones like "forty seven" -> "47"
+    for tw, tv in tens.items():
+        for ow, ov in list(ones.items())[1:10]:
+            text = re.sub(rf"\b{tw}[-\s]+{ow}\b", str(tv + ov), text, flags=re.IGNORECASE)
+        text = re.sub(rf"\b{tw}\b", str(tv), text, flags=re.IGNORECASE)
+    # Replace standalone 0-19
+    for ow, ov in ones.items():
+        text = re.sub(rf"\b{ow}\b", str(ov), text, flags=re.IGNORECASE)
+    # Collapse barometric pressure like "30 point 1 8" -> "30.18"
+    text = re.sub(r"\b(\d+)\s+point\s+(\d)\s+(\d)\b", r"\1.\2\3", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(\d+)\s+point\s+(\d+)\b", r"\1.\2", text, flags=re.IGNORECASE)
+    # Collapse spoken clock times like "2 45 pm" -> "2:45 PM"
+    text = re.sub(r"\b(1[0-2]|[1-9])\s+([0-5]\d)\s*(am|pm)\b", lambda m: f"{m.group(1)}:{m.group(2)} {m.group(3).upper()}", text, flags=re.IGNORECASE)
+    return text
+
 def summarize_with_ollama(raw_transcript, model_name="llama3.2:1b-instruct-q4_K_M"):
+    raw_transcript = words_to_digits(raw_transcript)
     prompt = (
         "Summarize this NOAA weather radio transcript into a detailed weather report between "
         "600 and 780 characters so it fits cleanly into 5 to 6 short radio packets without cutting off. "
         "Include station/location, current temp, humidity, wind, pressure, today/tonight, full "
-        "multi-day forecast, and any warnings. Output ONLY the report with NO intro text:\n\n" + raw_transcript
+        "multi-day forecast, and any warnings. Always use numeric digits (e.g., 2:45 PM, 47F, 12 mph) instead of number words. Output ONLY the report with NO intro text:\n\n" + raw_transcript
     )
     payload = json.dumps({"model": model_name, "prompt": prompt, "stream": False}).encode("utf-8")
     try:
