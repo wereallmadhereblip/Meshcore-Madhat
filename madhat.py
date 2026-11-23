@@ -1893,6 +1893,42 @@ async def run_device_handler(handler, payload):
     return data
 
 
+
+def sync_noaa_schedule_and_service(noaa_cfg: dict) -> str:
+    enabled = bool((noaa_cfg or {}).get("enabled", True))
+    raw_hours = (noaa_cfg or {}).get("hours", [5, 11, 17, 23])
+    if isinstance(raw_hours, str):
+        parts = [p.strip() for p in re.split(r"[,\s]+", raw_hours) if p.strip()]
+    elif isinstance(raw_hours, list):
+        parts = [str(p).strip() for p in raw_hours]
+    else:
+        parts = ["5", "11", "17", "23"]
+    hours = []
+    for p in parts:
+        if p.isdigit() and 0 <= int(p) <= 23 and int(p) not in hours:
+            hours.append(int(p))
+    if not hours:
+        hours = [5, 11, 17, 23]
+    if isinstance(noaa_cfg, dict):
+        noaa_cfg["hours"] = hours
+    hours_csv = ",".join(str(h) for h in hours)
+    try:
+        cur = subprocess.run(["crontab", "-l"], capture_output=True, text=True).stdout
+        kept = [ln for ln in cur.splitlines() if "noaa_worker.py" not in ln and ln.strip()]
+        if enabled:
+            kept.append(
+                f"0 {hours_csv} * * * systemctl stop noaa-same.service; "
+                "/root/Meshcore-Ollama-bot/.venv/bin/python /root/Meshcore-Ollama-bot/noaa_worker.py >> /var/log/noaa_worker.log 2>&1; "
+                "systemctl start noaa-same.service"
+            )
+        new_cron = ("\n".join(kept) + "\n") if kept else ""
+        subprocess.run(["crontab", "-"], input=new_cron, text=True, check=True)
+        subprocess.run(["systemctl", "enable" if enabled else "disable", "--now", "noaa-same.service"], capture_output=True)
+    except Exception as err:
+        log_to_dash(f"NOAA cron/service sync warning: {err}")
+    return hours_csv
+
+
 async def handle_settings_command(sender_id, args):
     parts = args.split(None, 1)
     key = parts[0].lower() if parts else ""
@@ -1919,6 +1955,8 @@ async def handle_settings_command(sender_id, args):
             "state": lambda c: c["weather"].__setitem__("state", value),
             "start": lambda c: c["ollama"].__setitem__("start_time", value),
             "end": lambda c: c["ollama"].__setitem__("end_time", value),
+            "noaa_hours": lambda c: c.setdefault("noaa", {}).__setitem__("hours", [int(x) for x in re.split(r"[,\s]+", value.strip()) if x.strip().isdigit() and 0 <= int(x.strip()) <= 23] or [5, 11, 17, 23]),
+            "noaa": lambda c: c.setdefault("noaa", {}).__setitem__("enabled", value.strip().lower() in ("1", "true", "on", "yes", "enable")),
         }
         if key == "autoupdate":
             enabled = parse_on_off(value)
@@ -2564,7 +2602,7 @@ async def run_system_terminal_command(command, sender_id="default"):
 
 
 async def handle_slash_command(sender_id, prompt, allow_settings):
-    match = re.fullmatch(r"\s*/(help|clearmemory|settings|personality|systerminal|restart|update|syswifi|syssleep|syswakeup|reboot|sysreboot|sysshutdown|tightvnc|power|fastfetch)\b\s*(.*)", prompt, re.IGNORECASE | re.DOTALL)
+    match = re.fullmatch(r"\s*/(help|clearmemory|settings|personality|noaa_hours|systerminal|restart|update|syswifi|syssleep|syswakeup|reboot|sysreboot|sysshutdown|tightvnc|power|fastfetch)\b\s*(.*)", prompt, re.IGNORECASE | re.DOTALL)
     if match is None:
         return None
     command, args = match.group(1).lower(), match.group(2).strip()
@@ -2839,6 +2877,8 @@ async def handle_slash_command(sender_id, prompt, allow_settings):
         return "Update installed. Restarting now, back in about a minute."
     if command == "personality":
         return await handle_settings_command(sender_id, f"personality {args}" if args else "")
+    if command == "noaa_hours":
+        return await handle_settings_command(sender_id, f"noaa_hours {args}" if args else "")
     return await handle_settings_command(sender_id, args)
 
 
