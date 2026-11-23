@@ -796,6 +796,11 @@ def reception_info(packet):
                 src = log
                 path_len = log["path_len"]
                 break
+    hmode = src.get("path_hash_mode") if isinstance(src.get("path_hash_mode"), int) else packet.get("path_hash_mode")
+    hsize = src.get("path_hash_size") if isinstance(src.get("path_hash_size"), int) else packet.get("path_hash_size")
+    hash_bytes = (hmode + 1) if isinstance(hmode, int) and hmode in (0, 1, 2) else (hsize if hsize in (1, 2, 3) else None)
+    if hash_bytes in (1, 2, 3):
+        info["path_hash_bytes"] = hash_bytes
     if isinstance(path_len, int) and 0 <= path_len < 64:
         info["path_len"] = path_len
     snr = packet.get("SNR")
@@ -1494,85 +1499,88 @@ async def fetch_weather_response(prompt, sender_id=None):
                     f"https://api.zippopotam.us/us/{argument[:5]}"
                 ) as response:
                     if response.status == 404:
-                        return f"I couldn't find zip code {argument[:5]}."
+                        return f"I couldn't find zip code {argument[:5]}."
                     response.raise_for_status()
-                    zip_place = (await response.json())["places"][0]
-                latitude = float(zip_place["latitude"])
-                longitude = float(zip_place["longitude"])
-                location_label = f"{zip_place['place name']}, {zip_place['state abbreviation']} {argument[:5]}"
+                    zip_place = (await response.json())["places"][0]
+                latitude = float(zip_place["latitude"])
+                lgitude = float(zip_place["longitude"])
+                locatiolabel = f"{zip_place['place name']}, {zip_place['state abbreviion']} {argument[:5]}"
             elif location:
-                place = await geocode_location(session, location)
-                if not place:
-                    return f"I couldn't find {location}. Try wx <zip code>."
-                latitude = place["latitude"]
+                place = await geocode_location(session, location)
+                if not place:
+                    return f"I couldn't find location}. Try wx <zip code>."
+                latitude = plac"latitude"]
                 longitude = place["longitude"]
-                location_label = ", ".join(
-                    str(place[key]) for key in ("name", "admin1", "country") if place.get(key)
+                location_label = ", ".join(
+                    str lace[key]) for key in ("name", "admin1", "country") if place.g(key)
                 )
             else:
-                local_city = app_config["weather"]["city"]
-                local_place = None
+                locacity = app_config["weather"]["city"]
+                local_pla = None
                 if local_city:
-                    local_place = await geocode_location(
-                        session, f"{local_city} {app_config['weather']['state']}".strip()
-                    )
+                    loc_place = await geocode_location(
+                        sessi, f"{local_city} {app_config['weather']['state']}".strip()
+                    )
                 if local_place:
-                    latitude = local_place["latitude"]
-                    longitude = local_place["longitude"]
-                    location_label = ", ".join(
-                        str(local_place[key]) for key in ("name", "admin1") if local_place.get(key)
-                    )
+                    latitude = local_place["latitude"]
+                    loitude = local_place["longitude"]
+                    location_bel = ", ".join(
+                        str(local_place[key])@or key in ("name", "admin1") if local_place.get(key)
+                    )
                 else:
-                    telemetry = app_state["gateway_telemetry"]
-                    latitude = telemetry.get("latitude")
-                    longitude = telemetry.get("longitude")
-                    if latitude is None or longitude is None:
-                        return "No local location set. Set a weather city in the app settings."
-                    location_label = "the gateway location"
+                    telemetry app_state["gateway_telemetry"]
+                    latitude = elemetry.get("latitude")
+                    longitude = telemry.get("longitude")
+                    if latitude is None or@ongitude is None:
+                        return "No local locion set. Set a weather city in the app settings."
+                    location_label = "the gateway location"
 
-            async with session.get(
-                "https://api.open-meteo.com/v1/forecast",
+            asy with session.get(
+                "https://api.open-meteo.com1/forecast",
                 params={
-                    "latitude": latitude,
+                    "lat	ude": latitude,
                     "longitude": longitude,
-                    "current": "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m",
-                    "daily": "weather_code,temperature_2m_max,temperature_2m_min",
-                    "forecast_days": 7 if weekly_requested else 3,
-                    "temperature_unit": temperature_unit,
-                    "wind_speed_unit": wind_speed_unit,
+                    "current": "temperature_2m,relative_humidity_2Lapparent_temperature,weather_code,wind_speed_10m,wind_directio10m",
+                    "daily": "weather_code,temperature_2max,temperature_2m_min",
+                    "forecast_days": if weekly_requested else 3,
+                    "temperature_u	t": temperature_unit,
+                    "wind_speed_unit": w	d_speed_unit,
                     "timezone": "auto",
-                },
+                },
             ) as response:
-                response.raise_for_status()
+                response.r	se_for_status()
                 weather = await response.json()
 
         current = weather["current"]
-        temperature_label = "C" if use_metric else "F"
-        wind_label = "km/h" if use_metric else "mph"
+        temperature_labe@= "C" if use_metric else "F"
+        wind_label = "km/h" if usmetric else "mph"
         code = int(current["weather_code"])
-        answer = (
-            f"{location_label}: {current['temperature_2m']:.0f}{temperature_label} "
-            f"(feels {current['apparent_temperature']:.0f}), "
-            f"{weather_emoji(code)}{WEATHER_CODES.get(code, 'unknown')}, "
-            f"humidity {current['relative_humidity_2m']}%, "
-            f"wind {wind_arrow(current.get('wind_direction_10m'))}{current['wind_speed_10m']:.0f}{wind_label}"
+        answer = (
+            f"{location_label}: {current['temrature_2m']:.0f}{temperature_label} "
+            f"(feels {cuent['apparent_temperature']:.0f}), "
+            f"{weather_em
+i(code)}{WEATHER_CODES.get(code, 'unknown')}, "
+            f"midity {current['relative_humidity_2m']}%, "
+            f"win@{wind_arrow(current.get('wind_direction_10m'))}{current['wind_ eed_10m']:.0f}{wind_label}"
         )
-        if weekly_requested:
+        if weekly_requesd:
             daily = weather["daily"]
-            days = " ".join(
-                f"{datetime.strptime(date, '%Y-%m-%d').strftime('%a')}"
-                f"{weather_emoji(day_code)} {high:.0f}/{low:.0f}"
-                for date, high, low, day_code in zip(
-                    daily["time"], daily["temperature_2m_max"],
-                    daily["temperature_2m_min"], daily["weather_code"],
+            days = " "N
+oin(
+                f"{datetime.strptime(date, '%Y-%m-%d').sttime('%a')}"
+                f"{weather_emoji(day_code)} {high
+0f}/{low:.0f}"
+                for date, high, low, day_code i@zip(
+                    daily["time"], daily["temperature_2m_x"],
+                    daily["temperature_2m_min"], daily["wther_code"],
                 )
             )
-            answer = f"{location_label.split(',')[0]} {temperature_label}: {days}"
+            answe = f"{location_label.split(',')[0]} {temperature_label}: {days}"
         elif forecast_requested:
-            daily = weather["daily"]
-            for index, day_name in enumerate(("Today", "Tmrw")):
+            daily = weather["ily"]
+            for index, day_name in enumerate(("Today", "rw")):
                 answer += (
-                    f". {day_name} {daily['temperature_2m_max'][index]:.0f}/"
+                    f". {da)name} {daily['temperature_2m_max'][index]:.0f}/"
                     f"{daily['temperature_2m_min'][index]:.0f}{temperature_label} "
                     f"{weather_emoji(daily['weather_code'][index])}"
                 ).rstrip()
@@ -4738,7 +4746,7 @@ function handleIncomingNotifications(d){let count=Number(d.incoming_message_coun
 let serverAddresses=[];
 function hostUrl(port,path){let host=location.hostname;if(['localhost','127.0.0.1','::1','[::1]'].includes(host)&&serverAddresses.length)host=serverAddresses[0];return 'https://'+host+':'+port+path}
 document.addEventListener('DOMContentLoaded',()=>document.querySelectorAll('.live-host-url').forEach(el=>el.textContent=hostUrl(el.dataset.port,el.dataset.path)));
-function fmtTime(value){if(value instanceof Date){let h=value.getHours(),m=String(value.getMinutes()).padStart(2,'0'),sec=String(value.getSeconds()).padStart(2,'0');return String(h%12||12).padStart(2,'0')+':'+m+':'+sec+' '+(h<12?'AM':'PM')}let match=/^(\d{1,2}):(\d{2}):(\d{2})$/.exec(String(value||''));if(!match)return value||'';let h=Number(match[1]);return String(h%12||12).padStart(2,'0')+':'+match[2]+':'+match[3]+' '+(h<12?'AM':'PM')}
+function fmtTime(value,sortTs=null){let datePrefix='';let epoch=Number(sortTs);if(Number.isFinite(epoch)&&epoch>1000000000){let d=new Date(epoch*1000),now=new Date();if(d.toDateString()!==now.toDateString()){let sameYr=d.getFullYear()===now.getFullYear();datePrefix=d.toLocaleDateString('en-US',sameYr?{month:'short',day:'numeric'}:{month:'short',day:'numeric',year:'numeric'})+', ';if(!value)value=d}}if(value instanceof Date){let h=value.getHours(),m=String(value.getMinutes()).padStart(2,'0'),sec=String(value.getSeconds()).padStart(2,'0');return datePrefix+String(h%12||12).padStart(2,'0')+':'+m+':'+sec+' '+(h<12?'AM':'PM')}let match=/^(\d{1,2}):(\d{2}):(\d{2})$/.exec(String(value||''));if(!match)return datePrefix+(value||'');let h=Number(match[1]);return datePrefix+String(h%12||12).padStart(2,'0')+':'+match[2]+':'+match[3]+' '+(h<12?'AM':'PM')}
 function openIncomingConversation(m){let isChannel=m.type==='channel';showView(isChannel?'channels':'nodes');selectConversation(isChannel?'channel':'node',String(m.target))}
 function showToast(title,body,duration=7000,onClick=null){let stack=document.getElementById('toast-stack');if(!stack){stack=document.createElement('div');stack.id='toast-stack';stack.setAttribute('aria-live','polite');document.body.append(stack)}let toast=document.createElement('div'),heading=document.createElement('strong'),text=document.createElement('span');toast.className='toast';heading.textContent=title;text.textContent=body;toast.append(heading,text);if(onClick){toast.classList.add('clickable');toast.setAttribute('role','button');toast.tabIndex=0;toast.onclick=()=>{onClick();toast.remove()};toast.onkeydown=event=>{if(event.key==='Enter')toast.click()}}stack.append(toast);while(stack.children.length>3)stack.firstChild.remove();requestAnimationFrame(()=>toast.classList.add('show'));setTimeout(()=>{toast.classList.remove('show');setTimeout(()=>toast.remove(),300)},duration)}
 function syncNotificationControl(){let box=document.getElementById('notification-toggle');if(box)box.checked=notificationsEnabled()}
@@ -4808,7 +4816,7 @@ setInterval(()=>{if(activeView==='analyzer')loadAnalyzerRadioStatus();else if(ac
 function updateSearchPlaceholders(){let contactPlaceholder='Search '+mapNodes.length+' contacts';for(let id of ['node-search','map-node-search']){let input=document.getElementById(id);if(input)input.placeholder=contactPlaceholder}let channelSearch=document.getElementById('channel-search');if(channelSearch)channelSearch.placeholder='Search '+meshChannels.length+' channels'}
 async function peers(){let r=await fetch('/api/peers'),d=await r.json();gatewayTelemetry=d.gateway_telemetry||{};mapNodes=d.nodes||[];meshChannels=d.channels||[];peerLimits=d.limits||{};updateAddCapacity();updateSearchPlaceholders();gateway_battery.textContent=gatewayTelemetry.battery!=null?gatewayTelemetry.battery+'%':'Unavailable';system_battery.textContent=d.system_battery!=null?d.system_battery+'%':'Unavailable';if(!mapNodes.some(item=>String(item.id)===selectedNodeId))selectedNodeId='';if(!meshChannels.some(item=>String(item.id)===selectedChannelId))selectedChannelId='';renderConversationTargets('node');renderConversationTargets('channel');renderKnownPeers();renderMapMarkers();renderAnalyzerStats();renderIncomingAdverts(d.incoming_adverts||[]);if(liveTraceMap)renderLiveTraceMarkers()}
 function parseChannelSender(text){let bracket=text.match(/^\[([^\]]{1,24})\]\s*/);if(bracket)return bracket[1];let colon=text.match(/^([A-Za-z0-9 _-]{1,24}):\s/);if(colon)return colon[1];return null}
-async function history(type,id,boxId,scrollToLatest=false){let box=document.getElementById(boxId);if(!id){box.replaceChildren();updateConversationMenu(type);return}if(type==='node'&&isRepeaterNode(id)){if(manageNodeId===String(id))return;let note=document.createElement('p');note.className='map-empty';note.textContent='Direct messages are not supported for repeater nodes.';box.replaceChildren(note);return}try{let response=await fetch('/api/chat-history?target_type='+encodeURIComponent(type)+'&target='+encodeURIComponent(id)),data=await response.json();if(!response.ok)throw new Error(data.error||'Message history could not be loaded');updateConversationMenu(type,data.metadata||{});let wasAtLatest=box.scrollHeight-box.clientHeight-box.scrollTop<=40,previousTop=box.scrollTop,previousBehavior=box.style.scrollBehavior;box.style.scrollBehavior='auto';box.replaceChildren();let peerName=type==='node'?(mapNodes.find(item=>String(item.id)===id)?.name||id):(meshChannels.find(item=>String(item.id)===id)?.name||('Channel '+id));for(let message of data.messages||[]){let outgoing=message.direction==='outgoing';let item=document.createElement('div');item.className='chat-message '+(outgoing?'outgoing':'incoming');let sender=outgoing?'You':(type==='channel'?(parseChannelSender(message.text)||peerName):peerName);let meta=document.createElement('div');meta.className='chat-message-meta';let avatar=document.createElement('span');avatar.className='chat-avatar';avatar.style.background=hashColor(outgoing?'you':id);avatar.textContent=sender.charAt(0)||'?';let senderLabel=document.createElement('span');senderLabel.className='chat-sender';senderLabel.textContent=sender;let time=document.createElement('span');time.className='chat-time';let timeStr=fmtTime(message.timestamp);if(!outgoing&&Number.isInteger(Number(message.path_len))&&Number(message.path_len)>=0){let hLen=Number(message.path_len);if(hLen===0){timeStr+=' · Direct'}else{let hBytes=Number(message.path_hash_bytes)||(Array.isArray(message.path_nodes)&&message.path_nodes[0]?Math.max(1,Math.round(String(message.path_nodes[0]).length/2)):null);timeStr+=' · '+hLen+(hLen===1?' hop':' hops')+(hBytes?' ('+hBytes+'-byte)':'')}}time.textContent=timeStr;let body=document.createElement('div');body.className='chat-message-body';body.textContent=message.text;if(outgoing){let status=document.createElement('span');status.className='chat-status';let statusLabels={sent:'Sent',delivered:'Delivered',failed:'Failed'},heardCount=Number(message.heard);status.textContent=message.status==='delivered'&&Number.isInteger(heardCount)&&heardCount>0?'Delivered · '+heardCount+' heard':(statusLabels[message.status]||'Sent');let bubble=document.createElement('div');bubble.className='chat-bubble';bubble.append(body);meta.className='chat-caption';meta.append(status,time);item.append(bubble,meta)}else{let bubble=document.createElement('div'),caption=document.createElement('div');bubble.className='chat-bubble';bubble.append(body);meta.append(avatar,senderLabel);caption.className='chat-caption';caption.append(time);item.append(meta,bubble,caption)}item.tabIndex=0;item.setAttribute('role','button');item.oncontextmenu=event=>{event.preventDefault();openMessageActions(type,id,message,sender,data.blocked||[])};item.onkeydown=event=>{if(event.key==='Enter')openMessageActions(type,id,message,sender,data.blocked||[])};box.appendChild(item)}box.scrollTop=scrollToLatest||wasAtLatest?box.scrollHeight:previousTop;box.style.scrollBehavior=previousBehavior}catch(error){box.textContent=error.message}}
+async function history(type,id,boxId,scrollToLatest=false){let box=document.getElementById(boxId);if(!id){box.replaceChildren();updateConversationMenu(type);return}if(type==='node'&&isRepeaterNode(id)){if(manageNodeId===String(id))return;let note=document.createElement('p');note.className='map-empty';note.textContent='Direct messages are not supported for repeater nodes.';box.replaceChildren(note);return}try{let response=await fetch('/api/chat-history?target_type='+encodeURIComponent(type)+'&target='+encodeURIComponent(id)),data=await response.json();if(!response.ok)throw new Error(data.error||'Message history could not be loaded');updateConversationMenu(type,data.metadata||{});let wasAtLatest=box.scrollHeight-box.clientHeight-box.scrollTop<=40,previousTop=box.scrollTop,previousBehavior=box.style.scrollBehavior;box.style.scrollBehavior='auto';box.replaceChildren();let peerName=type==='node'?(mapNodes.find(item=>String(item.id)===id)?.name||id):(meshChannels.find(item=>String(item.id)===id)?.name||('Channel '+id));for(let message of data.messages||[]){let outgoing=message.direction==='outgoing';let item=document.createElement('div');item.className='chat-message '+(outgoing?'outgoing':'incoming');let sender=outgoing?'You':(type==='channel'?(parseChannelSender(message.text)||peerName):peerName);let meta=document.createElement('div');meta.className='chat-message-meta';let avatar=document.createElement('span');avatar.className='chat-avatar';avatar.style.background=hashColor(outgoing?'you':id);avatar.textContent=sender.charAt(0)||'?';let senderLabel=document.createElement('span');senderLabel.className='chat-sender';senderLabel.textContent=sender;let time=document.createElement('span');time.className='chat-time';let timeStr=fmtTime(message.timestamp,message.sort_timestamp);if(!outgoing&&Number.isInteger(Number(message.path_len))&&Number(message.path_len)>=0){let hLen=Number(message.path_len);let modeEl=document.getElementById('path-hash-mode');let fallbackBytes=(modeEl&&['0','1','2'].includes(modeEl.value))?(Number(modeEl.value)+1):1;let hBytes=Number(message.path_hash_bytes)||(Array.isArray(message.path_nodes)&&message.path_nodes[0]?Math.max(1,Math.round(String(message.path_nodes[0]).length/2)):fallbackBytes);let hopLabel=hLen===0?'Direct':(hLen+(hLen===1?' hop':' hops'));timeStr+=' · '+hopLabel+' ('+hBytes+'-byte)'}time.textContent=timeStr;let body=document.createElement('div');body.className='chat-message-body';body.textContent=message.text;if(outgoing){let status=document.createElement('span');status.className='chat-status';let statusLabels={sent:'Sent',delivered:'Delivered',failed:'Failed'},heardCount=Number(message.heard);status.textContent=message.status==='delivered'&&Number.isInteger(heardCount)&&heardCount>0?'Delivered · '+heardCount+' heard':(statusLabels[message.status]||'Sent');let bubble=document.createElement('div');bubble.className='chat-bubble';bubble.append(body);meta.className='chat-caption';meta.append(status,time);item.append(bubble,meta)}else{let bubble=document.createElement('div'),caption=document.createElement('div');bubble.className='chat-bubble';bubble.append(body);meta.append(avatar,senderLabel);caption.className='chat-caption';caption.append(time);item.append(meta,bubble,caption)}item.tabIndex=0;item.setAttribute('role','button');item.oncontextmenu=event=>{event.preventDefault();openMessageActions(type,id,message,sender,data.blocked||[])};item.onkeydown=event=>{if(event.key==='Enter')openMessageActions(type,id,message,sender,data.blocked||[])};box.appendChild(item)}box.scrollTop=scrollToLatest||wasAtLatest?box.scrollHeight:previousTop;box.style.scrollBehavior=previousBehavior}catch(error){box.textContent=error.message}}
 async function deleteTarget(type){let selected=type==='node'?selectedNodeId:selectedChannelId;if(!selected)return;if(!confirm('Delete this '+type+' from the device? This cannot be undone.'))return;let response=await fetch('/api/delete-target',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_type:type,target:selected})}),data=await response.json();if(!response.ok){alert(data.error||'Delete failed');return}if(type==='node'){selectedNodeId=null;document.getElementById('node-chat-title').textContent='Select a node';document.getElementById('node-chat-detail').textContent='Choose a node to view its conversation.';document.getElementById('node-send').disabled=true;document.getElementById('node-chat-history').replaceChildren()}else{selectedChannelId=null;document.getElementById('channel-chat-title').textContent='Select a channel';document.getElementById('channel-chat-detail').textContent='Choose a channel to view its conversation.';document.getElementById('channel-send').disabled=true;document.getElementById('channel-chat-history').replaceChildren()}updateConversationMenu(type);let menu=document.getElementById(type+'-chat-options');if(menu)menu.open=false;await peers()}
 async function manageConversation(type,action){let selected=type==='node'?selectedNodeId:selectedChannelId;if(!selected)return;if(action==='clear'&&!confirm('Clear this conversation history? This cannot be undone.'))return;let response=await fetch('/api/chat-management',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_type:type,target:selected,action})}),data=await response.json();if(!response.ok){alert(data.error||'Conversation could not be updated');return}let menu=document.querySelector('#'+(type==='node'?'node':'channel')+'-chat-options');if(menu)menu.open=false;await history(type,selected,type==='node'?'node-chat-history':'channel-chat-history');await peers()}
 const REPEATER_OPTION_GROUPS=[
@@ -5425,17 +5433,24 @@ window.openMessageActions=function(type,id,message,sender,blocked,nodePeer){
     let post=async(url,body)=>{let r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});let d=await r.json().catch(()=>({}));d._status=r.status;return d};
     sheet.append(action('Set Path','path',()=>{
       sheet.querySelector('.sheet-setpath')?.remove();let box=document.createElement('div');box.className='sheet-paths sheet-setpath';
-      let modeEl=document.getElementById('path-hash-mode');let hashBytes=modeEl&&['0','1','2'].includes(modeEl.value)?(Number(modeEl.value)+1):1;let hexLen=hashBytes*2;
-      let existingHex=String(knownPeer.out_path||'').trim().toLowerCase();let existingLen=Number(knownPeer.hops||0);let stepHex=(existingLen>0&&existingHex.length>=existingLen*2)?Math.floor(existingHex.length/existingLen):hexLen;let hops=[];if(existingLen>0&&existingHex.length>=stepHex){for(let i=0;i<existingLen*stepHex;i+=stepHex){let h=existingHex.slice(i,i+stepHex);if(h)hops.push({hash:h,label:h.toUpperCase()})}}let chips=document.createElement('div');chips.style.cssText='display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;align-items:center';
-      let inp=document.createElement('input');inp.placeholder='Repeater hashes in order, e.g. a1,b2 (or pick below)';if(hops.length)inp.value=hops.map(x=>x.hash).join(',');
+      let modeEl=document.getElementById('path-hash-mode');
+      let hashBytes=(modeEl&&['0','1','2'].includes(modeEl.value))?(Number(modeEl.value)+1):1;let hexLen=hashBytes*2;
+      let sizeRow=document.createElement('div');sizeRow.style.cssText='display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px';
+      let sizeLbl=document.createElement('label');sizeLbl.textContent='Hash size';sizeLbl.style.cssText='font-size:13px;font-weight:600';
+      let sizeSel=document.createElement('select');sizeSel.style.cssText='width:auto;padding:4px 8px;font-size:13px';
+      [['1','1-byte (2 hex)'],['2','2-byte (4 hex)'],['3','3-byte (6 hex)']].forEach(([v,t])=>{let o=document.createElement('option');o.value=v;o.textContent=t;if(Number(v)===hashBytes)o.selected=true;sizeSel.append(o)});
+      sizeRow.append(sizeLbl,sizeSel);
+      let hops=[];let chips=document.createElement('div');chips.style.cssText='display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;align-items:center';
+      let inp=document.createElement('input');inp.placeholder='Repeater hashes in order (or pick below)';
       let syncChips=()=>{chips.replaceChildren();if(!hops.length){let empty=document.createElement('small');empty.style.opacity='0.7';empty.textContent='No hops added yet ('+hashBytes+'-byte mode)';chips.append(empty);return}hops.forEach((h,i)=>{let tag=document.createElement('span');tag.style.cssText='display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:999px;background:rgba(54,209,220,0.16);border:1px solid rgba(54,209,220,0.4);font-size:12px';tag.textContent=(i+1)+'. '+h.label;let del=document.createElement('button');del.type='button';del.textContent='×';del.style.cssText='background:none;border:none;color:inherit;cursor:pointer;padding:0 2px;font-weight:700';del.onclick=()=>{hops.splice(i,1);inp.value=hops.map(x=>x.hash).join(',');syncChips()};tag.append(del);chips.append(tag)})};
       let search=document.createElement('input');search.placeholder='Search known repeaters by name or public key...';search.style.marginTop='6px';
       let results=document.createElement('div');results.style.cssText='display:flex;flex-direction:column;gap:4px;max-height:150px;overflow-y:auto;margin:6px 0';
-      let renderRepeaters=()=>{results.replaceChildren();let q=search.value.trim().toLowerCase();let reps=(typeof mapNodes!=='undefined'?mapNodes:[]).filter(n=>Number(n.type)===2&&String(n.id)!==String(knownPeer.id));let matched=reps.filter(r=>!q||String(r.name||'').toLowerCase().includes(q)||String(r.id||'').toLowerCase().includes(q)||String(r.public_key||'').toLowerCase().includes(q)).slice(0,8);if(!matched.length){let none=document.createElement('small');none.style.opacity='0.7';none.textContent=reps.length?'No matching repeaters':'No known repeaters discovered yet';results.append(none);return}matched.forEach(r=>{let pub=String(r.public_key||r.id||'').replace(/[^0-9a-fA-F]/g,'').toLowerCase();let h=pub.slice(0,hexLen);let row=document.createElement('button');row.type='button';row.style.cssText='display:flex;justify-content:space-between;align-items:center;text-align:left;padding:6px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.04);cursor:pointer;font-size:13px';let left=document.createElement('span');left.textContent=(r.name||'Repeater')+' ('+h.toUpperCase()+')';let add=document.createElement('strong');add.textContent='+ Add';add.style.color='var(--accent,#36d1dc)';row.append(left,add);row.onclick=()=>{if(h){hops.push({hash:h,label:(r.name||h.toUpperCase())+' ['+h.toUpperCase()+']'});inp.value=hops.map(x=>x.hash).join(',');syncChips()}};results.append(row)})};
-      search.oninput=renderRepeaters;inp.oninput=()=>{let parts=inp.value.split(',').map(s=>s.trim().toLowerCase()).filter(Boolean);hops=parts.map(p=>({hash:p,label:p.toUpperCase()}));syncChips()};
+      let renderRepeaters=()=>{results.replaceChildren();let q=search.value.trim().toLowerCase();let reps=(typeof mapNodes!=='undefined'?mapNodes:[]).filter(n=>Number(n.type)===2&&String(n.id)!==String(knownPeer.id));let matched=reps.filter(r=>!q||String(r.name||'').toLowerCase().includes(q)||String(r.id||'').toLowerCase().includes(q)||String(r.public_key||'').toLowerCase().includes(q)).slice(0,8);if(!matched.length){let none=document.createElement('small');none.style.opacity='0.7';none.textContent=reps.length?'No matching repeaters':'No known repeaters discovered yet';results.append(none);return}matched.forEach(r=>{let pub=String(r.public_key||r.id||'').replace(/[^0-9a-fA-F]/g,'').toLowerCase();let h=pub.slice(0,hexLen);let row=document.createElement('button');row.type='button';row.style.cssText='display:flex;justify-content:space-between;align-items:center;text-align:left;padding:6px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.04);cursor:pointer;font-size:13px';let left=document.createElement('span');left.textContent=(r.name||'Repeater')+' ('+h.toUpperCase()+')';let add=document.createElement('strong');add.textContent='+ Add';add.style.color='var(--accent,#36d1dc)';row.append(left,add);row.onclick=()=>{if(h){hops.push({hash:h,pub:pub,name:r.name||'',label:(r.name||h.toUpperCase())+' ['+h.toUpperCase()+']'});inp.value=hops.map(x=>x.hash).join(',');syncChips()}};results.append(row)})};
+      sizeSel.onchange=()=>{hashBytes=Number(sizeSel.value)||1;hexLen=hashBytes*2;hops=hops.map(item=>{let newH=item.pub?item.pub.slice(0,hexLen):item.hash.slice(0,hexLen);return {...item,hash:newH,label:(item.name?item.name+' ['+newH.toUpperCase()+']':newH.toUpperCase())}});inp.value=hops.map(x=>x.hash).join(',');syncChips();renderRepeaters()};
+      search.oninput=renderRepeaters;inp.oninput=()=>{let parts=inp.value.split(',').map(s=>s.trim().toLowerCase()).filter(Boolean);hops=parts.map(p=>({hash:p,pub:'',name:'',label:p.toUpperCase()}));syncChips()};
       let save=document.createElement('button');save.type='button';save.textContent='Save path';
       save.onclick=async()=>{let d=await post('/api/contacts/path',{target:String(knownPeer.id),action:'set',path:inp.value});if(d._status===200){close();showToast('Path set',(knownPeer.name||knownPeer.id)+': route saved');if(typeof peers==='function')peers()}else showToast('Error',d.error||'Could not set path')};
-      syncChips();renderRepeaters();box.append(chips,search,results,inp,save);sheet.append(box);search.focus()}));
+      syncChips();renderRepeaters();box.append(sizeRow,chips,search,results,inp,save);sheet.append(box);search.focus()}));
     sheet.append(action('Reset Path','path',async()=>{if(!confirm('Reset the route to '+(knownPeer.name||knownPeer.id)+'? The next message will use flood routing.'))return;let d=await post('/api/contacts/path',{target:String(knownPeer.id),action:'reset'});close();if(d._status===200){showToast('Path reset',(knownPeer.name||knownPeer.id)+' will be re-discovered');if(typeof peers==='function')peers()}else showToast('Error',d.error||'Could not reset path')}));
     if(Number(knownPeer.type)===2)sheet.append(action('Ping','signal',async()=>{showToast('Ping','Pinging '+(knownPeer.name||knownPeer.id)+'...');let d=await post('/api/contacts/ping',{target:String(knownPeer.id)});close();if(d.ok)showToast('Ping reply',(knownPeer.name||knownPeer.id)+': '+d.rtt_ms+' ms'+(Number.isInteger(d.hops)&&d.hops>=0?', '+d.hops+' hop'+(d.hops===1?'':'s'):''));else showToast('Ping failed',d.error||'No reply')}));
     if([2,3].includes(Number(knownPeer.type)))sheet.append(action('Manage','user',()=>{
@@ -6634,7 +6649,7 @@ async def contact_path_handler(request):
             cfg = globals().get("app_config")
             if isinstance(cfg, dict) and isinstance(cfg.get("custom_paths"), dict):
                 cfg["custom_paths"].pop(str(contact.get("public_key", "")), None)
-                save_config(cfg)
+                with open("/root/Meshcore-Ollama-bot/config.json", "w", encoding="utf-8") as _cf: json.dump(cfg, _cf, indent=2)
             log_to_dash(f"Path reset for {name}")
         elif action == "set":
             tokens = [t for t in re.split(r"[\s,>:-]+", str(data.get("path", "")).strip().lower()) if t]
@@ -6644,11 +6659,22 @@ async def contact_path_handler(request):
             if size not in (2, 4, 6) or any(len(t) != size or not re.fullmatch(r"[0-9a-f]+", t) for t in tokens):
                 return web.json_response({"error": "Each hash must be 2, 4 or 6 hex characters, all the same length"}, status=400)
             hex_str = "".join(tokens)
+            safe_name = str(contact.get("adv_name") or contact.get("name") or name or "Node").encode("utf-8")[:32].decode("utf-8", "ignore")
+            contact_payload = {
+                **contact,
+                "public_key": str(contact.get("public_key", "")),
+                "type": int(contact.get("type") or 1),
+                "flags": int(contact.get("flags") or 0),
+                "adv_name": safe_name,
+                "last_advert": int(contact.get("last_advert") or 0),
+                "adv_lat": float(contact.get("adv_lat") if contact.get("adv_lat") is not None else (contact.get("latitude") or 0.0)),
+                "adv_lon": float(contact.get("adv_lon") if contact.get("adv_lon") is not None else (contact.get("longitude") or 0.0)),
+            }
             async with paced_hardware_lock():
                 try:
-                    result = await commands.change_contact_path(contact, hex_str, path_hash_mode=size // 2 - 1)
+                    result = await commands.change_contact_path(contact_payload, hex_str, path_hash_mode=size // 2 - 1)
                 except TypeError:
-                    result = await commands.change_contact_path(contact, hex_str)
+                    result = await commands.change_contact_path(contact_payload, hex_str)
             if result.type == EventType.ERROR:
                 return web.json_response({"error": f"Device rejected path: {result.payload}"}, status=502)
             contact["out_path"] = hex_str
@@ -6661,13 +6687,13 @@ async def contact_path_handler(request):
                     "out_path_len": len(tokens),
                     "out_path_hash_bytes": size // 2,
                 }
-                save_config(cfg)
+                with open("/root/Meshcore-Ollama-bot/config.json", "w", encoding="utf-8") as _cf: json.dump(cfg, _cf, indent=2)
             log_to_dash(f"Path set for {name}: {len(tokens)} hop(s) ({size // 2}-byte)")
         else:
             return web.json_response({"error": "action must be set or reset"}, status=400)
     except Exception as error:
         log_to_dash(f"Path update failed for {name}: {error}")
-        return web.json_response({"error": "Path update failed"}, status=502)
+        return web.json_response({"error": f"Path update failed: {error}"}, status=502)
     await refresh_contacts()
     return web.json_response({"ok": True})
 
