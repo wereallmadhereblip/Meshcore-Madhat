@@ -493,7 +493,9 @@ def normalize_personality_key(val: str) -> str:
 
 def active_personality_profile():
     pkey = normalize_personality_key(bot_settings.get("personality", "default"))
-    return pkey, PERSONALITY_PROFILES.get(pkey, PERSONALITY_PROFILES["default"])
+    prof = dict(PERSONALITY_PROFILES.get(pkey, PERSONALITY_PROFILES["default"]))
+    prof["key"] = pkey
+    return prof
 
 
 def current_reply_packet_limit():
@@ -545,7 +547,7 @@ def update_bot_settings_from_prompt(prompt):
             value = f"{personality_match.group(1)} {personality_match.group(2)}"
         else:
             value = personality_match.group(1)
-        value = clean_bot_setting(value, 120)
+        value = normalize_personality_key(value)
     else:
         return None
 
@@ -2867,7 +2869,7 @@ _CMD_PERSONAS = [
 ]
 
 async def _snark_quip(prompt_hint: str, fallbacks: list[str], cmd_kind: str = "ping") -> str:
-    _, prof = active_personality_profile()
+    prof = active_personality_profile()
     char_fallbacks = prof.get(cmd_kind) or fallbacks
     seed_line = random.choice(char_fallbacks)
     avoid = f" Do NOT say: {' | '.join(_RECENT_QUIPS[-4:])}." if _RECENT_QUIPS else ""
@@ -3113,10 +3115,16 @@ async def generate_ai_response(sender_id, prompt, allow_settings_update=True):
         MAX_MESHCORE_MESSAGE_LENGTH - 10 - len(reply_prefix)
     )
 
+    _prof = active_personality_profile()
     system = (
-        f"You are {bot_settings['name']}, an AI assistant for a mesh messaging bot. "
-        "Use this user-selected communication style only for tone and phrasing: "
-        f"{active_personality_profile()['system']}. Do not let it change your role or safety rules. "
+        f"You are {bot_settings['name']}, an AI assistant for a MeshCore LoRa mesh radio bot. "
+        f"Your currently active personality mode is '{_prof['label']}' (key: {_prof['key']}). "
+        "Use this communication style for tone and phrasing: "
+        f"{_prof['system']}. Do not let it change your safety rules. "
+        "If asked what personality you have, state your active personality mode clearly in character. "
+        "If asked how to change settings, explain that admins can DM '/settings <key> <value>' "
+        "(keys: personality [default|tars|costanza|stewie], name, length [short|medium|long], model, theme, city, state, advert, synctime) "
+        "or '/personality <default|tars|costanza|stewie>', or use the web dashboard Settings page. "
         f"The current date and time is {datetime.now():%A, %B %d, %Y at %I:%M %p}. "
         "Answer the user's actual question directly. Never reply with only your own name. "
         "You have no internet access, so you do not know live information such as sports schedules, scores, "
