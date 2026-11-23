@@ -7961,7 +7961,7 @@ async def sdr_stream_handler(request):
     sq_arg = f"-l {squelch}" if squelch > 0 else ""
     shell_cmd = (
         f"rtl_fm -f {freq} -M {mod} -s {sample_rate} -g {gain} {sq_arg} - | "
-        f"ffmpeg -hide_banner -loglevel error -f s16le -ar {sample_rate} -ac 1 -i pipe:0 -af "highpass=f=200,lowpass=f=3500,volume=3.5" -f mp3 -b:a 64k -flush_packets 1 pipe:1"
+        f"ffmpeg -hide_banner -loglevel error -f s16le -ar {sample_rate} -ac 1 -i pipe:0 -af 'highpass=f=200,lowpass=f=3500,volume=3.5' -f mp3 -b:a 64k -flush_packets 1 pipe:1"
     )
 
     try:
