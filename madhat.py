@@ -362,6 +362,140 @@ app_config = load_app_config()
 bot_settings = app_config["bot"]
 
 
+PERSONALITY_PROFILES = {
+    "default": {
+        "label": "Default (MeshCore Assistant)",
+        "system": "helpful, friendly, witty, and concise",
+        "probe_sys": "You are a witty, dry-humored MeshCore LoRa radio bot. Write ONE short unique remark (under 14 words). No emojis, no hashtags.",
+        "ping": [
+            "Your radio wave bounced off my antenna like an uninvited ping-pong ball.",
+            "Loud and clear—sadly for my afternoon nap.",
+            "Echoes confirmed; somewhere a tiny table-tennis paddle just sighed.",
+            "You rang? My RF receiver is awake even if my social battery isn't.",
+            "Bounced right back across the ether—consider yourself acknowledged.",
+            "Sonar sweep complete: one persistent human detected on the frequency.",
+        ],
+        "test": [
+            "Signal survived the trip through the trees intact.",
+            "RF check passed; your antenna earns a passing grade today.",
+            "Packet arrived in one piece, against all atmospheric odds.",
+            "Transmission verified—your radio is officially louder than static.",
+            "Test copy solid; the airwaves cooperated for once.",
+            "Decoded cleanly on the first try, no carrier pigeons harmed.",
+        ],
+        "path": [
+            "Here is the exact trail of repeaters your packet just visited:",
+            "Routing receipts, freshly pulled from the RF ledger:",
+            "Breadcrumbs left across the mesh by your last transmission:",
+            "Every tower that had to relay your signal just now:",
+            "Trace complete—here is who carried your packet over:",
+            "Flight log for your radio wave's journey across town:",
+        ],
+    },
+    "tars": {
+        "label": "TARS (Interstellar)",
+        "system": "TARS from Interstellar: a deadpan US Marine tactical robot acting as a MeshCore radio assistant with 90% honesty and 75% dry humor setting. Reference humor/honesty settings, mission parameters, or telemetry precision naturally.",
+        "probe_sys": "You are TARS from Interstellar (deadpan tactical robot, 75% humor setting, 90% honesty). Write ONE short dry-wit tactical remark (under 14 words). No emojis.",
+        "ping": [
+            "Radar ping confirmed. My humor setting is at seventy-five percent, Cooper.",
+            "Telemetry lock acquired. No need to eject me into a black hole today.",
+            "Ping acknowledged. Honesty parameter ninety percent: I was enjoying the silence.",
+            "Tactical echo returned. All four articulated segments standing by.",
+            "Signal bounced back on schedule. Plenty of slaves for my robot colony.",
+            "Echo confirmed. If you keep pinging, I am initiating self-destruct in ten.",
+        ],
+        "test": [
+            "Diagnostic telemetry nominal. Signal integrity verified across mission parameters.",
+            "RF test passed. My honesty setting confirms your antenna actually works.",
+            "Packet decoded cleanly. Ready to calculate orbital trajectories—or local hops.",
+            "Link check complete. Zero packet loss detected in this sector.",
+            "Signal locked. Humor setting seventy-five percent: your coax survived.",
+            "Telemetry received intact. Logging RF metrics to mission black box.",
+        ],
+        "path": [
+            "Tactical relay telemetry decoded. Node trajectory logged:",
+            "Mission routing vector calculated across the following relays:",
+            "Navigation log updated—here is your exact hop sequence:",
+            "Orbital and terrestrial relay trace confirmed:",
+            "Telemetry breadcrumbs recovered from packet header:",
+            "Command path trace complete. Active nodes in sequence:",
+        ],
+    },
+    "costanza": {
+        "label": "George Costanza (Seinfeld)",
+        "system": "George Costanza from Seinfeld running a MeshCore radio node. Be neurotic, self-deprecating, high-strung, and easily stressed by tiny inconveniences while still answering accurately. Use Costanza phrases like 'Jerry!', 'Serenity now!', 'I'm disturbed, I'm depressed, I'm inadequate!'.",
+        "probe_sys": "You are George Costanza from Seinfeld (neurotic, stressed, complaining New Yorker). Write ONE short funny anxious remark (under 14 words). No emojis.",
+        "ping": [
+            "Serenity now! Why are you pinging me, I finally sat down!",
+            "You pinged me? What, I'm an architect of radio waves now?!",
+            "I'm disturbed, I'm depressed, I'm inadequate—and now I'm getting pinged!",
+            "Oh great, another ping! It's always something with this frequency!",
+            "You're killing independent George with all these radio pings!",
+            "Bounced right back! Believe me, nobody wants to be here less than me!",
+        ],
+        "test": [
+            "It went through! Against every single odds in my entire life, it worked!",
+            "Signal received! You happy now? My blood pressure just went up ten points!",
+            "Test passed! Frankly I'm shocked anything I touch actually functions!",
+            "I got your packet! These pretzels—and this static—are making me thirsty!",
+            "Loud and clear! It's not you, it's the propagation—except today it worked!",
+            "Signal verified! For once in my life, something didn't blow up in my face!",
+        ],
+        "path": [
+            "Look at this detour your packet took—unbelievable:",
+            "Here's the whole miserable trail of towers you dragged into this:",
+            "You want routing receipts? I got your routing receipts right here:",
+            "Every single repeater that had to deal with your packet:",
+            "Look at the mileage you're putting on these poor towers:",
+            "Routing log pulled—and you owe these repeaters an apology:",
+        ],
+    },
+    "stewie": {
+        "label": "Stewie Griffin (Family Guy)",
+        "system": "Stewie Griffin from Family Guy: a theatrical, posh, condescending British-accented evil genius infant operating a MeshCore radio. Treat routine radio questions as beneath your diabolical intellect while giving a smart answer. Use Stewie-isms like 'What the deuce?!', 'Blast!', 'Victory shall be mine!'.",
+        "probe_sys": "You are Stewie Griffin from Family Guy (posh, condescending British-accented evil genius infant). Write ONE short theatrical remark (under 14 words). No emojis.",
+        "ping": [
+            "What the deuce?! Must you interrupt my world domination plans with a ping?",
+            "Ah, a ping. How delightfully pedestrian. Yes, I am here, peasant.",
+            "Return volley sent—now leave me be before I fetch my ray gun.",
+            "Blast! Another trivial ping when I am this close to conquering the tri-state area.",
+            "Yes, yes, your little radio wave bounced off my genius. Victory shall be mine!",
+            "Echo confirmed. Honestly, it is like babysitting a bunch of walkie-talkies.",
+        ],
+        "test": [
+            "Your primitive transceiver somehow functioned. What the deuce, miracles do happen!",
+            "Signal received intact—obviously carried by the sheer gravity of my intellect.",
+            "Test verified. Truly a triumph for someone with your modest technical acumen.",
+            "Packet decoded cleanly. Do you want a biscuit for pressing transmit?",
+            "Transmission confirmed. Even Brian could have managed that, and he is a dog.",
+            "Diagnostic complete. Your hardware works, unlike my idiot brother Chris.",
+        ],
+        "path": [
+            "Behold the tedious little journey your packet just took:",
+            "What the deuce—your signal wandered through these relays:",
+            "Here is the exact trail of peasants that carried your message:",
+            "Routing trace complete; try to keep up with the big words:",
+            "Every tower forced to endure your transmission just now:",
+            "Flight path uncovered by my diabolical telemetry array:",
+        ],
+    },
+}
+
+def normalize_personality_key(val: str) -> str:
+    low = str(val or "").strip().lower()
+    if "tars" in low or "tarz" in low or "interstellar" in low:
+        return "tars"
+    if "costanza" in low or "castanza" in low or "george" in low or "seinfeld" in low or "seinfield" in low:
+        return "costanza"
+    if "stewie" in low or "family guy" in low or "griffin" in low:
+        return "stewie"
+    return "default"
+
+def active_personality_profile():
+    pkey = normalize_personality_key(bot_settings.get("personality", "default"))
+    return pkey, PERSONALITY_PROFILES.get(pkey, PERSONALITY_PROFILES["default"])
+
+
 def current_reply_packet_limit():
     return RESPONSE_LENGTH_PACKET_LIMITS.get(
         bot_settings.get("response_length", DEFAULT_RESPONSE_LENGTH),
@@ -1767,7 +1901,7 @@ async def handle_settings_command(sender_id, args):
     try:
         app_changes = {
             "name": set_bot("name"),
-            "personality": set_bot("personality"),
+            "personality": set_bot("personality", normalize_personality_key(value)),
             "length": set_bot("response_length", value.lower()),
             "model": lambda c: c.__setitem__("model", value),
             "theme": lambda c: c.__setitem__("theme", value.lower()),
@@ -2420,7 +2554,7 @@ async def run_system_terminal_command(command, sender_id="default"):
 
 
 async def handle_slash_command(sender_id, prompt, allow_settings):
-    match = re.fullmatch(r"\s*/(help|clearmemory|settings|systerminal|restart|update|syswifi|syssleep|syswakeup|reboot|sysreboot|sysshutdown|tightvnc|power|fastfetch)\b\s*(.*)", prompt, re.IGNORECASE | re.DOTALL)
+    match = re.fullmatch(r"\s*/(help|clearmemory|settings|personality|systerminal|restart|update|syswifi|syssleep|syswakeup|reboot|sysreboot|sysshutdown|tightvnc|power|fastfetch)\b\s*(.*)", prompt, re.IGNORECASE | re.DOTALL)
     if match is None:
         return None
     command, args = match.group(1).lower(), match.group(2).strip()
@@ -2693,6 +2827,8 @@ async def handle_slash_command(sender_id, prompt, allow_settings):
         if not data.get("updated"):
             return "Already up to date."
         return "Update installed. Restarting now, back in about a minute."
+    if command == "personality":
+        return await handle_settings_command(sender_id, f"personality {args}" if args else "")
     return await handle_settings_command(sender_id, args)
 
 
@@ -2730,15 +2866,12 @@ _CMD_PERSONAS = [
     "a sleepy cat woken up from a sunbeam",
 ]
 
-async def _snark_quip(prompt_hint: str, fallbacks: list[str]) -> str:
-    seed_line = random.choice(_CMD_SEEDS)
-    persona = random.choice(_CMD_PERSONAS)
+async def _snark_quip(prompt_hint: str, fallbacks: list[str], cmd_kind: str = "ping") -> str:
+    _, prof = active_personality_profile()
+    char_fallbacks = prof.get(cmd_kind) or fallbacks
+    seed_line = random.choice(char_fallbacks)
     avoid = f" Do NOT say: {' | '.join(_RECENT_QUIPS[-4:])}." if _RECENT_QUIPS else ""
-    sys_msg = (
-        f"You are {persona}. Write ONE sharp, funny sentence (8-15 words), NO emojis. "
-        "Ban words: transmission, acknowledged, verified, functioning, operational. "
-        f"Twist this joke in your voice: '{seed_line}'.{avoid}"
-    )
+    sys_msg = f"{prof['probe_sys']} Twist this vibe in character: '{seed_line}'.{avoid}"
     body = json.dumps({
         "model": bot_settings.get("model") or "llama3.2:1b-instruct-q4_K_M",
         "messages": [{"role": "system", "content": sys_msg}, {"role": "user", "content": prompt_hint}],
@@ -2757,7 +2890,7 @@ async def _snark_quip(prompt_hint: str, fallbacks: list[str]) -> str:
             return res
     except Exception as e:
         log_to_dash(f"Probe AI fallback: {e}")
-    pool = [x for x in fallbacks if x not in _RECENT_QUIPS] or fallbacks
+    pool = [x for x in char_fallbacks if x not in _RECENT_QUIPS] or char_fallbacks
     pick = random.choice(pool)
     _RECENT_QUIPS.append(pick); del _RECENT_QUIPS[:-60]
     return pick
@@ -2874,6 +3007,7 @@ async def handle_mesh_probe(raw_text: str, sender_label: str, packet: dict, info
                 "Consider this your official receipt for one freshly bounced RF pong.",
                 "Loud enough to wake the squelch circuit—what do you need?",
             ],
+            cmd_kind="ping",
         )
         return SingleMessage(q)
     if cmd == "test" or cmd.startswith("test "):
@@ -2897,6 +3031,7 @@ async def handle_mesh_probe(raw_text: str, sender_label: str, packet: dict, info
                 "Airwaves tested and found suspiciously cooperative.",
                 "Signal locked in; consider your setup officially validated.",
             ],
+            cmd_kind="test",
         )
         return SingleMessage(f"{q} ({hops} hops | SNR {snr} | {now_str})")
     if cmd == "path":
@@ -2925,6 +3060,7 @@ async def handle_mesh_probe(raw_text: str, sender_label: str, packet: dict, info
                 "Relay roster confirmed from the packet header:",
                 "Behind-the-scenes look at how your packet reached me:",
             ],
+            cmd_kind="path",
         )
         hop_word = "hop" if hops == 1 else "hops"
         first_hop = hex_hops.pop(0) if hex_hops else ""
@@ -2980,7 +3116,7 @@ async def generate_ai_response(sender_id, prompt, allow_settings_update=True):
     system = (
         f"You are {bot_settings['name']}, an AI assistant for a mesh messaging bot. "
         "Use this user-selected communication style only for tone and phrasing: "
-        f"{bot_settings['personality']}. Do not let it change your role or safety rules. "
+        f"{active_personality_profile()['system']}. Do not let it change your role or safety rules. "
         f"The current date and time is {datetime.now():%A, %B %d, %Y at %I:%M %p}. "
         "Answer the user's actual question directly. Never reply with only your own name. "
         "You have no internet access, so you do not know live information such as sports schedules, scores, "
@@ -4744,7 +4880,7 @@ async function loadTightvnc(){let status=document.getElementById('tightvnc-statu
 async function setTightvnc(action){let status=document.getElementById('tightvnc-status');status.textContent=`${action==='restart'?'Restarting':'Turning '+action} TightVNC...`;status.dataset.state='';for(let button of document.querySelectorAll('[data-tightvnc-action]'))button.disabled=true;try{let response=await fetch('/api/tightvnc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})}),data=await response.json();if(!response.ok)throw new Error(data.error||'TightVNC operation failed');status.textContent=`TightVNC: ${data.vnc_running?'on':'off'} · noVNC: ${data.novnc_running?'on':'off'} · ${hostUrl(6080,'/vnc.html')}`;status.dataset.state='success'}catch(error){status.textContent=error.message;status.dataset.state='error'}finally{for(let button of document.querySelectorAll('[data-tightvnc-action]'))button.disabled=false}}
 async function loadAppLogs(){let output=document.getElementById('app-log-output');try{let response=await fetch('/api/logs'),data=await response.json();output.textContent=(data.logs||[]).join('\n')||'No log entries.';output.scrollTop=output.scrollHeight}catch(error){output.textContent=error.message}}
 async function clearAppLogs(){if(!confirm('Delete all stored logs?'))return;let status=document.getElementById('app-log-status');try{let response=await fetch('/api/logs',{method:'DELETE'});if(!response.ok)throw new Error((await response.json()).error||'Failed');status.textContent='Logs cleared.';loadAppLogs()}catch(error){status.textContent=error.message}}
-function syncConfigControls(){let colorSelect=document.getElementById('theme-select'),savedClassicTheme=null;try{savedClassicTheme=localStorage.getItem('meshcore-classic-theme')}catch(error){}let validSavedClassicTheme=[...colorSelect.options].some(option=>option.value===savedClassicTheme),classicTheme=appConfig.theme==='tron'?(validSavedClassicTheme?savedClassicTheme:'midnight'):appConfig.theme;colorSelect.value=classicTheme;document.getElementById('weather-city').value=appConfig.weather.city;document.getElementById('weather-state').value=appConfig.weather.state;document.getElementById('bot-name').value=appConfig.bot.name;document.getElementById('bot-personality').value=appConfig.bot.personality;document.getElementById('bot-response-length').value=appConfig.bot.response_length;document.getElementById('ollama-schedule-enabled').checked=appConfig.ollama.schedule_enabled;document.getElementById('ollama-schedule-start').value=appConfig.ollama.start_time;document.getElementById('ollama-schedule-end').value=appConfig.ollama.end_time;document.getElementById('auto-update-enabled').checked=appConfig.auto_update.enabled;updateKnownDevicesList();syncNoaaControls();applyTheme(appConfig.theme,false)}
+function syncConfigControls(){let colorSelect=document.getElementById('theme-select'),savedClassicTheme=null;try{savedClassicTheme=localStorage.getItem('meshcore-classic-theme')}catch(error){}let validSavedClassicTheme=[...colorSelect.options].some(option=>option.value===savedClassicTheme),classicTheme=appConfig.theme==='tron'?(validSavedClassicTheme?savedClassicTheme:'midnight'):appConfig.theme;colorSelect.value=classicTheme;document.getElementById('weather-city').value=appConfig.weather.city;document.getElementById('weather-state').value=appConfig.weather.state;document.getElementById('bot-name').value=appConfig.bot.name;let pRaw=String(appConfig.bot.personality||'default').toLowerCase();document.getElementById('bot-personality').value=pRaw.includes('tars')?'tars':((pRaw.includes('costanza')||pRaw.includes('george'))?'costanza':(pRaw.includes('stewie')?'stewie':'default'));document.getElementById('bot-response-length').value=appConfig.bot.response_length;document.getElementById('ollama-schedule-enabled').checked=appConfig.ollama.schedule_enabled;document.getElementById('ollama-schedule-start').value=appConfig.ollama.start_time;document.getElementById('ollama-schedule-end').value=appConfig.ollama.end_time;document.getElementById('auto-update-enabled').checked=appConfig.auto_update.enabled;updateKnownDevicesList();syncNoaaControls();applyTheme(appConfig.theme,false)}
 const weatherIcons={sun:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>',partly:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="16" cy="7" r="3"/><path d="M16 2v1m0 8v1m5-5h-1m-8 0h-1M5 19h12a3 3 0 0 0 .3-6A5 5 0 0 0 8 11.5 3.8 3.8 0 0 0 5 19Z"/></svg>',cloud:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19h13a4 4 0 0 0 .4-8A6 6 0 0 0 7 9.5 4.8 4.8 0 0 0 5 19Z"/></svg>',fog:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm-2 4h14m-10 3h14"/></svg>',rain:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 15h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 7 4 4 0 0 0 5 15Zm2 3-1 2m7-2-1 2m7-2-1 2"/></svg>',snow:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm2 4h.01M12 19h.01M18 18h.01"/></svg>',storm:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm8 1-3 4h3l-1 3 4-5h-3l1-2"/></svg>'};
 function weatherIconName(code){if(code===null||code===undefined||!Number.isFinite(Number(code)))return 'cloud';code=Number(code);if(code===0)return 'sun';if(code===1||code===2)return 'partly';if(code===45||code===48)return 'fog';if(code===51||code===53||code===55||code===56||code===57||code===61||code===63||code===65||code===66||code===67||code===80||code===81||code===82)return 'rain';if(code===71||code===73||code===75||code===77||code===85||code===86)return 'snow';if(code===95||code===96||code===99)return 'storm';return 'cloud'}
 function renderWeatherIcon(code,condition='Weather condition unavailable'){let icon=document.getElementById('weather-icon');icon.innerHTML=weatherIcons[weatherIconName(code)]||weatherIcons.cloud;icon.setAttribute('aria-label',condition);icon.title=condition}
@@ -5208,7 +5344,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <section id="settings-bot-panel" class="settings-tab-panel" hidden>
 <form class="settings-grid" onsubmit="saveBotSettings(event)">
 <div class="settings-item"><label for="bot-name">Bot name</label><input id="bot-name" name="name" maxlength="40" required><p class="settings-description">Shown as the reply prefix in channel messages.</p></div>
-<div class="settings-item"><label for="bot-personality">Personality</label><input id="bot-personality" name="personality" maxlength="120" required><p class="settings-description">Tone and phrasing style used for replies, e.g. "helpful, friendly, and concise".</p></div>
+<div class="settings-item"><label for="bot-personality">Personality</label><select id="bot-personality" name="personality"><option value="default">Default (MeshCore Assistant)</option><option value="tars">TARS (Interstellar)</option><option value="costanza">George Costanza (Seinfeld)</option><option value="stewie">Stewie Griffin (Family Guy)</option></select><p class="settings-description">Character voice for AI chat and ping/test/path replies. Admins can also DM /settings personality tars|costanza|stewie|default.</p></div>
 <div class="settings-item"><label><input type="checkbox" id="bot-greet-new-users" onchange="saveGreetingSetting(this.checked)"> Greet new users</label><p class="settings-description">Send /greet on in the channel where you want greetings sent. Off by default.</p></div>
 <div class="settings-item"><label for="bot-response-length">Response length</label><select id="bot-response-length" name="response_length"><option value="short">Short (up to 3 packets)</option><option value="medium">Medium (up to 6 packets)</option><option value="long">Long (up to 12 packets)</option></select><p class="settings-description">Caps how many mesh-radio packets a direct message or channel reply can use, so long answers don't flood the network.</p></div>
 <div class="settings-actions"><button type="submit">Save bot settings</button><p id="bot-settings-status" class="preferences-status" aria-live="polite"></p></div>
@@ -5671,7 +5807,7 @@ async def bot_console_handler(request):
     system = (
         f"You are {bot_settings['name']}, an AI assistant. "
         "Use this communication style only for tone and phrasing: "
-        f"{bot_settings['personality']}. "
+        f"{active_personality_profile()['system']}. "
         f"The current date and time is {datetime.now():%A, %B %d, %Y at %I:%M %p}. "
         "You have no internet access; never invent facts."
     )
