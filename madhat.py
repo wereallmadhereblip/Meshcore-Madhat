@@ -7923,12 +7923,12 @@ async def _stop_sdr_stream_proc():
         except Exception:
             pass
     try:
-        subprocess.run(["pkill", "-9", "-f", "rtl_fm.*-s 22050"], capture_output=True)
+        subprocess.run(["sudo", "-n", "pkill", "-9", "-f", "rtl_fm.*-s "], capture_output=True)
     except Exception:
         pass
     if (app_config.get("noaa") or {}).get("enabled", True):
         try:
-            subprocess.run(["systemctl", "start", "noaa-same.service"], capture_output=True)
+            subprocess.run(["sudo", "-n", "systemctl", "start", "noaa-same.service"], capture_output=True)
         except Exception:
             pass
 
@@ -7951,42 +7951,43 @@ async def sdr_stream_handler(request):
 
     await _stop_sdr_stream_proc()
     try:
-        subprocess.run(["systemctl", "stop", "noaa-same.service"], capture_output=True)
-        await asyncio.sleep(0.3)
+        subprocess.run(["sudo", "-n", "systemctl", "stop", "noaa-same.service"], capture_output=True)
+        subprocess.run(["sudo", "-n", "pkill", "-9", "-f", "rtl_fm"], capture_output=True)
+        await asyncio.sleep(0.4)
     except Exception:
         pass
 
     sample_rate = 32000 if mod == "wbfm" else 22050
-    cmd = ["rtl_fm", "-f", freq, "-M", mod, "-s", str(sample_rate), "-g", str(gain)]
-    if squelch > 0:
-        cmd += ["-l", str(squelch)]
-    cmd.append("-")
+    sq_arg = f"-l {squelch}" if squelch > 0 else ""
+    shell_cmd = (
+        f"rtl_fm -f {freq} -M {mod} -s {sample_rate} -g {gain} {sq_arg} - | "
+        f"ffmpeg -hide_banner -loglevel error -f s16le -ar {sample_rate} -ac 1 -i pipe:0 -f mp3 -b:a 64k -flush_packets 1 pipe:1"
+    )
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
+        proc = await asyncio.create_subprocess_shell(
+            shell_cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
     except Exception as err:
         await _stop_sdr_stream_proc()
-        return web.json_response({"error": f"Failed to start rtl_fm: {err}"}, status=500)
+        return web.json_response({"error": f"Failed to start SDR stream: {err}"}, status=500)
 
     _SDR_ACTIVE_PROC = proc
     _SDR_ACTIVE_FREQ = f"{freq} ({mod.upper()})"
     resp = web.StreamResponse(
         status=200,
         headers={
-            "Content-Type": "audio/wav",
+            "Content-Type": "audio/mpeg",
             "Cache-Control": "no-store, no-cache",
             "X-Accel-Buffering": "no",
         },
     )
     await resp.prepare(request)
     try:
-        await resp.write(_wav_stream_header(sample_rate))
         while True:
-            chunk = await proc.stdout.read(4096)
+            chunk = await proc.stdout.read(2048)
             if not chunk:
                 break
             await resp.write(chunk)
@@ -8013,7 +8014,7 @@ async def sdr_scan_handler(request):
 
     await _stop_sdr_stream_proc()
     try:
-        subprocess.run(["systemctl", "stop", "noaa-same.service"], capture_output=True)
+        subprocess.run(["sudo", "-n", "systemctl", "stop", "noaa-same.service"], capture_output=True)
         await asyncio.sleep(0.3)
         proc = await asyncio.create_subprocess_exec(
             "rtl_power", "-f", span, "-g", str(gain), "-i", "1", "-1", "-",
@@ -8037,7 +8038,7 @@ async def sdr_scan_handler(request):
         return web.json_response({"error": f"Spectrum sweep failed: {err}"}, status=500)
     finally:
         if (app_config.get("noaa") or {}).get("enabled", True):
-            subprocess.run(["systemctl", "start", "noaa-same.service"], capture_output=True)
+            subprocess.run(["sudo", "-n", "systemctl", "start", "noaa-same.service"], capture_output=True)
 
 
 def create_app():
