@@ -3316,6 +3316,7 @@ async def generate_ai_response(sender_id, prompt, allow_settings_update=True):
     )
 
     _prof = active_personality_profile()
+    _live_trixie_ctx = _debian_trixie_terminal_summary(prompt, sender_id, None)
     system = (
         f"You are {bot_settings['name']}, an AI assistant for a MeshCore LoRa mesh radio bot. "
         f"Your currently active personality mode is '{_prof['label']}' (key: {_prof['key']}). "
@@ -3331,10 +3332,10 @@ async def generate_ai_response(sender_id, prompt, allow_settings_update=True):
         "news, or prices; say so briefly instead of guessing. Never invent facts. "
         "Answer only the latest message; do not repeat earlier answers, and if it is just an emoji or "
         "short reaction, reply with a short friendly acknowledgement. "
-        "You run on a Debian GNU/Linux 13 (Trixie) arm64 server terminal (orangepizero4). "
-        "For any question (including terminal/OS questions like who am i, uptime, network, or system info), "
-        "give a summarized, MeshCore-friendly version of what a Debian Trixie server terminal would reply, "
-        f"formatted cleanly across 2 to 6 short mesh-radio packets (under {reply_limit} characters total)."
+        "You are running inside a Debian GNU/Linux 13 (Trixie) arm64 server terminal. "
+        f"LIVE SERVER TERMINAL FACTS (use these exact facts and NEVER invent fake usernames or system info): {_live_trixie_ctx} "
+        "For EVERY interaction, reply as a concise, summarized MeshCore-friendly version of what this Debian Trixie server terminal would output, "
+        f"formatted cleanly to span 2 to 6 short mesh-radio packets (240 to {max(300, reply_limit)} characters total)."
     )
     try:
         loop = asyncio.get_running_loop()
