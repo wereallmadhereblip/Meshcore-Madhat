@@ -187,3 +187,31 @@ async def trigger_noaa_now(cfg, send_channel_fn):
     if summary:
         await send_multipacket_wx(send_channel_fn, _get_target_channels(noaa_cfg), summary)
     return summary
+
+if __name__ == "__main__":
+    import time as _time
+    from pathlib import Path
+    cfg_path = Path("/root/Meshcore-Ollama-bot/config.json")
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
+    noaa_cfg = cfg.get("noaa") or {"enabled": True, "frequency": "162.400M", "gain": 40, "same_codes": ["009003"], "target_channels": list((5,))}
+    if not noaa_cfg.get("enabled", True):
+        print(f"[{datetime.now().isoformat()}] NOAA scheduled broadcast disabled; skipping.")
+        raise SystemExit(0)
+    model = cfg.get("model") or (cfg.get("ollama") or {}).get("model") or "llama3.2:1b-instruct-q4_K_M"
+    print(f"[{datetime.now().isoformat()}] Starting 90s NOAA capture on {noaa_cfg.get('frequency', '162.400M')}...")
+    summary = _blocking_noaa_capture(noaa_cfg, model)
+    print(f"[{datetime.now().isoformat()}] Summary: {summary}")
+    if summary:
+        url = "http://" + "localhost" + ":8080/api/send"
+        packets = split_into_packets(summary)
+        for ch in _get_target_channels(noaa_cfg):
+            for idx, pkt in enumerate(packets, 1):
+                payload = json.dumps({"target": str(ch), "target_type": "channel", "message": pkt}).encode("utf-8")
+                req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+                try:
+                    with urllib.request.urlopen(req, timeout=10) as r:
+                        print(f"[{datetime.now().isoformat()}] Sent packet {idx}/{len(packets)} to ch {ch}: HTTP {r.status}")
+                except Exception as send_err:
+                    print(f"[{datetime.now().isoformat()}] Send error ch {ch} pkt {idx}: {send_err}")
+                if idx < len(packets):
+                    _time.sleep(3.0)
