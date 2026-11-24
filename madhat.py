@@ -1918,28 +1918,26 @@ def _parse_noaa_hms(noaa_cfg: dict) -> tuple[str, int]:
         h, m, s, total = 0, 30, 0, 1800
     return f"{h:02d}:{m:02d}:{s:02d}", total
 
-async def _noaa_exact_hms_loop(get_config_fn, send_channel_fn):
-    global _NEXT_NOAA_RUN_TS, _LAST_NOAA_INTERVAL_SECS
-    while True:
-        await asyncio.sleep(1.0)
-        cfg = get_config_fn()
-        noaa_cfg = cfg.get("noaa") or {}
-        if not noaa_cfg.get("enabled", True):
-            _NEXT_NOAA_RUN_TS = None
-            continue
-        _, total_secs = _parse_noaa_hms(noaa_cfg)
-        if _NEXT_NOAA_RUN_TS is None or _LAST_NOAA_INTERVAL_SECS != total_secs:
-            _LAST_NOAA_INTERVAL_SECS = total_secs
-            _NEXT_NOAA_RUN_TS = time.time() + total_secs
-        if time.time() >= _NEXT_NOAA_RUN_TS:
-            _NEXT_NOAA_RUN_TS = time.time() + total_secs
-            try:
-                subprocess.run(["sudo", "-n", "systemctl", "stop", "noaa-same.service"], capture_output=True)
-                await trigger_noaa_now(cfg, send_channel_fn)
-            except Exception as _e:
-                log_to_dash(f"NOAA scheduled capture error: {_e}")
-            finally:
-                subprocess.run(["sudo", "-n", "systemctl", "start", "noaa-same.service"], capture_output=True)
+def _compute_next_noaa_ts(noaa_cfg: dict, total_secs: int, force_reset: bool = False) -> float:
+    now_ts = time.time()
+    # Anchor to exact local midnight wall-clock grid when total_secs divides 86400 cleanly (e.g. 30m -> :00/:30, 1h -> :00, 6h -> 00/06/12/18)
+    if 86400 % total_secs == 0:
+        lt = time.localtime(now_ts)
+        midnight_ts = now_ts - (lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec)
+        elapsed_today = max(0.0, now_ts - midnight_ts)
+        steps = int(elapsed_today // total_secs) + 1
+        return midnight_ts + steps * total_secs
+    saved_ts = float((noaa_cfg or {}).get("next_run_ts") or 0)
+    if not force_reset and saved_ts > now_ts + 1:
+        return saved_ts
+    nxt = now_ts + total_secs
+    if isinstance(noaa_cfg, dict):
+        noaa_cfg["next_run_ts"] = nxt
+        try:
+            write_app_config(app_config)
+        except Exception:
+            pass
+    return nxt
 
 def sync_noaa_schedule_and_service(noaa_cfg: dict) -> str:
     global _NEXT_NOAA_RUN_TS, _LAST_NOAA_INTERVAL_SECS
@@ -1951,9 +1949,10 @@ def sync_noaa_schedule_and_service(noaa_cfg: dict) -> str:
     if not enabled:
         _NEXT_NOAA_RUN_TS = None
         _LAST_NOAA_INTERVAL_SECS = None
-    elif _NEXT_NOAA_RUN_TS is None or _LAST_NOAA_INTERVAL_SECS != total_secs:
+    else:
+        changed = (_LAST_NOAA_INTERVAL_SECS is not None and _LAST_NOAA_INTERVAL_SECS != total_secs)
         _LAST_NOAA_INTERVAL_SECS = total_secs
-        _NEXT_NOAA_RUN_TS = time.time() + total_secs
+        _NEXT_NOAA_RUN_TS = _compute_next_noaa_ts(noaa_cfg, total_secs, force_reset=changed)
     freq = str((noaa_cfg or {}).get("frequency") or "162.400M").strip()
     gain = int((noaa_cfg or {}).get("gain") or 40)
     sames = ",".join(str(c).strip() for c in ((noaa_cfg or {}).get("same_codes") or ["009003"]) if str(c).strip()) or "009003"
@@ -3203,8 +3202,8 @@ def _next_noaa_broadcast_reply(prompt: str):
     if not noaa.get("enabled", True):
         return "NOAA scheduled broadcast is currently disabled."
     _, total_secs = _parse_noaa_hms(noaa)
-    if _NEXT_NOAA_RUN_TS is None:
-        _NEXT_NOAA_RUN_TS = time.time() + total_secs
+    if _NEXT_NOAA_RUN_TS is None or _NEXT_NOAA_RUN_TS <= time.time():
+        _NEXT_NOAA_RUN_TS = _compute_next_noaa_ts(noaa_cfg, total_secs)
     rem = max(0, int(round(_NEXT_NOAA_RUN_TS - time.time())))
     hrs, rem_m = divmod(rem, 3600)
     mins, secs = divmod(rem_m, 60)
