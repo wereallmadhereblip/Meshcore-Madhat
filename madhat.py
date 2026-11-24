@@ -3211,64 +3211,71 @@ def _next_noaa_broadcast_reply(prompt: str):
     return f"{hrs:02d}:{mins:02d}:{secs:02d} until next noaa broadcast"
 
 def _debian_trixie_terminal_summary(prompt: str, sender_id, error: Exception | None = None) -> str:
-    q = str(prompt or "").strip().lower()
-    host = socket.gethostname()
-    user = getpass.getuser()
-    sender_label = str(sender_id or "unknown").replace("channel:", "ch:")[:24]
-    def _sh(cmd: list[str]) -> str:
-        try:
-            return subprocess.run(cmd, capture_output=True, text=True, timeout=2).stdout.strip()
-        except Exception:
-            return ""
-    os_name = "Debian GNU/Linux 13 (trixie)"
-    kernel = _sh(["uname", "-srm"]) or "Linux aarch64"
-    up = _sh(["uptime", "-p"]) or "up"
-    id_out = _sh(["id"]) or f"uid={os.getuid()}({user})"
-    who_tty = _sh(["who", "am", "i"])
-    ip_out = " | ".join(ln.split()[0] + ":" + ln.split()[2] for ln in _sh(["ip", "-br", "-4", "a"]).splitlines() if len(ln.split()) >= 3 and ln.split()[0] != "lo") or "no IPv4"
-    mem_parts = _sh(["free", "-m"]).splitlines()
-    mem_str = ""
-    if len(mem_parts) >= 2:
-        cols = mem_parts[1].split()
-        if len(cols) >= 3:
-            mem_str = f"RAM {cols[2]}/{cols[1]}MB"
-    df_parts = _sh(["df", "-h", "/"]).splitlines()
-    disk_str = ""
-    if len(df_parts) >= 2:
-        dcols = df_parts[1].split()
-        if len(dcols) >= 5:
-            disk_str = f"Disk {dcols[2]}/{dcols[1]} ({dcols[4]})"
+    try:
+        q = str(prompt or "").strip().lower()
+        host = socket.gethostname()
+        user = getpass.getuser()
+        sender_label = str(sender_id or "unknown").replace("channel:", "ch:")[:24]
+        def _sh(cmd: list[str]) -> str:
+            try:
+                return subprocess.run(cmd, capture_output=True, text=True, timeout=2).stdout.strip()
+            except Exception:
+                return ""
+        os_name = "Debian GNU/Linux 13 (trixie)"
+        kernel = _sh(["uname", "-srm"]) or "Linux aarch64"
+        up = _sh(["uptime", "-p"]) or "up"
+        id_out = _sh(["id"]) or f"uid={os.getuid()}({user})"
+        who_tty = _sh(["who", "am", "i"])
+        ips = []
+        for ln in _sh(["ip", "-br", "-4", "a"]).splitlines():
+            p = ln.split()
+            if len(p) >= 3 and p[0] != "lo":
+                ips.append(f"{p[0]}:{p[2]}")
+        ip_out = " | ".join(ips) or "no IPv4"
+        mem_parts = _sh(["free", "-m"]).splitlines()
+        mem_str = ""
+        if len(mem_parts) >= 2:
+            cols = mem_parts[1].split()
+            if len(cols) >= 3:
+                mem_str = f"RAM {cols[2]}/{cols[1]}MB"
+        df_parts = _sh(["df", "-h", "/"]).splitlines()
+        disk_str = ""
+        if len(df_parts) >= 2:
+            dcols = df_parts[1].split()
+            if len(dcols) >= 5:
+                disk_str = f"Disk {dcols[2]}/{dcols[1]} ({dcols[4]})"
 
-    if any(k in q for k in ("who am i", "whoami", "who i am", "my user", "current user")):
-        tty_note = f"who am i: '{who_tty}'" if who_tty else "who am i: empty (no TTY in daemon)"
-        body = (
-            f"Debian 13 (Trixie) terminal on {host}: effective user is '{user}' ({id_out}). "
-            f"{tty_note}. Your MeshCore sender ID is {sender_label}. "
-            f"System running {kernel}, {up}, IP {ip_out}."
-        )
-    elif any(k in q for k in ("ip", "network", "address", "wifi", "wlan", "eth")):
-        body = (
-            f"Debian 13 (Trixie) network on {host}: {ip_out}. "
-            f"Dashboard port 8080 active, OpenWebRX+ on-demand port 8073. "
-            f"Host {kernel}, {up}, user '{user}'."
-        )
-    elif any(k in q for k in ("mem", "ram", "disk", "storage", "cpu", "temp", "uptime", "status", "health")):
-        body = (
-            f"Debian 13 (Trixie) telemetry on {host} ({kernel}): {up}. "
-            f"{mem_str}, {disk_str}. Network {ip_out}. "
-            f"Active user '{user}' handling MeshCore radio + NOAA SDR."
-        )
-    else:
-        err_note = f"AI backend note ({type(error).__name__}: {str(error)[:75]}). " if error else ""
-        body = (
-            f"Debian 13 (Trixie) server {host} ({kernel}, {up}): {err_note}"
-            f"User '{user}', {mem_str}, {disk_str}, IP {ip_out}. "
-            f"Ask 'who am i', 'status', 'network', 'when is next noaa broadcast', or use /help."
-        )
-    # Keep summary within 2 to 6 MeshCore packets (~240 to 720 chars)
-    if len(body) < 220:
-        body += f" Host OS: {os_name}; MeshCore bot online on {host}."
-    return body[:740]
+        if any(k in q for k in ("who am i", "whoami", "who i am", "my user", "current user")):
+            tty_note = f"who am i: '{who_tty}'" if who_tty else "who am i: empty (no TTY in daemon)"
+            body = (
+                f"Debian 13 (Trixie) terminal on {host}: effective user is '{user}' ({id_out}). "
+                f"{tty_note}. Your MeshCore sender ID is {sender_label}. "
+                f"System running {kernel}, {up}, IP {ip_out}."
+            )
+        elif any(k in q for k in ("ip", "network", "address", "wifi", "wlan", "eth")):
+            body = (
+                f"Debian 13 (Trixie) network on {host}: {ip_out}. "
+                f"Dashboard port 8080 active, OpenWebRX+ on-demand port 8073. "
+                f"Host {kernel}, {up}, user '{user}'."
+            )
+        elif any(k in q for k in ("mem", "ram", "disk", "storage", "cpu", "temp", "uptime", "status", "health")):
+            body = (
+                f"Debian 13 (Trixie) telemetry on {host} ({kernel}): {up}. "
+                f"{mem_str}, {disk_str}. Network {ip_out}. "
+                f"Active user '{user}' handling MeshCore radio + NOAA SDR."
+            )
+        else:
+            err_note = f"AI backend note ({type(error).__name__}: {str(error)[:75]}). " if error else ""
+            body = (
+                f"Debian 13 (Trixie) server {host} ({kernel}, {up}): {err_note}"
+                f"User '{user}', {mem_str}, {disk_str}, IP {ip_out}. "
+                f"Ask 'who am i', 'status', 'network', 'when is next noaa broadcast', or use /help."
+            )
+        if len(body) < 220:
+            body += f" Host OS: {os_name}; MeshCore bot online on {host}."
+        return body[:740]
+    except Exception as _fallback_err:
+        return f"Debian 13 (Trixie) server {socket.gethostname()}: online and connected to MeshCore ({_fallback_err})."
 
 async def generate_ai_response(sender_id, prompt, allow_settings_update=True):
     command_reply = await handle_slash_command(sender_id, prompt, allow_settings_update)
