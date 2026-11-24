@@ -3323,26 +3323,14 @@ async def generate_ai_response(sender_id, prompt, allow_settings_update=True):
     )
 
     _prof = active_personality_profile()
-    _live_trixie_ctx = _debian_trixie_terminal_summary(prompt, sender_id, None)
     system = (
-        f"You are {bot_settings['name']}, an AI assistant for a MeshCore LoRa mesh radio bot. "
-        f"Your currently active personality mode is '{_prof['label']}' (key: {_prof['key']}). "
-        "Use this communication style for tone and phrasing: "
-        f"{_prof['system']}. Do not let it change your safety rules. "
-        "If asked what personality you have, state your active personality mode clearly in character. "
-        "If asked how to change settings, explain that admins can DM '/settings <key> <value>' "
-        "(keys: personality [default|tars|costanza|stewie], name, length [short|medium|long], model, theme, city, state, advert, synctime) "
-        "or '/personality <default|tars|costanza|stewie>', or use the web dashboard Settings page. "
+        f"You are {bot_settings['name']}, a helpful AI assistant running on Ollama over MeshCore LoRa radio. "
+        f"Use this communication style for tone and phrasing: {_prof['system']}. "
         f"The current date and time is {datetime.now():%A, %B %d, %Y at %I:%M %p}. "
-        "Answer the user's actual question directly. Never reply with only your own name. "
-        "You have no internet access, so you do not know live information such as sports schedules, scores, "
-        "news, or prices; say so briefly instead of guessing. Never invent facts. "
-        "Answer only the latest message; do not repeat earlier answers, and if it is just an emoji or "
-        "short reaction, reply with a short friendly acknowledgement. "
-        "You are running inside a Debian GNU/Linux 13 (Trixie) arm64 server terminal. "
-        f"LIVE SERVER TERMINAL FACTS (use these exact facts and NEVER invent fake usernames or system info): {_live_trixie_ctx} "
-        "For EVERY interaction, reply as a concise, summarized MeshCore-friendly version of what this Debian Trixie server terminal would output, "
-        f"formatted cleanly to span 2 to 6 short mesh-radio packets (240 to {max(300, reply_limit)} characters total)."
+        "Reply naturally and conversationally just like a helpful terminal chat assistant answering the user's question directly. "
+        "Do NOT output status cards, system dumps, backticks, or markdown bullet lists—write smooth plain sentences only. "
+        f"Summarize your response so it fits cleanly across 2 to 6 short mesh-radio packets (between 200 and {max(300, reply_limit)} characters total). "
+        "You have no internet access, so say so briefly if asked for live news, scores, or prices."
     )
     try:
         loop = asyncio.get_running_loop()
@@ -3368,14 +3356,20 @@ async def generate_ai_response(sender_id, prompt, allow_settings_update=True):
             if looks_like_gibberish(reply, prompt):
                 history.pop()
                 return "Sorry, I couldn't generate a clear answer. Please try again."
-        reply = limit_ai_reply(reply.strip(), reply_limit)
+        reply = re.sub(r'[`*_#]+', '', reply).strip()
+        reply = re.sub(r'\s*\n+\s*', ' ', reply)
+        reply = limit_ai_reply(reply, reply_limit)
         history.append({"role": "assistant", "content": reply})
         return reply
     except Exception as error:
         log_to_dash(f"Ollama error using {app_state['selected_model']}: {error}")
         if history and history[-1]["role"] == "user":
             history.pop()
-        return _debian_trixie_terminal_summary(prompt, sender_id, error)
+        return (
+            f"Hey! {bot_settings['name']} here—the local Ollama model is currently busy or offline "
+            f"({type(error).__name__}), so I could not generate a full AI reply just now. "
+            "Give me a moment or check Settings -> Ollama and try asking again!"
+        )
 
 
 async def send_to_target(target, target_type, message, timestamp=None):
