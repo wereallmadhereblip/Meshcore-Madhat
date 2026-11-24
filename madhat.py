@@ -3166,6 +3166,46 @@ async def handle_mesh_probe(raw_text: str, sender_label: str, packet: dict, info
     return None
 
 
+def _next_noaa_broadcast_reply(prompt: str):
+    q = re.sub(r"[^a-z0-9\s]", "", str(prompt or "").lower()).strip()
+    has_topic = ("noaa" in q and any(w in q for w in ("broadcast", "update", "report", "forecast", "alert", "wx", "weather"))) or ("weather broadcast" in q)
+    has_time = any(w in q for w in ("next", "when", "until", "time", "long", "eta"))
+    if not (has_topic and has_time):
+        return None
+    noaa = app_config.get("noaa") or {}
+    if not noaa.get("enabled", True):
+        return "NOAA scheduled broadcast is currently disabled."
+    from datetime import datetime, timedelta
+    now = datetime.now()
+    iv_h = int(noaa.get("interval_hours", 6) or 0)
+    iv_m = int(noaa.get("interval_minutes", 0) or 0)
+    if iv_h == 0 and iv_m == 0:
+        iv_h = 6
+    nxt = None
+    if iv_h == 0:
+        for step in range(1, 1445):
+            cand = now.replace(second=0, microsecond=0) + timedelta(minutes=step)
+            if cand.minute % iv_m == 0:
+                nxt = cand
+                break
+    elif iv_h == 24:
+        cand = now.replace(hour=0, minute=iv_m, second=0, microsecond=0)
+        if cand <= now:
+            cand += timedelta(days=1)
+        nxt = cand
+    else:
+        for step in range(1, 2885):
+            cand = now.replace(second=0, microsecond=0) + timedelta(minutes=step)
+            if cand.minute == iv_m and cand.hour % iv_h == 0:
+                nxt = cand
+                break
+    if nxt is None:
+        return "00:00 until next noaa broadcast"
+    rem_secs = max(0, int((nxt - now).total_seconds()))
+    total_mins = (rem_secs + 59) // 60
+    hrs, mins = divmod(total_mins, 60)
+    return f"{mins:02d}:{hrs:02d} until next noaa broadcast"
+
 async def generate_ai_response(sender_id, prompt, allow_settings_update=True):
     command_reply = await handle_slash_command(sender_id, prompt, allow_settings_update)
     if command_reply is not None:
@@ -3183,6 +3223,10 @@ async def generate_ai_response(sender_id, prompt, allow_settings_update=True):
         clear_reply = clear_chat_memory_reply(sender_id, prompt)
         if clear_reply is not None:
             return clear_reply
+
+    noaa_next = _next_noaa_broadcast_reply(prompt)
+    if noaa_next is not None:
+        return noaa_next
 
     weather_reply = await fetch_weather_response(prompt, sender_id)
     if weather_reply is not None:
