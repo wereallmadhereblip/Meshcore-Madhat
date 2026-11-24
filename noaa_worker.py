@@ -81,6 +81,11 @@ def _clean_noaa_vosk_phonetics(text: str) -> str:
     fixes = [
         (r"\b(northwest|northeast|southwest|southeast|north|south|east|west)\s+win(g|d)?s?\b", lambda m: f"{m.group(1).upper()} winds"),
         (r"\bne\s+win'?s\b", "NE winds"),
+        (r"\bwhen\s+was\s+(north|south|east|west|northwest|northeast|southwest|southeast)\b", lambda m: f"wind was {m.group(1)}"),
+        (r"\b(guys|guy)\s+(are\s+you|is\s+rina|ranged)\s+from\b", "skies ranged from"),
+        (r"\bmoisture\b", "Worcester"),
+        (r"\bnew\s+haven\s+harmer\b", "New Haven Harbor"),
+        (r"\bcoastal\s+whether\s+sure\b", "coastal weather shore"),
         (r"\b(funny|money)\b", "sunny"),
         (r"\bnose\s+in\s+the\b", "lows in the"),
         (r"\bpies\s+(and|in)\s+the\b", "highs in the"),
@@ -95,26 +100,26 @@ def _clean_noaa_vosk_phonetics(text: str) -> str:
 def summarize_with_ollama(raw_transcript, model_name="llama3.2:1b-instruct-q4_K_M"):
     cleaned = _clean_noaa_vosk_phonetics(words_to_digits(raw_transcript))
     prompt = (
-        "Rewrite ONLY the factual weather information from the NOAA radio transcript below into a clean, "
-        "easy-to-read local forecast between 620 and 820 characters so it fills 5 to 6 short radio packets. "
-        "Cover current conditions, tonight, tomorrow, and the multi-day outlook in plain sentences. "
-        "CRITICAL RULES: Use ONLY temperatures, winds, days, and conditions actually stated in the transcript. "
-        "NEVER invent or guess any numbers, times, or marine warnings not in the transcript. "
-        "Fix obvious speech-to-text typos cleanly and output ONLY the forecast text with no intro:"
+        "You are cleaning up a noisy speech-to-text transcript from NOAA Weather Radio for Burlington / Hartford County, CT. "
+        "Rewrite ONLY the factual weather details into clear, natural English sentences between 520 and 780 characters "
+        "(so it spans 4 to 6 short radio packets). Fix obvious speech-to-text mishearings from context, keep only real "
+        "temperatures, winds, skies, and forecast days stated below, and NEVER invent new numbers or warnings. "
+        "Output ONLY the cleaned weather report with no intro:"
         + chr(10) + chr(10) + cleaned
     )
     payload = json.dumps({
         "model": model_name,
         "prompt": prompt,
         "stream": False,
-        "options": {"temperature": 0.2, "num_predict": 240}
+        "options": {"temperature": 0.25, "num_predict": 240}
     }).encode("utf-8")
     try:
         req = urllib.request.Request("http://" + "127.0.0.1" + ":11434/api/generate", data=payload, headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=75) as resp:
             res = clean_ollama_output(json.loads(resp.read().decode("utf-8")).get("response", ""))
             res = re.sub(r"[`*_#]+", "", res).strip()
-            if len(res) >= 420:
+            res = re.sub(r"\s*\n+\s*", " ", res)
+            if len(res) >= 180:
                 return res[:840]
     except Exception as e:
         print(f"[NOAA] Ollama unavailable ({e}), using cleaned transcript fallback")
