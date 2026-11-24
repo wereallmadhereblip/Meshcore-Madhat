@@ -1908,7 +1908,7 @@ def _parse_noaa_hms(noaa_cfg: dict) -> tuple[str, int]:
         parts = [max(0, int(x)) for x in raw.split(":") if x.strip().isdigit()]
         while len(parts) < 3:
             parts.append(0)
-        h, m, s = min(99, parts), min(59, parts), min(59, parts)
+        h, m, s = min(99, parts[0]), min(59, parts[1]), min(59, parts[2])
     else:
         h = max(0, min(99, int((noaa_cfg or {}).get("interval_hours", 0) or 0)))
         m = max(0, min(59, int((noaa_cfg or {}).get("interval_minutes", 30) or 0)))
