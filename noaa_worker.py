@@ -193,7 +193,7 @@ async def send_multipacket_wx(send_channel_fn, channels, summary):
             except Exception:
                 pass
             if idx < len(packets):
-                await asyncio.sleep(3.0)
+                await asyncio.sleep(6.0)
 
 async def noaa_6hr_loop(get_config_fn, send_channel_fn):
     target_hours, last_run_hour = {5, 11, 17, 23}, None
@@ -249,4 +249,4 @@ if __name__ == "__main__":
                 except Exception as send_err:
                     print(f"[{datetime.now().isoformat()}] Send error ch {ch} pkt {idx}: {send_err}")
                 if idx < len(packets):
-                    _time.sleep(3.0)
+                    _time.sleep(6.0)
