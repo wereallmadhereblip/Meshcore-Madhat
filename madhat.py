@@ -247,7 +247,7 @@ def load_app_config():
 def validate_app_config(value):
     if not isinstance(value, dict):
         raise ValueError("Configuration must be a JSON object")
-    unsupported = set(value) - {"model", "theme", "connection", "known_devices", "known_device_names", "weather", "bot", "ollama", "auto_update"}
+    unsupported = set(value) - {"model", "theme", "connection", "known_devices", "known_device_names", "weather", "bot", "ollama", "auto_update", "noaa"}
     if unsupported:
         raise ValueError(f"Unsupported configuration keys: {', '.join(sorted(unsupported))}")
 
