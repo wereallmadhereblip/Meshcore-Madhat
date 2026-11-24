@@ -1939,6 +1939,29 @@ def _compute_next_noaa_ts(noaa_cfg: dict, total_secs: int, force_reset: bool = F
             pass
     return nxt
 
+async def _noaa_exact_hms_loop(get_config_fn, send_channel_fn):
+    global _NEXT_NOAA_RUN_TS, _LAST_NOAA_INTERVAL_SECS
+    while True:
+        await asyncio.sleep(1.0)
+        cfg = get_config_fn()
+        noaa_cfg = cfg.get("noaa") or {}
+        if not noaa_cfg.get("enabled", True):
+            _NEXT_NOAA_RUN_TS = None
+            continue
+        _, total_secs = _parse_noaa_hms(noaa_cfg)
+        if _NEXT_NOAA_RUN_TS is None or _LAST_NOAA_INTERVAL_SECS != total_secs:
+            _LAST_NOAA_INTERVAL_SECS = total_secs
+            _NEXT_NOAA_RUN_TS = _compute_next_noaa_ts(noaa_cfg, total_secs)
+        if time.time() >= _NEXT_NOAA_RUN_TS:
+            _NEXT_NOAA_RUN_TS = _compute_next_noaa_ts(noaa_cfg, total_secs, force_reset=True)
+            try:
+                subprocess.run(["sudo", "-n", "systemctl", "stop", "noaa-same.service"], capture_output=True)
+                await trigger_noaa_now(cfg, send_channel_fn)
+            except Exception as _e:
+                log_to_dash(f"NOAA scheduled capture error: {_e}")
+            finally:
+                subprocess.run(["sudo", "-n", "systemctl", "start", "noaa-same.service"], capture_output=True)
+
 def sync_noaa_schedule_and_service(noaa_cfg: dict) -> str:
     global _NEXT_NOAA_RUN_TS, _LAST_NOAA_INTERVAL_SECS
     enabled = bool((noaa_cfg or {}).get("enabled", True))
