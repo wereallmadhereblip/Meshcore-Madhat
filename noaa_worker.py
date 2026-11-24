@@ -126,15 +126,11 @@ def _get_target_channels(noaa_cfg):
 def _blocking_noaa_capture(noaa_cfg, ollama_model):
     freq = noaa_cfg.get("frequency", "162.475M")
     gain = str(noaa_cfg.get("gain", 40))
-    same_codes = ",".join(noaa_cfg.get("same_codes", ["009003"]))
-    same_flag = f"--same {same_codes}" if same_codes else ""
     raw_file = "/tmp/noaa_raw.pcm"
-    cmd = (
-        f"timeout 110s rtl_fm -f {freq} -M fm -s 22050 -g {gain} - | tee {raw_file} | "
-        f"multimon-ng -t raw -a EAS - | /root/Meshcore-Ollama-bot/.venv/bin/python {DSAME_PATH} "
-        f"--skip_dependency {same_flag} --call /root/Meshcore-Ollama-bot/push_noaa_alert.sh --command \"{{MESSAGE}}\""
-    )
-    subprocess.run(cmd, shell=True)
+    if os.path.exists(raw_file):
+        os.remove(raw_file)
+    cmd = ["timeout", "90s", "rtl_fm", "-f", str(freq), "-M", "fm", "-s", "22050", "-g", str(gain), raw_file]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     summary = ""
     if os.path.exists(raw_file) and os.path.getsize(raw_file) > 0:
         with open(raw_file, "rb") as pcm:
