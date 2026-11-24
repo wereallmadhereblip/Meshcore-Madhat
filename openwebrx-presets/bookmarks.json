@@ -1,0 +1,224 @@
+{
+  "bookmarks": [
+    {
+      "name": "NOAA WX2 (Meriden)",
+      "frequency": 162400000,
+      "modulation": "nfm"
+    },
+    {
+      "name": "NOAA WX4",
+      "frequency": 162425000,
+      "modulation": "nfm"
+    },
+    {
+      "name": "NOAA WX5",
+      "frequency": 162450000,
+      "modulation": "nfm"
+    },
+    {
+      "name": "NOAA WX3 (Hartford)",
+      "frequency": 162475000,
+      "modulation": "nfm"
+    },
+    {
+      "name": "NOAA WX6",
+      "frequency": 162500000,
+      "modulation": "nfm"
+    },
+    {
+      "name": "NOAA WX7",
+      "frequency": 162525000,
+      "modulation": "nfm"
+    },
+    {
+      "name": "NOAA WX1",
+      "frequency": 162550000,
+      "modulation": "nfm"
+    },
+    {
+      "name": "Burlington Fire/EMS 1",
+      "frequency": 154370000,
+      "modulation": "nfm"
+    },
+    {
+      "name": "Burlington Fire/EMS 2",
+      "frequency": 154010000,
+      "modulation": "nfm"
+    },
+    {
+      "name": "VFIRE21 Mutual Aid",
+      "frequency": 154280000,
+      "modulation": "nfm"
+    },
+    {
+      "name": "HEAR EMS Hospital",
+      "frequency": 155340000,
+      "modulation": "nfm"
+    },
+    {
+      "name": "VLAW31 Law Mutual Aid",
+      "frequency": 155475000,
+      "modulation": "nfm"
+    },
+    {
+      "name": "SAR Search & Rescue",
+      "frequency": 155160000,
+      "modulation": "nfm"
+    },
+    {
+      "name": "USCG Marine Ch 16 Distress",
+      "frequency": 156800000,
+      "modulation": "nfm"
+    },
+    {
+      "name": "USCG Ch 22A Liaison",
+      "frequency": 157100000,
+      "modulation": "nfm"
+    },
+    {
+      "name": "UTAC41 Emergency UHF",
+      "frequency": 453212500,
+      "modulation": "nfm"
+    },
+    {
+      "name": "UTAC42 Emergency UHF",
+      "frequency": 453462500,
+      "modulation": "nfm"
+    },
+    {
+      "name": "UTAC43 Emergency UHF",
+      "frequency": 453712500,
+      "modulation": "nfm"
+    },
+    {
+      "name": "Aviation Guard 121.5",
+      "frequency": 121500000,
+      "modulation": "am"
+    },
+    {
+      "name": "Bradley Tower 120.3",
+      "frequency": 120300000,
+      "modulation": "am"
+    },
+    {
+      "name": "2m Simplex Calling",
+      "frequency": 146520000,
+      "modulation": "nfm"
+    },
+    {
+      "name": "70cm Simplex Calling",
+      "frequency": 446000000,
+      "modulation": "nfm"
+    },
+    {
+      "name": "GMRS/FRS 1",
+      "frequency": 462562500,
+      "modulation": "nfm"
+    },
+    {
+      "name": "GMRS/FRS 2",
+      "frequency": 462587500,
+      "modulation": "nfm"
+    },
+    {
+      "name": "GMRS/FRS 3",
+      "frequency": 462612500,
+      "modulation": "nfm"
+    },
+    {
+      "name": "GMRS/FRS 4",
+      "frequency": 462637500,
+      "modulation": "nfm"
+    },
+    {
+      "name": "GMRS/FRS 5",
+      "frequency": 462662500,
+      "modulation": "nfm"
+    },
+    {
+      "name": "GMRS/FRS 6",
+      "frequency": 462687500,
+      "modulation": "nfm"
+    },
+    {
+      "name": "GMRS/FRS 7",
+      "frequency": 462712500,
+      "modulation": "nfm"
+    },
+    {
+      "name": "FRS 8",
+      "frequency": 467562500,
+      "modulation": "nfm"
+    },
+    {
+      "name": "FRS 9",
+      "frequency": 467587500,
+      "modulation": "nfm"
+    },
+    {
+      "name": "FRS 10",
+      "frequency": 467612500,
+      "modulation": "nfm"
+    },
+    {
+      "name": "FRS 11",
+      "frequency": 467637500,
+      "modulation": "nfm"
+    },
+    {
+      "name": "FRS 12",
+      "frequency": 467662500,
+      "modulation": "nfm"
+    },
+    {
+      "name": "FRS 13",
+      "frequency": 467687500,
+      "modulation": "nfm"
+    },
+    {
+      "name": "FRS 14",
+      "frequency": 467712500,
+      "modulation": "nfm"
+    },
+    {
+      "name": "GMRS 15 (RPT15)",
+      "frequency": 462550000,
+      "modulation": "nfm"
+    },
+    {
+      "name": "GMRS 16 (RPT16)",
+      "frequency": 462575000,
+      "modulation": "nfm"
+    },
+    {
+      "name": "GMRS 17 (RPT17)",
+      "frequency": 462600000,
+      "modulation": "nfm"
+    },
+    {
+      "name": "GMRS 18 (RPT18)",
+      "frequency": 462625000,
+      "modulation": "nfm"
+    },
+    {
+      "name": "GMRS 19 (RPT19)",
+      "frequency": 462650000,
+      "modulation": "nfm"
+    },
+    {
+      "name": "GMRS 20 (RPT20 Travel)",
+      "frequency": 462675000,
+      "modulation": "nfm"
+    },
+    {
+      "name": "GMRS 21 (RPT21)",
+      "frequency": 462700000,
+      "modulation": "nfm"
+    },
+    {
+      "name": "GMRS 22 (RPT22)",
+      "frequency": 462725000,
+      "modulation": "nfm"
+    }
+  ]
+}
