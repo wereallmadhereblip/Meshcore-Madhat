@@ -147,6 +147,11 @@ def _blocking_noaa_capture(noaa_cfg, ollama_model):
         os.remove(raw_file)
         if os.path.exists(TEMP_WAV):
             os.remove(TEMP_WAV)
+    try:
+        with open("/var/log/noaa_worker.log", "a", encoding="utf-8") as _lf:
+            _lf.write(f"[{datetime.now().isoformat()}] freq={freq} transcript_len={len(transcript) if 'transcript' in locals() else 0} summary={summary!r}\n")
+    except Exception:
+        pass
     return summary
 
 async def send_multipacket_wx(send_channel_fn, channels, summary):
@@ -157,6 +162,11 @@ async def send_multipacket_wx(send_channel_fn, channels, summary):
         for idx, pkt in enumerate(packets, start=1):
             prefix = f"[{idx}/{len(packets)}] " if len(packets) > 1 else ""
             await send_channel_fn(int(ch), f"{prefix}{pkt}"[:155])
+            try:
+                with open("/var/log/noaa_worker.log", "a", encoding="utf-8") as _lf:
+                    _lf.write(f"[{datetime.now().isoformat()}] Sent ch={ch} {prefix}{pkt[:80]}\n")
+            except Exception:
+                pass
             if idx < len(packets):
                 await asyncio.sleep(3.0)
 
