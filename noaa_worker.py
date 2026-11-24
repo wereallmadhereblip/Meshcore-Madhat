@@ -158,8 +158,16 @@ def _blocking_noaa_capture(noaa_cfg, ollama_model):
     raw_file = "/tmp/noaa_raw.pcm"
     if os.path.exists(raw_file):
         os.remove(raw_file)
+    import time as _t
+    _t.sleep(1.2)
     cmd = ["timeout", "90s", "rtl_fm", "-f", str(freq), "-M", "fm", "-s", "22050", "-g", str(gain), raw_file]
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    if not os.path.exists(raw_file) or os.path.getsize(raw_file) == 0:
+        try:
+            with open("/var/log/noaa_worker.log", "a", encoding="utf-8") as _lf:
+                _lf.write(f"[{datetime.now().isoformat()}] rtl_fm empty rc={res.returncode} err={res.stderr.strip()[:220]}\n")
+        except Exception:
+            pass
     summary = ""
     if os.path.exists(raw_file) and os.path.getsize(raw_file) > 0:
         with open(raw_file, "rb") as pcm:
