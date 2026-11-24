@@ -1899,30 +1899,61 @@ async def run_device_handler(handler, payload):
 
 
 
-def sync_noaa_schedule_and_service(noaa_cfg: dict) -> str:
-    enabled = bool((noaa_cfg or {}).get("enabled", True))
-    try:
-        iv_hours = max(0, min(24, int((noaa_cfg or {}).get("interval_hours", 6))))
-    except Exception:
-        iv_hours = 6
-    try:
-        iv_mins = max(0, min(59, int((noaa_cfg or {}).get("interval_minutes", 0))))
-    except Exception:
-        iv_mins = 0
-    if iv_hours == 0 and iv_mins == 0:
-        iv_hours = 6
-    if isinstance(noaa_cfg, dict):
-        noaa_cfg["interval_hours"] = iv_hours
-        noaa_cfg["interval_minutes"] = iv_mins
-    if iv_hours == 0:
-        cron_sched = f"*/{iv_mins} * * * *"
-        hours_csv = f"every {iv_mins}m"
-    elif iv_hours == 24:
-        cron_sched = f"{iv_mins} 0 * * *"
-        hours_csv = f"every 24h at :{iv_mins:02d}"
+_NEXT_NOAA_RUN_TS = None
+_LAST_NOAA_INTERVAL_SECS = None
+
+def _parse_noaa_hms(noaa_cfg: dict) -> tuple[str, int]:
+    raw = str((noaa_cfg or {}).get("broadcast_every") or "").strip()
+    if raw and ":" in raw:
+        parts = [max(0, int(x)) for x in raw.split(":") if x.strip().isdigit()]
+        while len(parts) < 3:
+            parts.append(0)
+        h, m, s = min(99, parts), min(59, parts), min(59, parts)
     else:
-        cron_sched = f"{iv_mins} */{iv_hours} * * *"
-        hours_csv = f"every {iv_hours}h {iv_mins}m"
+        h = max(0, min(99, int((noaa_cfg or {}).get("interval_hours", 0) or 0)))
+        m = max(0, min(59, int((noaa_cfg or {}).get("interval_minutes", 30) or 0)))
+        s = max(0, min(59, int((noaa_cfg or {}).get("interval_seconds", 0) or 0)))
+    total = h * 3600 + m * 60 + s
+    if total <= 0:
+        h, m, s, total = 0, 30, 0, 1800
+    return f"{h:02d}:{m:02d}:{s:02d}", total
+
+async def _noaa_exact_hms_loop(get_config_fn, send_channel_fn):
+    global _NEXT_NOAA_RUN_TS, _LAST_NOAA_INTERVAL_SECS
+    while True:
+        await asyncio.sleep(1.0)
+        cfg = get_config_fn()
+        noaa_cfg = cfg.get("noaa") or {}
+        if not noaa_cfg.get("enabled", True):
+            _NEXT_NOAA_RUN_TS = None
+            continue
+        _, total_secs = _parse_noaa_hms(noaa_cfg)
+        if _NEXT_NOAA_RUN_TS is None or _LAST_NOAA_INTERVAL_SECS != total_secs:
+            _LAST_NOAA_INTERVAL_SECS = total_secs
+            _NEXT_NOAA_RUN_TS = time.time() + total_secs
+        if time.time() >= _NEXT_NOAA_RUN_TS:
+            _NEXT_NOAA_RUN_TS = time.time() + total_secs
+            try:
+                subprocess.run(["sudo", "-n", "systemctl", "stop", "noaa-same.service"], capture_output=True)
+                await trigger_noaa_now(cfg, send_channel_fn)
+            except Exception as _e:
+                log_to_dash(f"NOAA scheduled capture error: {_e}")
+            finally:
+                subprocess.run(["sudo", "-n", "systemctl", "start", "noaa-same.service"], capture_output=True)
+
+def sync_noaa_schedule_and_service(noaa_cfg: dict) -> str:
+    global _NEXT_NOAA_RUN_TS, _LAST_NOAA_INTERVAL_SECS
+    enabled = bool((noaa_cfg or {}).get("enabled", True))
+    hms_str, total_secs = _parse_noaa_hms(noaa_cfg)
+    if isinstance(noaa_cfg, dict):
+        noaa_cfg["broadcast_every"] = hms_str
+    hours_csv = hms_str
+    if not enabled:
+        _NEXT_NOAA_RUN_TS = None
+        _LAST_NOAA_INTERVAL_SECS = None
+    elif _NEXT_NOAA_RUN_TS is None or _LAST_NOAA_INTERVAL_SECS != total_secs:
+        _LAST_NOAA_INTERVAL_SECS = total_secs
+        _NEXT_NOAA_RUN_TS = time.time() + total_secs
     freq = str((noaa_cfg or {}).get("frequency") or "162.400M").strip()
     gain = int((noaa_cfg or {}).get("gain") or 40)
     sames = ",".join(str(c).strip() for c in ((noaa_cfg or {}).get("same_codes") or ["009003"]) if str(c).strip()) or "009003"
@@ -1959,12 +1990,7 @@ def sync_noaa_schedule_and_service(noaa_cfg: dict) -> str:
     try:
         cur = subprocess.run(["crontab", "-l"], capture_output=True, text=True).stdout
         kept = [ln for ln in cur.splitlines() if "noaa_worker.py" not in ln and ln.strip()]
-        if enabled:
-            kept.append(
-                f"{cron_sched} systemctl stop noaa-same.service; "
-                "/root/Meshcore-Ollama-bot/.venv/bin/python /root/Meshcore-Ollama-bot/noaa_worker.py >> /var/log/noaa_worker.log 2>&1; "
-                "systemctl start noaa-same.service"
-            )
+        # Managed by exact HH:MM:SS scheduler loop in madhat.py
         new_cron = ("\n".join(kept) + "\n") if kept else ""
         subprocess.run(["crontab", "-"], input=new_cron, text=True, check=True)
         subprocess.run(["systemctl", "enable" if enabled else "disable", "--now", "noaa-same.service"], capture_output=True)
@@ -3167,6 +3193,7 @@ async def handle_mesh_probe(raw_text: str, sender_label: str, packet: dict, info
 
 
 def _next_noaa_broadcast_reply(prompt: str):
+    global _NEXT_NOAA_RUN_TS
     q = re.sub(r"[^a-z0-9\s]", "", str(prompt or "").lower()).strip()
     has_topic = ("noaa" in q and any(w in q for w in ("broadcast", "update", "report", "forecast", "alert", "wx", "weather"))) or ("weather broadcast" in q)
     has_time = any(w in q for w in ("next", "when", "until", "time", "long", "eta"))
@@ -3175,36 +3202,13 @@ def _next_noaa_broadcast_reply(prompt: str):
     noaa = app_config.get("noaa") or {}
     if not noaa.get("enabled", True):
         return "NOAA scheduled broadcast is currently disabled."
-    from datetime import datetime, timedelta
-    now = datetime.now()
-    iv_h = int(noaa.get("interval_hours", 6) or 0)
-    iv_m = int(noaa.get("interval_minutes", 0) or 0)
-    if iv_h == 0 and iv_m == 0:
-        iv_h = 6
-    nxt = None
-    if iv_h == 0:
-        for step in range(1, 1445):
-            cand = now.replace(second=0, microsecond=0) + timedelta(minutes=step)
-            if cand.minute % iv_m == 0:
-                nxt = cand
-                break
-    elif iv_h == 24:
-        cand = now.replace(hour=0, minute=iv_m, second=0, microsecond=0)
-        if cand <= now:
-            cand += timedelta(days=1)
-        nxt = cand
-    else:
-        for step in range(1, 2885):
-            cand = now.replace(second=0, microsecond=0) + timedelta(minutes=step)
-            if cand.minute == iv_m and cand.hour % iv_h == 0:
-                nxt = cand
-                break
-    if nxt is None:
-        return "00:00 until next noaa broadcast"
-    rem_secs = max(0, int((nxt - now).total_seconds()))
-    total_mins = (rem_secs + 59) // 60
-    hrs, mins = divmod(total_mins, 60)
-    return f"{mins:02d}:{hrs:02d} until next noaa broadcast"
+    _, total_secs = _parse_noaa_hms(noaa)
+    if _NEXT_NOAA_RUN_TS is None:
+        _NEXT_NOAA_RUN_TS = time.time() + total_secs
+    rem = max(0, int(round(_NEXT_NOAA_RUN_TS - time.time())))
+    hrs, rem_m = divmod(rem, 3600)
+    mins, secs = divmod(rem_m, 60)
+    return f"{hrs:02d}:{mins:02d}:{secs:02d} until next noaa broadcast"
 
 def _debian_trixie_terminal_summary(prompt: str, sender_id, error: Exception | None = None) -> str:
     q = str(prompt or "").strip().lower()
@@ -5088,7 +5092,7 @@ function syncConfigControls(){let colorSelect=document.getElementById('theme-sel
 const weatherIcons={sun:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>',partly:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="16" cy="7" r="3"/><path d="M16 2v1m0 8v1m5-5h-1m-8 0h-1M5 19h12a3 3 0 0 0 .3-6A5 5 0 0 0 8 11.5 3.8 3.8 0 0 0 5 19Z"/></svg>',cloud:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19h13a4 4 0 0 0 .4-8A6 6 0 0 0 7 9.5 4.8 4.8 0 0 0 5 19Z"/></svg>',fog:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm-2 4h14m-10 3h14"/></svg>',rain:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 15h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 7 4 4 0 0 0 5 15Zm2 3-1 2m7-2-1 2m7-2-1 2"/></svg>',snow:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm2 4h.01M12 19h.01M18 18h.01"/></svg>',storm:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm8 1-3 4h3l-1 3 4-5h-3l1-2"/></svg>'};
 function weatherIconName(code){if(code===null||code===undefined||!Number.isFinite(Number(code)))return 'cloud';code=Number(code);if(code===0)return 'sun';if(code===1||code===2)return 'partly';if(code===45||code===48)return 'fog';if(code===51||code===53||code===55||code===56||code===57||code===61||code===63||code===65||code===66||code===67||code===80||code===81||code===82)return 'rain';if(code===71||code===73||code===75||code===77||code===85||code===86)return 'snow';if(code===95||code===96||code===99)return 'storm';return 'cloud'}
 function renderWeatherIcon(code,condition='Weather condition unavailable'){let icon=document.getElementById('weather-icon');icon.innerHTML=weatherIcons[weatherIconName(code)]||weatherIcons.cloud;icon.setAttribute('aria-label',condition);icon.title=condition}
-function syncNoaaControls(){let n=(appConfig&&appConfig.noaa)||{enabled:true,frequency:"162.475M",gain:40,same_codes:["009003"],target_channel:0};let elEn=document.getElementById("noaa-enabled");if(!elEn)return;elEn.checked=n.enabled!==false;document.getElementById("noaa-freq").value=n.frequency||"162.475M";document.getElementById("noaa-gain").value=n.gain??40;document.getElementById("noaa-same").value=Array.isArray(n.same_codes)?n.same_codes.join(","):"009003";let ehEl=document.getElementById("noaa-every-hours");if(ehEl)ehEl.value=String(n.interval_hours??6);let emEl=document.getElementById("noaa-every-mins");if(emEl)emEl.value=String(n.interval_minutes??0);let srEl=document.getElementById("noaa-samp-rate");if(srEl)srEl.value=String(n.samp_rate||1024000);let dsEl=document.getElementById("noaa-direct-sampling");if(dsEl)dsEl.value=String(n.direct_sampling??0);let sqEl=document.getElementById("noaa-squelch");if(sqEl)sqEl.value=String(n.squelch??0);let chSel=document.getElementById("noaa-channel");let savedCh=String(n.target_channel??0);fetch("/api/status").then(r=>r.json()).then(st=>{if(st&&st.channels&&Object.keys(st.channels).length){chSel.innerHTML="";Object.entries(st.channels).sort((a,b)=>Number(a[0])-Number(b[0])).forEach(([idx,info])=>{let opt=document.createElement("option");opt.value=String(idx);let cname=(info&&(info.channel_name||info.name))||(idx==="0"?"Public":"Channel "+idx);opt.textContent=idx+" — "+cname;chSel.appendChild(opt);});}chSel.value=savedCh;}).catch(()=>{chSel.value=savedCh;});}async function saveNoaaSettings(e){e.preventDefault();let codes=document.getElementById("noaa-same").value.split(",").map(s=>s.trim()).filter(Boolean);let noaa={enabled:document.getElementById("noaa-enabled").checked,frequency:document.getElementById("noaa-freq").value,gain:Number(document.getElementById("noaa-gain").value||40),same_codes:codes,interval_hours:Math.max(0,Math.min(24,Number(document.getElementById("noaa-every-hours")?.value??6))),interval_minutes:Math.max(0,Math.min(59,Number(document.getElementById("noaa-every-mins")?.value??0))),samp_rate:Number(document.getElementById("noaa-samp-rate")?.value||1024000),direct_sampling:Number(document.getElementById("noaa-direct-sampling")?.value||0),squelch:Number(document.getElementById("noaa-squelch")?.value||0),target_channels:[...document.querySelectorAll(".noaa-ch-cb:checked")].map(cb=>Number(cb.value))};await saveAppConfig({...appConfig,noaa},"noaa-settings-status");}async function startOpenWebRx(){let btn=document.getElementById('owrx-start-btn'),st=document.getElementById('owrx-status'),fr=document.getElementById('owrx-frame');if(btn)btn.disabled=true;if(st)st.textContent='Pausing NOAA SAME monitor and starting OpenWebRX+ on port 8073...';try{let r=await fetch('/api/openwebrx/start',{method:'POST'}),d=await r.json();if(!r.ok)throw new Error(d.error||'Failed to start OpenWebRX+');if(fr){fr.hidden=false;fr.src='http://'+location.hostname+':8073/';}if(st)st.textContent='OpenWebRX+ running on :8073 (NOAA SAME paused). Click Stop when finished to resume NOAA alerts.';}catch(e){if(st)st.textContent='Error: '+e.message;}finally{if(btn)btn.disabled=false;}}
+function syncNoaaControls(){let n=(appConfig&&appConfig.noaa)||{enabled:true,frequency:"162.475M",gain:40,same_codes:["009003"],target_channel:0};let elEn=document.getElementById("noaa-enabled");if(!elEn)return;elEn.checked=n.enabled!==false;document.getElementById("noaa-freq").value=n.frequency||"162.475M";document.getElementById("noaa-gain").value=n.gain??40;document.getElementById("noaa-same").value=Array.isArray(n.same_codes)?n.same_codes.join(","):"009003";let hmsEl=document.getElementById("noaa-every-hms");if(hmsEl){let pad=v=>String(Math.max(0,Number(v)||0)).padStart(2,"0");hmsEl.value=n.broadcast_every||`${pad(n.interval_hours??0)}:${pad(n.interval_minutes??30)}:${pad(n.interval_seconds??0)}`;}let srEl=document.getElementById("noaa-samp-rate");if(srEl)srEl.value=String(n.samp_rate||1024000);let dsEl=document.getElementById("noaa-direct-sampling");if(dsEl)dsEl.value=String(n.direct_sampling??0);let sqEl=document.getElementById("noaa-squelch");if(sqEl)sqEl.value=String(n.squelch??0);let chSel=document.getElementById("noaa-channel");let savedCh=String(n.target_channel??0);fetch("/api/status").then(r=>r.json()).then(st=>{if(st&&st.channels&&Object.keys(st.channels).length){chSel.innerHTML="";Object.entries(st.channels).sort((a,b)=>Number(a[0])-Number(b[0])).forEach(([idx,info])=>{let opt=document.createElement("option");opt.value=String(idx);let cname=(info&&(info.channel_name||info.name))||(idx==="0"?"Public":"Channel "+idx);opt.textContent=idx+" — "+cname;chSel.appendChild(opt);});}chSel.value=savedCh;}).catch(()=>{chSel.value=savedCh;});}async function saveNoaaSettings(e){e.preventDefault();let codes=document.getElementById("noaa-same").value.split(",").map(s=>s.trim()).filter(Boolean);let noaa={enabled:document.getElementById("noaa-enabled").checked,frequency:document.getElementById("noaa-freq").value,gain:Number(document.getElementById("noaa-gain").value||40),same_codes:codes,broadcast_every:(()=>{let raw=(document.getElementById("noaa-every-hms")?.value||"00:30:00").trim();let p=raw.split(":").map(x=>Math.max(0,parseInt(x,10)||0));while(p.length<3)p.push(0);let pad=v=>String(v).padStart(2,"0");return `${pad(Math.min(99,p))}:${pad(Math.min(59,p))}:${pad(Math.min(59,p))}`;})(),samp_rate:Number(document.getElementById("noaa-samp-rate")?.value||1024000),direct_sampling:Number(document.getElementById("noaa-direct-sampling")?.value||0),squelch:Number(document.getElementById("noaa-squelch")?.value||0),target_channels:[...document.querySelectorAll(".noaa-ch-cb:checked")].map(cb=>Number(cb.value))};await saveAppConfig({...appConfig,noaa},"noaa-settings-status");}async function startOpenWebRx(){let btn=document.getElementById('owrx-start-btn'),st=document.getElementById('owrx-status'),fr=document.getElementById('owrx-frame');if(btn)btn.disabled=true;if(st)st.textContent='Pausing NOAA SAME monitor and starting OpenWebRX+ on port 8073...';try{let r=await fetch('/api/openwebrx/start',{method:'POST'}),d=await r.json();if(!r.ok)throw new Error(d.error||'Failed to start OpenWebRX+');if(fr){fr.hidden=false;fr.src='http://'+location.hostname+':8073/';}if(st)st.textContent='OpenWebRX+ running on :8073 (NOAA SAME paused). Click Stop when finished to resume NOAA alerts.';}catch(e){if(st)st.textContent='Error: '+e.message;}finally{if(btn)btn.disabled=false;}}
 async function stopOpenWebRx(){let st=document.getElementById('owrx-status'),fr=document.getElementById('owrx-frame');if(fr){fr.src='about:blank';fr.hidden=true;}if(st)st.textContent='Stopping OpenWebRX+ and resuming NOAA SAME alert monitor...';await fetch('/api/openwebrx/stop',{method:'POST'}).catch(()=>{});if(st)st.textContent='Stopped (0% CPU). NOAA SAME alert monitor resumed.';}
 async function stopSdrLive(resumeSame=true){['noaa-live-audio','sdr-analyzer-audio'].forEach(id=>{let a=document.getElementById(id);if(a){a.pause();a.removeAttribute('src');a.load();}});if(resumeSame){await fetch('/api/sdr/stop',{method:'POST'}).catch(()=>{});}let s1=document.getElementById('noaa-live-status');if(s1)s1.textContent='Stopped (SAME alert monitor resumed)';let s2=document.getElementById('sdr-analyzer-status');if(s2)s2.textContent='Stopped';}
 async function tuneNoaaLive(freq,label){await stopSdrLive(false);let gain=document.getElementById('noaa-gain')?.value||40;let a=document.getElementById('noaa-live-audio'),st=document.getElementById('noaa-live-status');if(st)st.textContent='Connecting SDR to '+label+'...';if(a){a.volume=1.0;let sq=document.getElementById('noaa-squelch')?.value||0;a.src='/api/sdr/stream?freq='+encodeURIComponent(freq)+'&mod=fm&gain='+encodeURIComponent(gain)+'&squelch='+encodeURIComponent(sq)+'&_='+Date.now();a.onplaying=()=>{if(st)st.textContent='Playing live: '+label;};a.play().catch(e=>{if(st)st.textContent='Click Play on the audio bar ('+e.message+')';});}}
@@ -5580,7 +5584,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <label for="weather-state">State (optional)<input id="weather-state" name="state" maxlength="80" value="" placeholder="Optional"></label>
 <div class="settings-actions"><button type="submit">Save location</button><p id="weather-settings-status" class="preferences-status" aria-live="polite"></p></div>
 </form>
-<hr style="margin:18px 0;opacity:0.2"><form class="weather-settings-layout" onsubmit="saveNoaaSettings(event)"><h3 style="margin:0 0 8px">NOAA USB SDR Weather Radio (6-Hour Schedule)</h3><label class="settings-item-full"><input type="checkbox" id="noaa-enabled" checked> Enable 6-hour SDR capture (05:00, 11:00, 17:00, 23:00) + SAME alerts</label><label for="noaa-freq">NOAA Frequency<select id="noaa-freq"><option value="162.400M">162.400 MHz (WX2)</option><option value="162.425M">162.425 MHz (WX4)</option><option value="162.450M">162.450 MHz (WX5)</option><option value="162.475M" selected>162.475 MHz (WX3 - Hartford/Burlington)</option><option value="162.500M">162.500 MHz (WX6)</option><option value="162.525M">162.525 MHz (WX7)</option><option value="162.550M">162.550 MHz (WX1)</option></select></label><label for="noaa-gain">SDR Gain (0-50)<input id="noaa-gain" type="number" min="0" max="50" value="40"></label><label for="noaa-same">SAME County FIPS Codes<input id="noaa-same" value="009003" placeholder="009003"></label><label for="noaa-every-hours">Broadcast Every — Hours (0–24)<input id="noaa-every-hours" type="number" min="0" max="24" value="6"></label><label for="noaa-every-mins">Broadcast Every — Minutes (0–59)<input id="noaa-every-mins" type="number" min="0" max="59" value="0"></label><label for="noaa-samp-rate">OpenWebRX+ Sample Rate<select id="noaa-samp-rate"><option value="1024000" selected>1.024 MS/s (Smoothest Audio)</option><option value="2048000">2.048 MS/s (Wider Waterfall)</option><option value="2400000">2.400 MS/s (Max Span)</option></select></label><label for="noaa-direct-sampling">Direct Sampling Mode<select id="noaa-direct-sampling"><option value="0" selected>Disabled (VHF/UHF — NOAA 162 MHz)</option><option value="1">I-branch (HF &lt; 24 MHz)</option><option value="2">Q-branch (HF &lt; 24 MHz)</option></select></label><label for="noaa-squelch">Live Stream Squelch (0 = open)<input id="noaa-squelch" type="number" min="0" max="200" value="0"></label><div class="settings-item-full"><span style="display:block;margin-bottom:6px;font-weight:600">Channels to Broadcast</span><div id="noaa-channels-box" style="display:flex;flex-wrap:wrap;gap:10px"><label><input type="checkbox" class="noaa-ch-cb" value="0"> 0 — Public</label><label><input type="checkbox" class="noaa-ch-cb" value="1"> 1 — Channel 1</label><label><input type="checkbox" class="noaa-ch-cb" value="2"> 2 — Channel 2</label><label><input type="checkbox" class="noaa-ch-cb" value="3"> 3 — Channel 3</label><label><input type="checkbox" class="noaa-ch-cb" value="4"> 4 — Channel 4</label><label><input type="checkbox" class="noaa-ch-cb" value="5" checked> 5 — Channel 5</label><label><input type="checkbox" class="noaa-ch-cb" value="6"> 6 — Channel 6</label><label><input type="checkbox" class="noaa-ch-cb" value="7"> 7 — Channel 7</label></div></div><div class="settings-actions"><button type="submit">Save NOAA settings</button><button type="button" class="secondary" id="noaa-test-btn" onclick="runNoaaCaptureNow()">Run 90s Capture Now</button><p id="noaa-settings-status" class="preferences-status" aria-live="polite"></p></div></form><hr style="margin:18px 0;opacity:0.2"><div class="weather-settings-layout"><h3 style="margin:0 0 6px">Listen Live to NOAA Weather Radio (7 Channels)</h3><p class="settings-description" style="margin:0 0 10px">Click any NOAA frequency to stream live audio from your USB SDR (pauses SAME monitor while listening and resumes when stopped).</p><div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px"><button type="button" class="secondary" onclick="tuneNoaaLive('162.400M','162.400 MHz (WX2)')">162.400 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.425M','162.425 MHz (WX4)')">162.425 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.450M','162.450 MHz (WX5)')">162.450 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.475M','162.475 MHz (WX3 Hartford)')">162.475 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.500M','162.500 MHz (WX6)')">162.500 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.525M','162.525 MHz (WX7)')">162.525 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.550M','162.550 MHz (WX1)')">162.550 MHz</button><button type="button" onclick="stopSdrLive()">Stop Audio</button></div><audio id="noaa-live-audio" controls style="width:100%;max-width:460px;margin-bottom:6px"></audio><p id="noaa-live-status" class="preferences-status" aria-live="polite">Idle</p></div>
+<hr style="margin:18px 0;opacity:0.2"><form class="weather-settings-layout" onsubmit="saveNoaaSettings(event)"><h3 style="margin:0 0 8px">NOAA USB SDR Weather Radio (6-Hour Schedule)</h3><label class="settings-item-full"><input type="checkbox" id="noaa-enabled" checked> Enable 6-hour SDR capture (05:00, 11:00, 17:00, 23:00) + SAME alerts</label><label for="noaa-freq">NOAA Frequency<select id="noaa-freq"><option value="162.400M">162.400 MHz (WX2)</option><option value="162.425M">162.425 MHz (WX4)</option><option value="162.450M">162.450 MHz (WX5)</option><option value="162.475M" selected>162.475 MHz (WX3 - Hartford/Burlington)</option><option value="162.500M">162.500 MHz (WX6)</option><option value="162.525M">162.525 MHz (WX7)</option><option value="162.550M">162.550 MHz (WX1)</option></select></label><label for="noaa-gain">SDR Gain (0-50)<input id="noaa-gain" type="number" min="0" max="50" value="40"></label><label for="noaa-same">SAME County FIPS Codes<input id="noaa-same" value="009003" placeholder="009003"></label><label for="noaa-every-hms">Broadcast Every (HH:MM:SS)<input id="noaa-every-hms" value="00:30:00" placeholder="00:30:00" pattern="\d{1,2}:\d{2}:\d{2}"></label><label for="noaa-samp-rate">OpenWebRX+ Sample Rate<select id="noaa-samp-rate"><option value="1024000" selected>1.024 MS/s (Smoothest Audio)</option><option value="2048000">2.048 MS/s (Wider Waterfall)</option><option value="2400000">2.400 MS/s (Max Span)</option></select></label><label for="noaa-direct-sampling">Direct Sampling Mode<select id="noaa-direct-sampling"><option value="0" selected>Disabled (VHF/UHF — NOAA 162 MHz)</option><option value="1">I-branch (HF &lt; 24 MHz)</option><option value="2">Q-branch (HF &lt; 24 MHz)</option></select></label><label for="noaa-squelch">Live Stream Squelch (0 = open)<input id="noaa-squelch" type="number" min="0" max="200" value="0"></label><div class="settings-item-full"><span style="display:block;margin-bottom:6px;font-weight:600">Channels to Broadcast</span><div id="noaa-channels-box" style="display:flex;flex-wrap:wrap;gap:10px"><label><input type="checkbox" class="noaa-ch-cb" value="0"> 0 — Public</label><label><input type="checkbox" class="noaa-ch-cb" value="1"> 1 — Channel 1</label><label><input type="checkbox" class="noaa-ch-cb" value="2"> 2 — Channel 2</label><label><input type="checkbox" class="noaa-ch-cb" value="3"> 3 — Channel 3</label><label><input type="checkbox" class="noaa-ch-cb" value="4"> 4 — Channel 4</label><label><input type="checkbox" class="noaa-ch-cb" value="5" checked> 5 — Channel 5</label><label><input type="checkbox" class="noaa-ch-cb" value="6"> 6 — Channel 6</label><label><input type="checkbox" class="noaa-ch-cb" value="7"> 7 — Channel 7</label></div></div><div class="settings-actions"><button type="submit">Save NOAA settings</button><button type="button" class="secondary" id="noaa-test-btn" onclick="runNoaaCaptureNow()">Run 90s Capture Now</button><p id="noaa-settings-status" class="preferences-status" aria-live="polite"></p></div></form><hr style="margin:18px 0;opacity:0.2"><div class="weather-settings-layout"><h3 style="margin:0 0 6px">Listen Live to NOAA Weather Radio (7 Channels)</h3><p class="settings-description" style="margin:0 0 10px">Click any NOAA frequency to stream live audio from your USB SDR (pauses SAME monitor while listening and resumes when stopped).</p><div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px"><button type="button" class="secondary" onclick="tuneNoaaLive('162.400M','162.400 MHz (WX2)')">162.400 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.425M','162.425 MHz (WX4)')">162.425 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.450M','162.450 MHz (WX5)')">162.450 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.475M','162.475 MHz (WX3 Hartford)')">162.475 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.500M','162.500 MHz (WX6)')">162.500 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.525M','162.525 MHz (WX7)')">162.525 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.550M','162.550 MHz (WX1)')">162.550 MHz</button><button type="button" onclick="stopSdrLive()">Stop Audio</button></div><audio id="noaa-live-audio" controls style="width:100%;max-width:460px;margin-bottom:6px"></audio><p id="noaa-live-status" class="preferences-status" aria-live="polite">Idle</p></div>
 </section>
 <section id="settings-logs-panel" class="settings-tab-panel" hidden>
 <pre id="app-log-output" class="device-debug-output" style="max-height:60vh;margin:0 0 12px">Loading...</pre>
@@ -7753,7 +7757,7 @@ async def on_startup(app):
     app["ollama_task"] = asyncio.create_task(update_available_models())
     app["ollama_schedule_task"] = asyncio.create_task(ollama_schedule_loop())
     app["connection_task"] = asyncio.create_task(auto_connect_hardware())
-    app["noaa_task"] = asyncio.create_task(noaa_6hr_loop(lambda: globals().get("app_config", {}), send_noaa_channel_message))
+    app["noaa_task"] = asyncio.create_task(_noaa_exact_hms_loop(lambda: globals().get("app_config", {}), send_noaa_channel_message))
 
 
 async def on_cleanup(app):
