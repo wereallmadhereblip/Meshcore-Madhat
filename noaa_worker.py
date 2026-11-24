@@ -77,24 +77,48 @@ def words_to_digits(text):
     text = re.sub(r"\b(1[0-2]|[1-9])\s+([0-5]\d)\s*(am|pm)\b", lambda m: f"{m.group(1)}:{m.group(2)} {m.group(3).upper()}", text, flags=re.IGNORECASE)
     return text
 
+def _clean_noaa_vosk_phonetics(text: str) -> str:
+    fixes = [
+        (r"\b(northwest|northeast|southwest|southeast|north|south|east|west)\s+win(g|d)?s?\b", lambda m: f"{m.group(1).upper()} winds"),
+        (r"\bne\s+win'?s\b", "NE winds"),
+        (r"\b(funny|money)\b", "sunny"),
+        (r"\bnose\s+in\s+the\b", "lows in the"),
+        (r"\bpies\s+(and|in)\s+the\b", "highs in the"),
+        (r"\bbrain\s+likely\b", "rain likely"),
+        (r"\bchance\s+(to\s+bring|and\s+raimi)\b", "chance of rain"),
+        (r"\bcantabrian\b", "chance of rain"),
+    ]
+    for pat, rep in fixes:
+        text = re.sub(pat, rep, text, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", text).strip()
+
 def summarize_with_ollama(raw_transcript, model_name="llama3.2:1b-instruct-q4_K_M"):
-    raw_transcript = words_to_digits(raw_transcript)
+    cleaned = _clean_noaa_vosk_phonetics(words_to_digits(raw_transcript))
     prompt = (
-        "Summarize this NOAA weather radio transcript into a detailed weather report between "
-        "600 and 780 characters so it fits cleanly into 5 to 6 short radio packets without cutting off. "
-        "Include station/location, current temp, humidity, wind, pressure, today/tonight, full "
-        "multi-day forecast, and any warnings. Always use numeric digits (e.g., 2:45 PM, 47F, 12 mph) instead of number words. Output ONLY the report with NO intro text:\n\n" + raw_transcript
+        "Rewrite ONLY the factual weather information from the NOAA radio transcript below into a clean, "
+        "easy-to-read local forecast between 620 and 820 characters so it fills 5 to 6 short radio packets. "
+        "Cover current conditions, tonight, tomorrow, and the multi-day outlook in plain sentences. "
+        "CRITICAL RULES: Use ONLY temperatures, winds, days, and conditions actually stated in the transcript. "
+        "NEVER invent or guess any numbers, times, or marine warnings not in the transcript. "
+        "Fix obvious speech-to-text typos cleanly and output ONLY the forecast text with no intro:"
+        + chr(10) + chr(10) + cleaned
     )
-    payload = json.dumps({"model": model_name, "prompt": prompt, "stream": False}).encode("utf-8")
+    payload = json.dumps({
+        "model": model_name,
+        "prompt": prompt,
+        "stream": False,
+        "options": {"temperature": 0.2, "num_predict": 240}
+    }).encode("utf-8")
     try:
         req = urllib.request.Request("http://" + "127.0.0.1" + ":11434/api/generate", data=payload, headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=60) as resp:
             res = clean_ollama_output(json.loads(resp.read().decode("utf-8")).get("response", ""))
-            if res:
+            res = re.sub(r"[`*_#]+", "", res).strip()
+            if len(res) >= 420:
                 return res[:840]
     except Exception as e:
-        print(f"[NOAA] Ollama unavailable ({e}), using raw transcript fallback")
-    return raw_transcript.strip()[:840]
+        print(f"[NOAA] Ollama unavailable ({e}), using cleaned transcript fallback")
+    return cleaned[:840]
 
 def transcribe_wav(wav_path):
     if not os.path.exists(VOSK_MODEL_PATH):
