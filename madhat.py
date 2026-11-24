@@ -231,7 +231,7 @@ def load_app_config():
     if isinstance(saved_auto_update, dict) and isinstance(saved_auto_update.get("enabled"), bool):
         config["auto_update"]["enabled"] = saved_auto_update["enabled"]
     if (
-        not {"model", "theme", "connection", "weather", "bot", "ollama", "auto_update"}.issubset(saved_config)
+        not {"model", "theme", "connection", "weather", "bot", "ollama", "auto_update", "noaa"}.issubset(saved_config)
         or isinstance(saved_ollama, dict) and "greet_new_users" in saved_ollama
         or greeting_disabled_without_channel
     ):
@@ -239,6 +239,8 @@ def load_app_config():
             write_app_config(config)
         except OSError:
             pass
+    if isinstance(saved_config.get("noaa"), dict):
+        config["noaa"] = dict(saved_config["noaa"])
     return config
 
 
@@ -349,6 +351,7 @@ def validate_app_config(value):
         "bot": validated_bot,
         "ollama": ollama_values,
         "auto_update": {"enabled": auto_update_enabled},
+        "noaa": dict(value["noaa"]) if isinstance(value.get("noaa"), dict) else dict(app_config.get("noaa") or {}),
     }
 
 
@@ -1914,6 +1917,19 @@ def sync_noaa_schedule_and_service(noaa_cfg: dict) -> str:
     if isinstance(noaa_cfg, dict):
         noaa_cfg["hours"] = hours
     hours_csv = ",".join(str(h) for h in hours)
+    freq = str((noaa_cfg or {}).get("frequency") or "162.400M").strip()
+    gain = int((noaa_cfg or {}).get("gain") or 40)
+    sames = ",".join(str(c).strip() for c in ((noaa_cfg or {}).get("same_codes") or ["009003"]) if str(c).strip()) or "009003"
+    svc_path = Path("/etc/systemd/system/noaa-same.service")
+    if svc_path.exists():
+        try:
+            svc_txt = svc_path.read_text(encoding="utf-8")
+            svc_txt = re.sub(r"rtl_fm -f \S+ -M fm -s 22050 -g \d+", f"rtl_fm -f {freq} -M fm -s 22050 -g {gain}", svc_txt)
+            svc_txt = re.sub(r"--same \S+", f"--same {sames}", svc_txt)
+            svc_path.write_text(svc_txt, encoding="utf-8")
+            subprocess.run(["sudo", "-n", "systemctl", "daemon-reload"], capture_output=True)
+        except Exception as svc_err:
+            log_to_dash(f"NOAA service unit update warning: {svc_err}")
     try:
         cur = subprocess.run(["crontab", "-l"], capture_output=True, text=True).stdout
         kept = [ln for ln in cur.splitlines() if "noaa_worker.py" not in ln and ln.strip()]
