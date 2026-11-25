@@ -107,6 +107,12 @@ def _clean_noaa_vosk_phonetics(text: str) -> str:
         (r"\bbrain\s+likely\b", "rain likely"),
         (r"\bchance\s+(to\s+bring|and\s+raimi)\b", "chance of rain"),
         (r"\bcantabrian\b", "chance of rain"),
+        (r"\bunknown\s+death\b", "unknown depth"),
+        (r"\b(me|new),?\s+to\s+the\s+waterfront\b", "near the waterfront"),
+        (r"\bnew,\s+the\s+waterfront\b", "near the waterfront"),
+        (r"\bensure\s+line\b", "and shoreline"),
+        (r"\btitle\s+(river|rivers|ri)\b", "tidal rivers"),
+        (r"\bsuffolk\b", "Suffolk"),
     ]
     for pat, rep in fixes:
         text = re.sub(pat, rep, text, flags=re.IGNORECASE)
@@ -177,7 +183,8 @@ def _blocking_noaa_capture(noaa_cfg, ollama_model):
     same_was_active = subprocess.run(["systemctl", "is-active", "--quiet", "noaa-same.service"]).returncode == 0
     if same_was_active:
         subprocess.run(["systemctl", "stop", "noaa-same.service"], capture_output=True)
-    _t.sleep(1.2)
+    subprocess.run(["pkill", "-9", "-x", "rtl_fm"], capture_output=True)
+    _t.sleep(1.0)
     try:
         cmd = ["timeout", "60s", "rtl_fm", "-f", str(freq), "-M", "fm", "-s", "22050", "-g", str(gain), "-E", "dc", raw_file]
         res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
@@ -276,11 +283,11 @@ if __name__ == "__main__":
     summary = _blocking_noaa_capture(noaa_cfg, model)
     print(f"[{datetime.now().isoformat()}] Summary: {summary}")
     if summary:
-        url = "http://" + "localhost" + ":8080/api/send"
+        url = "http://" + "127.0.0.1" + ":8080/api/noaa-alert"
         packets = split_into_packets(summary)
         for ch in _get_target_channels(noaa_cfg):
             for idx, pkt in enumerate(packets, 1):
-                payload = json.dumps({"target": str(ch), "target_type": "channel", "message": pkt}).encode("utf-8")
+                payload = json.dumps({"channel": int(ch), "message": pkt}).encode("utf-8")
                 req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
                 try:
                     with urllib.request.urlopen(req, timeout=10) as r:
