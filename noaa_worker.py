@@ -186,7 +186,8 @@ def _blocking_noaa_capture(noaa_cfg, ollama_model):
     subprocess.run(["pkill", "-9", "-x", "rtl_fm"], capture_output=True)
     _t.sleep(1.0)
     try:
-        cmd = ["timeout", "60s", "rtl_fm", "-f", str(freq), "-M", "fm", "-s", "22050", "-g", str(gain), "-E", "dc", raw_file]
+        cap_sec = int(os.environ.get("NOAA_CAPTURE_SECONDS", noaa_cfg.get("capture_seconds", 60)))
+        cmd = ["timeout", f"{cap_sec}s", "rtl_fm", "-f", str(freq), "-M", "fm", "-s", "22050", "-g", str(gain), "-E", "dc", raw_file]
         res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     finally:
         if same_was_active:
@@ -279,7 +280,7 @@ if __name__ == "__main__":
         print(f"[{datetime.now().isoformat()}] NOAA scheduled broadcast disabled; skipping.")
         raise SystemExit(0)
     model = cfg.get("model") or (cfg.get("ollama") or {}).get("model") or "llama3.2:1b-instruct-q4_K_M"
-    print(f"[{datetime.now().isoformat()}] Starting 60s NOAA capture on {noaa_cfg.get('frequency', '162.400M')}...")
+    print(f"[{datetime.now().isoformat()}] Starting {os.environ.get('NOAA_CAPTURE_SECONDS', noaa_cfg.get('capture_seconds', 60))}s NOAA capture on {noaa_cfg.get('frequency', '162.400M')}...")
     summary = _blocking_noaa_capture(noaa_cfg, model)
     print(f"[{datetime.now().isoformat()}] Summary: {summary}")
     if summary:
