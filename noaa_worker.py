@@ -17,7 +17,7 @@ TEMP_WAV = "/tmp/noaa_capture.wav"
 def clean_ollama_output(text):
     text = text.strip()
     lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if len(lines) > 1 and lines.endswith(":"):
+    if len(lines) > 1 and lines[0].endswith(":"):
         lines = lines[1:]
     text = " ".join(lines)
     text = re.sub(r"^(here is|here's|summary|weather summary)[^:]{0,40}:\s*", "", text, flags=re.IGNORECASE)
@@ -79,10 +79,25 @@ def words_to_digits(text):
 
 def _clean_noaa_vosk_phonetics(text: str) -> str:
     fixes = [
+        (r"\bnational\s+whether\s+service\b", "National Weather Service"),
+        (r"\bhart\s+ford\b", "Hartford"),
+        (r"\b(burlington|berlington|burling\s+ton)\b", "Burlington"),
+        (r"\b(litchfield|lichfield)\b", "Litchfield"),
+        (r"\b(tolland|talland)\b", "Tolland"),
+        (r"\b(windham|wind\s+ham)\b", "Windham"),
+        (r"\b(middlesex|middle\s+sex)\b", "Middlesex"),
+        (r"\b(connecticut|connected\s+cut)\b", "Connecticut"),
         (r"\b(northwest|northeast|southwest|southeast|north|south|east|west)\s+win(g|d)?s?\b", lambda m: f"{m.group(1).upper()} winds"),
         (r"\bne\s+win'?s\b", "NE winds"),
+        (r"\bnw\s+win'?s\b", "NW winds"),
+        (r"\bsw\s+win'?s\b", "SW winds"),
+        (r"\bse\s+win'?s\b", "SE winds"),
         (r"\bwhen\s+was\s+(north|south|east|west|northwest|northeast|southwest|southeast)\b", lambda m: f"wind was {m.group(1)}"),
         (r"\b(guys|guy)\s+(are\s+you|is\s+rina|ranged)\s+from\b", "skies ranged from"),
+        (r"\bmost\s+lee\s+(cloudy|sunny|clear)\b", r"mostly \1"),
+        (r"\bpart\s+lee\s+(cloudy|sunny)\b", r"partly \1"),
+        (r"\brelative\s+you\s+mid\s+itty\b", "relative humidity"),
+        (r"\bbar\s+oh\s+meter\b", "barometer"),
         (r"\bmoisture\b", "Worcester"),
         (r"\bnew\s+haven\s+harmer\b", "New Haven Harbor"),
         (r"\bcoastal\s+whether\s+sure\b", "coastal weather shore"),
@@ -160,7 +175,7 @@ def _blocking_noaa_capture(noaa_cfg, ollama_model):
         os.remove(raw_file)
     import time as _t
     _t.sleep(1.2)
-    cmd = ["timeout", "90s", "rtl_fm", "-f", str(freq), "-M", "fm", "-s", "22050", "-g", str(gain), raw_file]
+    cmd = ["timeout", "90s", "rtl_fm", "-f", str(freq), "-M", "fm", "-s", "22050", "-g", str(gain), "-E", "dc", raw_file]
     res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     if not os.path.exists(raw_file) or os.path.getsize(raw_file) == 0:
         try:
@@ -170,10 +185,19 @@ def _blocking_noaa_capture(noaa_cfg, ollama_model):
             pass
     summary = ""
     if os.path.exists(raw_file) and os.path.getsize(raw_file) > 0:
-        with open(raw_file, "rb") as pcm:
-            pcm_data = pcm.read()
-        with wave.open(TEMP_WAV, "wb") as wf:
-            wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(22050); wf.writeframes(pcm_data)
+        ff_res = subprocess.run(
+            [
+                "ffmpeg", "-y", "-f", "s16le", "-ar", "22050", "-ac", "1", "-i", raw_file,
+                "-af", "highpass=f=280,lowpass=f=3200,afftdn=nf=-25,dynaudnorm=f=150:g=15",
+                "-ar", "16000", "-ac", "1", TEMP_WAV
+            ],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        if ff_res.returncode != 0 or not os.path.exists(TEMP_WAV) or os.path.getsize(TEMP_WAV) < 1024:
+            with open(raw_file, "rb") as pcm:
+                pcm_data = pcm.read()
+            with wave.open(TEMP_WAV, "wb") as wf:
+                wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(22050); wf.writeframes(pcm_data)
         transcript = transcribe_wav(TEMP_WAV)
         if len(transcript) > 25:
             summary = summarize_with_ollama(transcript, model_name=ollama_model)
