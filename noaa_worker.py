@@ -285,15 +285,9 @@ if __name__ == "__main__":
     print(f"[{datetime.now().isoformat()}] Summary: {summary}")
     if summary:
         url = "http://" + "127.0.0.1" + ":8080/api/noaa-alert"
-        packets = split_into_packets(summary)
-        for ch in _get_target_channels(noaa_cfg):
-            for idx, pkt in enumerate(packets, 1):
-                payload = pkt.encode("utf-8")
-                req = urllib.request.Request(url, data=payload, headers={"Content-Type": "text/plain; charset=utf-8"})
-                try:
-                    with urllib.request.urlopen(req, timeout=10) as r:
-                        print(f"[{datetime.now().isoformat()}] Sent packet {idx}/{len(packets)} to ch {ch}: HTTP {r.status}")
-                except Exception as send_err:
-                    print(f"[{datetime.now().isoformat()}] Send error ch {ch} pkt {idx}: {send_err}")
-                if idx < len(packets):
-                    _time.sleep(6.0)
+        req = urllib.request.Request(url, data=summary.encode("utf-8"), headers={"Content-Type": "text/plain; charset=utf-8"})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                print(f"[{datetime.now().isoformat()}] Broadcast NOAA summary via /api/noaa-alert: HTTP {r.status}")
+        except Exception as send_err:
+            print(f"[{datetime.now().isoformat()}] Broadcast error: {send_err}")
