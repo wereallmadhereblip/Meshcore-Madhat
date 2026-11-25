@@ -174,9 +174,16 @@ def _blocking_noaa_capture(noaa_cfg, ollama_model):
     if os.path.exists(raw_file):
         os.remove(raw_file)
     import time as _t
+    same_was_active = subprocess.run(["systemctl", "is-active", "--quiet", "noaa-same.service"]).returncode == 0
+    if same_was_active:
+        subprocess.run(["systemctl", "stop", "noaa-same.service"], capture_output=True)
     _t.sleep(1.2)
-    cmd = ["timeout", "90s", "rtl_fm", "-f", str(freq), "-M", "fm", "-s", "22050", "-g", str(gain), "-E", "dc", raw_file]
-    res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    try:
+        cmd = ["timeout", "60s", "rtl_fm", "-f", str(freq), "-M", "fm", "-s", "22050", "-g", str(gain), "-E", "dc", raw_file]
+        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    finally:
+        if same_was_active:
+            subprocess.run(["systemctl", "start", "noaa-same.service"], capture_output=True)
     if not os.path.exists(raw_file) or os.path.getsize(raw_file) == 0:
         try:
             with open("/var/log/noaa_worker.log", "a", encoding="utf-8") as _lf:
@@ -265,7 +272,7 @@ if __name__ == "__main__":
         print(f"[{datetime.now().isoformat()}] NOAA scheduled broadcast disabled; skipping.")
         raise SystemExit(0)
     model = cfg.get("model") or (cfg.get("ollama") or {}).get("model") or "llama3.2:1b-instruct-q4_K_M"
-    print(f"[{datetime.now().isoformat()}] Starting 90s NOAA capture on {noaa_cfg.get('frequency', '162.400M')}...")
+    print(f"[{datetime.now().isoformat()}] Starting 60s NOAA capture on {noaa_cfg.get('frequency', '162.400M')}...")
     summary = _blocking_noaa_capture(noaa_cfg, model)
     print(f"[{datetime.now().isoformat()}] Summary: {summary}")
     if summary:
