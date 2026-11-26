@@ -3559,10 +3559,14 @@ async def handle_incoming_message(event):
         return
 
     # Replies to remote-management commands go to the waiting request, never to the AI bot.
-    if packet.get("txt_type") == 1:
-        for prefix, queue in list(cli_reply_waiters.items()):
-            if str(sender).lower().startswith(prefix) or prefix.startswith(str(sender).lower()):
-                queue.put_nowait(text)
+    sender_lc = str(sender).lower()
+    matched_waiters = [
+        q for prefix, q in list(cli_reply_waiters.items())
+        if sender_lc.startswith(prefix) or prefix.startswith(sender_lc)
+    ]
+    if packet.get("txt_type") == 1 or matched_waiters:
+        for q in matched_waiters:
+            q.put_nowait(text)
         return
 
     message_id = packet.get("id") or f"{sender}:{packet.get('sender_timestamp', '')}:{text}"
@@ -4653,7 +4657,7 @@ button:hover{transform:translateY(-1px);border-color:var(--accent);background:va
 .manage-login,.manage-tabs,.manage-cmd-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 .manage-login input,.manage-cmd-row input{flex:1;min-width:120px}
 .manage-tabs button{opacity:.65}.manage-tabs button.active{opacity:1;border-color:var(--accent);color:var(--accent)}
-.manage-out{margin:0;min-height:140px;max-height:260px;overflow:auto;padding:8px;border:1px solid var(--border);border-radius:4px;white-space:pre-wrap;font:11px ui-monospace,monospace}.manage-panel.expanded{min-height:420px;flex:1 1 auto}.manage-panel.expanded .manage-out{min-height:300px;max-height:54vh}
+.manage-out{margin:0;min-height:140px;max-height:260px;overflow:auto;padding:8px;border:1px solid var(--border);border-radius:4px;white-space:pre-wrap;font:11px ui-monospace,monospace}.manage-panel.expanded{flex:1 1 auto;min-height:0;height:100%}.manage-panel.expanded .manage-out{flex:1 1 auto;min-height:260px;max-height:none}.chat-panel.managing-full{position:fixed;inset:76px 18px 18px 18px;z-index:85;height:auto;max-height:none;box-shadow:0 18px 48px #000c;border-color:var(--accent)}.cli-suggest{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:40;max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--panel-bg);box-shadow:0 10px 24px #0008;display:grid;gap:2px;padding:4px}.cli-suggest[hidden]{display:none}.cli-suggest button{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 8px;text-align:left;font:11px ui-monospace,monospace;border:1px solid transparent;border-radius:4px;background:transparent;color:var(--text)}.cli-suggest button:hover,.cli-suggest button.active{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}.cli-suggest small{color:var(--muted);font-family:inherit;font-size:10px}.cli-ghost-wrap{position:relative;flex:1;min-width:160px;display:flex;align-items:center}.cli-ghost{position:absolute;inset:0;padding:8px 10px;pointer-events:none;color:var(--muted);opacity:.55;font:12px ui-monospace,monospace;white-space:pre;overflow:hidden}.cli-ghost-wrap input{position:relative;z-index:1;background:transparent !important;font:12px ui-monospace,monospace;width:100%}
 .manage-group{display:flex;flex-direction:column;gap:6px;padding:6px 0;border-top:1px solid var(--border)}
 .manage-group h4{margin:0;color:var(--muted);font-size:10px;text-transform:uppercase}
 .manage-actions{display:flex;flex-wrap:wrap;gap:4px}
@@ -5403,7 +5407,7 @@ setInterval(()=>{if(activeView==='analyzer')loadAnalyzerRadioStatus();else if(ac
 function updateSearchPlaceholders(){let contactPlaceholder='Search '+mapNodes.length+' contacts';for(let id of ['node-search','map-node-search']){let input=document.getElementById(id);if(input)input.placeholder=contactPlaceholder}let channelSearch=document.getElementById('channel-search');if(channelSearch)channelSearch.placeholder='Search '+meshChannels.length+' channels'}
 async function peers(){let r=await fetch('/api/peers'),d=await r.json();gatewayTelemetry=d.gateway_telemetry||{};mapNodes=d.nodes||[];meshChannels=d.channels||[];peerLimits=d.limits||{};updateAddCapacity();updateSearchPlaceholders();gateway_battery.textContent=gatewayTelemetry.battery!=null?gatewayTelemetry.battery+'%':'Unavailable';system_battery.textContent=d.system_battery!=null?d.system_battery+'%':'Unavailable';if(!mapNodes.some(item=>String(item.id)===selectedNodeId))selectedNodeId='';if(!meshChannels.some(item=>String(item.id)===selectedChannelId))selectedChannelId='';renderConversationTargets('node');renderConversationTargets('channel');if(typeof refreshNoaaTargetLabels==='function')refreshNoaaTargetLabels();renderKnownPeers();renderMapMarkers();renderAnalyzerStats();renderIncomingAdverts(d.incoming_adverts||[]);if(liveTraceMap)renderLiveTraceMarkers()}
 function parseChannelSender(text){let bracket=text.match(/^\[([^\]]{1,24})\]\s*/);if(bracket)return bracket[1];let colon=text.match(/^([A-Za-z0-9 _-]{1,24}):\s/);if(colon)return colon[1];return null}
-async function history(type,id,boxId,scrollToLatest=false){let box=document.getElementById(boxId);if(!id){box.replaceChildren();updateConversationMenu(type);return}if(type==='node'&&isRepeaterNode(id)){if(manageNodeId===String(id))return;let note=document.createElement('p');note.className='map-empty';note.textContent='Direct messages are not supported for repeater nodes.';box.replaceChildren(note);return}try{let response=await fetch('/api/chat-history?target_type='+encodeURIComponent(type)+'&target='+encodeURIComponent(id)),data=await response.json();if(!response.ok)throw new Error(data.error||'Message history could not be loaded');updateConversationMenu(type,data.metadata||{});let wasAtLatest=box.scrollHeight-box.clientHeight-box.scrollTop<=40,previousTop=box.scrollTop,previousBehavior=box.style.scrollBehavior;box.style.scrollBehavior='auto';box.replaceChildren();let peerName=type==='node'?(mapNodes.find(item=>String(item.id)===id)?.name||id):(meshChannels.find(item=>String(item.id)===id)?.name||('Channel '+id));for(let message of data.messages||[]){let outgoing=message.direction==='outgoing';let item=document.createElement('div');item.className='chat-message '+(outgoing?'outgoing':'incoming');let sender=outgoing?'You':(type==='channel'?(parseChannelSender(message.text)||peerName):peerName);let meta=document.createElement('div');meta.className='chat-message-meta';let avatar=document.createElement('span');avatar.className='chat-avatar';avatar.style.background=hashColor(outgoing?'you':id);avatar.textContent=sender.charAt(0)||'?';let senderLabel=document.createElement('span');senderLabel.className='chat-sender';senderLabel.textContent=sender;let time=document.createElement('span');time.className='chat-time';let timeStr=fmtTime(message.timestamp,message.sort_timestamp);if(!outgoing&&Number.isInteger(Number(message.path_len))&&Number(message.path_len)>=0){let hLen=Number(message.path_len);let modeEl=document.getElementById('path-hash-mode');let fallbackBytes=(modeEl&&['0','1','2'].includes(modeEl.value))?(Number(modeEl.value)+1):1;let hBytes=Number(message.path_hash_bytes)||(Array.isArray(message.path_nodes)&&message.path_nodes[0]?Math.max(1,Math.round(String(message.path_nodes[0]).length/2)):fallbackBytes);let hopLabel=hLen===0?'Direct':(hLen+(hLen===1?' hop':' hops'));timeStr+=' · '+hopLabel+' ('+hBytes+'-byte)'}time.textContent=timeStr;let body=document.createElement('div');body.className='chat-message-body';body.textContent=message.text;if(outgoing){let status=document.createElement('span');status.className='chat-status';let statusLabels={sent:'Sent',delivered:'Delivered',failed:'Failed'},heardCount=Number(message.heard);status.textContent=message.status==='delivered'&&Number.isInteger(heardCount)&&heardCount>0?'Delivered · '+heardCount+' heard':(statusLabels[message.status]||'Sent');let bubble=document.createElement('div');bubble.className='chat-bubble';bubble.append(body);meta.className='chat-caption';meta.append(status,time);item.append(bubble,meta)}else{let bubble=document.createElement('div'),caption=document.createElement('div');bubble.className='chat-bubble';bubble.append(body);meta.append(avatar,senderLabel);caption.className='chat-caption';caption.append(time);item.append(meta,bubble,caption)}item.tabIndex=0;item.setAttribute('role','button');item.oncontextmenu=event=>{event.preventDefault();openMessageActions(type,id,message,sender,data.blocked||[])};item.onkeydown=event=>{if(event.key==='Enter')openMessageActions(type,id,message,sender,data.blocked||[])};box.appendChild(item)}box.scrollTop=scrollToLatest||wasAtLatest?box.scrollHeight:previousTop;box.style.scrollBehavior=previousBehavior}catch(error){box.textContent=error.message}}
+async function history(type,id,boxId,scrollToLatest=false){let box=document.getElementById(boxId);if(!id){box.replaceChildren();updateConversationMenu(type);return}if(type==='node'&&manageNodeId===String(id))return;if(type==='node'&&isRepeaterNode(id)){let note=document.createElement('p');note.className='map-empty';note.textContent='Direct messages are not supported for repeater nodes.';box.replaceChildren(note);return}try{let response=await fetch('/api/chat-history?target_type='+encodeURIComponent(type)+'&target='+encodeURIComponent(id)),data=await response.json();if(!response.ok)throw new Error(data.error||'Message history could not be loaded');updateConversationMenu(type,data.metadata||{});let wasAtLatest=box.scrollHeight-box.clientHeight-box.scrollTop<=40,previousTop=box.scrollTop,previousBehavior=box.style.scrollBehavior;box.style.scrollBehavior='auto';box.replaceChildren();let peerName=type==='node'?(mapNodes.find(item=>String(item.id)===id)?.name||id):(meshChannels.find(item=>String(item.id)===id)?.name||('Channel '+id));for(let message of data.messages||[]){let outgoing=message.direction==='outgoing';let item=document.createElement('div');item.className='chat-message '+(outgoing?'outgoing':'incoming');let sender=outgoing?'You':(type==='channel'?(parseChannelSender(message.text)||peerName):peerName);let meta=document.createElement('div');meta.className='chat-message-meta';let avatar=document.createElement('span');avatar.className='chat-avatar';avatar.style.background=hashColor(outgoing?'you':id);avatar.textContent=sender.charAt(0)||'?';let senderLabel=document.createElement('span');senderLabel.className='chat-sender';senderLabel.textContent=sender;let time=document.createElement('span');time.className='chat-time';let timeStr=fmtTime(message.timestamp,message.sort_timestamp);if(!outgoing&&Number.isInteger(Number(message.path_len))&&Number(message.path_len)>=0){let hLen=Number(message.path_len);let modeEl=document.getElementById('path-hash-mode');let fallbackBytes=(modeEl&&['0','1','2'].includes(modeEl.value))?(Number(modeEl.value)+1):1;let hBytes=Number(message.path_hash_bytes)||(Array.isArray(message.path_nodes)&&message.path_nodes[0]?Math.max(1,Math.round(String(message.path_nodes[0]).length/2)):fallbackBytes);let hopLabel=hLen===0?'Direct':(hLen+(hLen===1?' hop':' hops'));timeStr+=' · '+hopLabel+' ('+hBytes+'-byte)'}time.textContent=timeStr;let body=document.createElement('div');body.className='chat-message-body';body.textContent=message.text;if(outgoing){let status=document.createElement('span');status.className='chat-status';let statusLabels={sent:'Sent',delivered:'Delivered',failed:'Failed'},heardCount=Number(message.heard);status.textContent=message.status==='delivered'&&Number.isInteger(heardCount)&&heardCount>0?'Delivered · '+heardCount+' heard':(statusLabels[message.status]||'Sent');let bubble=document.createElement('div');bubble.className='chat-bubble';bubble.append(body);meta.className='chat-caption';meta.append(status,time);item.append(bubble,meta)}else{let bubble=document.createElement('div'),caption=document.createElement('div');bubble.className='chat-bubble';bubble.append(body);meta.append(avatar,senderLabel);caption.className='chat-caption';caption.append(time);item.append(meta,bubble,caption)}item.tabIndex=0;item.setAttribute('role','button');item.oncontextmenu=event=>{event.preventDefault();openMessageActions(type,id,message,sender,data.blocked||[])};item.onkeydown=event=>{if(event.key==='Enter')openMessageActions(type,id,message,sender,data.blocked||[])};box.appendChild(item)}box.scrollTop=scrollToLatest||wasAtLatest?box.scrollHeight:previousTop;box.style.scrollBehavior=previousBehavior}catch(error){box.textContent=error.message}}
 async function deleteTarget(type){let selected=type==='node'?selectedNodeId:selectedChannelId;if(!selected)return;if(!confirm('Delete this '+type+' from the device? This cannot be undone.'))return;let response=await fetch('/api/delete-target',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_type:type,target:selected})}),data=await response.json();if(!response.ok){alert(data.error||'Delete failed');return}if(type==='node'){selectedNodeId=null;document.getElementById('node-chat-title').textContent='Select a node';document.getElementById('node-chat-detail').textContent='Choose a node to view its conversation.';document.getElementById('node-send').disabled=true;document.getElementById('node-chat-history').replaceChildren()}else{selectedChannelId=null;document.getElementById('channel-chat-title').textContent='Select a channel';document.getElementById('channel-chat-detail').textContent='Choose a channel to view its conversation.';document.getElementById('channel-send').disabled=true;document.getElementById('channel-chat-history').replaceChildren()}updateConversationMenu(type);let menu=document.getElementById(type+'-chat-options');if(menu)menu.open=false;await peers()}
 async function manageConversation(type,action){let selected=type==='node'?selectedNodeId:selectedChannelId;if(!selected)return;if(action==='clear'&&!confirm('Clear this conversation history? This cannot be undone.'))return;let response=await fetch('/api/chat-management',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_type:type,target:selected,action})}),data=await response.json();if(!response.ok){alert(data.error||'Conversation could not be updated');return}let menu=document.querySelector('#'+(type==='node'?'node':'channel')+'-chat-options');if(menu)menu.open=false;await history(type,selected,type==='node'?'node-chat-history':'channel-chat-history');await peers()}
 const REPEATER_OPTION_GROUPS=[
@@ -5416,7 +5420,17 @@ const REPEATER_OPTION_GROUPS=[
 ];
 function closeRepeaterManage(){
   let pEl=document.getElementById('node-manage-panel');
-  if(pEl){pEl.classList.remove('expanded');let f=pEl.parentElement?.querySelector('form');if(f)f.hidden=false;}manageNodeId='';let panel=document.getElementById('node-manage-panel'),box=document.getElementById('node-chat-history');if(panel){panel.hidden=true;panel.replaceChildren()}if(box)box.hidden=false}
+  if(pEl){
+    pEl.classList.remove('expanded');
+    let cp=pEl.closest('.chat-panel');if(cp)cp.classList.remove('managing-full');
+    let rail=cp?.parentElement?.querySelector('.conversation-rail');if(rail)rail.hidden=false;
+    let f=cp?.querySelector('form');if(f)f.hidden=false;
+  }
+  manageNodeId='';
+  let panel=document.getElementById('node-manage-panel'),box=document.getElementById('node-chat-history');
+  if(panel){panel.hidden=true;panel.replaceChildren()}
+  if(box)box.hidden=false;
+}
 async function repeaterApi(body){let r=await fetch('/api/contacts/manage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),d=await r.json().catch(()=>({}));d._status=r.status;return d}
 function openRepeaterManage(peer){
   let id=String(peer.id),name=peer.name||id,panel=document.getElementById('node-manage-panel'),box=document.getElementById('node-chat-history');
@@ -5427,31 +5441,96 @@ function openRepeaterManage(peer){
   let run=async text=>{if(!text)return;out.textContent+='> '+text+'\n';out.scrollTop=out.scrollHeight;let d=await repeaterApi({target:id,action:'command',command:text});out.textContent+=(d.reply||d.error||'No reply')+'\n';out.scrollTop=out.scrollHeight};
   let lock=el=>{el.disabled=true;unlockables.push(el);return el};
   let head=mk('div','','manage-login'),title=mk('strong','Manage '+name),pw=mk('input');pw.type='password';pw.placeholder='Admin password';pw.autocomplete='off';
-  let chatForm=panel.parentElement?.querySelector('form');
+  let chatPanel=panel.closest('.chat-panel');
+  let chatForm=chatPanel?.querySelector('form');
+  const expandManageBox=()=>{
+    panel.classList.add('expanded');
+    if(chatPanel)chatPanel.classList.add('managing-full');
+  };
   if(chatForm)chatForm.hidden=true;
-  let login=btn('Log in',async()=>{login.disabled=true;out.textContent+='Logging in...\n';let d=await repeaterApi({target:id,action:'login',password:pw.value});pw.value='';login.disabled=false;if(d.ok){out.textContent+='Logged in.\n';panel.classList.add('expanded');unlockables.forEach(e=>e.disabled=false);cmd.focus()}else out.textContent+=(d.error||'Login failed')+'\n'});
+  let login=btn('Log in',async()=>{
+    login.disabled=true;out.textContent+='Logging in...\n';
+    let d=await repeaterApi({target:id,action:'login',password:pw.value});
+    pw.value='';login.disabled=false;
+    if(d.ok){
+      out.textContent+='Logged in.\n';
+      expandManageBox();
+      unlockables.forEach(e=>e.disabled=false);
+      cmd.focus();
+    }else out.textContent+=(d.error||'Login failed')+'\n';
+  });
   pw.onkeydown=e=>{if(e.key==='Enter')login.click()};
   head.append(title,pw,login,btn('Close',closeRepeaterManage));
   let tabs=mk('div','','manage-tabs'),term=mk('div'),opts=mk('div');opts.hidden=true;
+  term.style.cssText='display:flex;flex-direction:column;gap:6px;flex:1;min-height:0';
   let tTerm=btn('Terminal',()=>{term.hidden=false;opts.hidden=true;tTerm.classList.add('active');tOpts.classList.remove('active')}),tOpts=btn('Options',()=>{term.hidden=true;opts.hidden=false;tOpts.classList.add('active');tTerm.classList.remove('active')});
   tTerm.classList.add('active');tabs.append(tTerm,tOpts);
-  const CLI_SYNTAX=[
-    'repeater on','repeater off','set repeat on','set repeat off',
-    'advert','ver','clock','clock sync','neighbors','temps','batt',
-    'get name','get freq','get tx','get radio','get af','get rxdelay',
-    'set name ','set freq ','set tx ','set radio ','set password ',
-    'log start','log stop','log erase','reboot'
+  const CLI_COMMANDS=[
+    ['repeater on','Enable packet repeating'],['repeater off','Disable packet repeating'],
+    ['set repeat on','Enable repeat mode'],['set repeat off','Disable repeat mode'],
+    ['advert','Send flood advertisement'],['ver','Show firmware version'],
+    ['clock','Show node clock'],['clock sync','Sync node clock to host'],
+    ['neighbors','List heard neighbors'],['temps','Show temperature sensors'],
+    ['batt','Show battery voltage'],['stats-core','Show core statistics'],
+    ['stats-radio','Show radio statistics'],['stats-packets','Show packet counters'],
+    ['get name','Read node name'],['get freq','Read radio frequency'],
+    ['get tx','Read TX power (dBm)'],['get radio','Read freq,bw,sf,cr'],
+    ['get af','Read airtime factor'],['get rxdelay','Read RX delay'],
+    ['get txdelay','Read TX delay'],['get advert.interval','Read local advert interval'],
+    ['get flood.advert.interval','Read flood advert interval'],['get flood.max','Read max flood hops'],
+    ['get agc.reset.interval','Read AGC reset interval'],['get multi.acks','Read multi-ACK setting'],
+    ['get allow.read.only','Read guest read-only mode'],['get guest.password','Read room guest password'],
+    ['set name ','Set node name'],['set freq ','Set frequency in MHz'],
+    ['set tx ','Set TX power in dBm'],['set radio ','Set freq,bw,sf,cr'],
+    ['set af ','Set airtime factor'],['set rxdelay ','Set RX delay'],
+    ['set txdelay ','Set TX delay'],['set advert.interval ','Set local advert minutes'],
+    ['set flood.advert.interval ','Set flood advert hours'],['set flood.max ','Set max flood hops'],
+    ['set agc.reset.interval ','Set AGC reset seconds'],['set multi.acks ','Set multi-ACK (0 or 1)'],
+    ['set allow.read.only ','Set guest read-only (on/off)'],['set password ','Change admin password'],
+    ['set guest.password ','Set room guest password'],['set lat ','Set latitude'],
+    ['set lon ','Set longitude'],['log start','Start packet logging'],
+    ['log stop','Stop packet logging'],['log erase','Erase stored logs'],
+    ['clear stats','Reset statistics counters'],['reboot','Reboot remote node']
   ];
-  let dl=document.createElement('datalist');dl.id='manage-cli-datalist';
-  CLI_SYNTAX.forEach(c=>{let o=document.createElement('option');o.value=c;dl.appendChild(o);});
-  let cmd=lock(mk('input'));cmd.setAttribute('list','manage-cli-datalist');
-  cmd.placeholder='Command (e.g. repeater on, repeater off, advert, ver, get name)';
-  let send=lock(btn('Send',()=>{let t=cmd.value.trim();cmd.value='';run(t)}));
-  cmd.onkeydown=e=>{if(e.key==='Enter')send.click()};
-  let row=mk('div','','manage-cmd-row');row.append(cmd,dl,send);
-  let hints=mk('div','','manage-actions');hints.style.margin='4px 0';
+  let cmdWrap=mk('div');cmdWrap.style.cssText='position:relative;flex:1;min-width:160px;display:flex';
+  let cmd=lock(mk('input'));cmd.autocomplete='off';cmd.spellcheck=false;cmd.style.width='100%';
+  cmd.placeholder='Start typing a command (e.g. repeater on, set repeat, get, advert)...';
+  let sugBox=mk('div','','cli-suggest');sugBox.hidden=true;
+  let sugIdx=-1;
+  const renderCliSug=()=>{
+    if(cmd.disabled){sugBox.hidden=true;return}
+    let q=cmd.value.trim().toLowerCase();
+    let matches=CLI_COMMANDS.filter(([c,d])=>!q||c.toLowerCase().includes(q)||d.toLowerCase().includes(q));
+    sugBox.replaceChildren();sugIdx=-1;
+    if(!matches.length||(!q&&document.activeElement!==cmd)){sugBox.hidden=true;return}
+    matches.slice(0,14).forEach(([c,d],i)=>{
+      let item=document.createElement('button');item.type='button';
+      let left=mk('span',c),right=mk('small',d);
+      item.append(left,right);
+      item.onmousedown=e=>{e.preventDefault();cmd.value=c;sugBox.hidden=true;cmd.focus();if(!c.endsWith(' '))send.click();};
+      sugBox.appendChild(item);
+    });
+    sugBox.hidden=false;
+  };
+  cmd.oninput=renderCliSug;
+  cmd.onfocus=renderCliSug;
+  cmd.onblur=()=>setTimeout(()=>{sugBox.hidden=true},140);
+  cmd.onkeydown=e=>{
+    let items=[...sugBox.querySelectorAll('button')];
+    if(!sugBox.hidden&&items.length){
+      if(e.key==='ArrowDown'){e.preventDefault();sugIdx=(sugIdx+1)%items.length;items.forEach((b,i)=>b.classList.toggle('active',i===sugIdx));items[sugIdx].scrollIntoView({block:'nearest'});return}
+      if(e.key==='ArrowUp'){e.preventDefault();sugIdx=(sugIdx-1+items.length)%items.length;items.forEach((b,i)=>b.classList.toggle('active',i===sugIdx));items[sugIdx].scrollIntoView({block:'nearest'});return}
+      if(e.key==='Tab'){e.preventDefault();let pick=items[sugIdx>=0?sugIdx:0];if(pick){cmd.value=pick.firstChild.textContent;sugBox.hidden=true;}return}
+      if(e.key==='Escape'){sugBox.hidden=true;return}
+    }
+    if(e.key==='Enter'){sugBox.hidden=true;send.click();}
+  };
+  cmdWrap.append(cmd,sugBox);
+  let send=lock(btn('Send',()=>{let t=cmd.value.trim();cmd.value='';sugBox.hidden=true;run(t)}));
+  let row=mk('div','','manage-cmd-row');row.append(cmdWrap,send);
+  let hints=mk('div','','manage-actions');hints.style.margin='2px 0';
   ['repeater on','repeater off','advert','ver','clock','neighbors','get name','reboot'].forEach(c=>{
-    let chip=lock(btn(c,()=>{cmd.value=c;cmd.focus();}));
+    let chip=lock(btn(c,()=>{cmd.value=c;cmd.focus();renderCliSug();}));
     chip.className='secondary';chip.style.cssText='padding:2px 7px;font-size:10px';
     hints.appendChild(chip);
   });
@@ -6065,7 +6144,7 @@ window.openMessageActions=function(type,id,message,sender,blocked,nodePeer){
     sheet.append(action('Reset Path','path',async()=>{if(!confirm('Reset the route to '+(knownPeer.name||knownPeer.id)+'? The next message will use flood routing.'))return;let d=await post('/api/contacts/path',{target:String(knownPeer.id),action:'reset'});close();if(d._status===200){showToast('Path reset',(knownPeer.name||knownPeer.id)+' will be re-discovered');if(typeof peers==='function')peers()}else showToast('Error',d.error||'Could not reset path')}));
     if(Number(knownPeer.type)===2)sheet.append(action('Ping','signal',async()=>{showToast('Ping','Pinging '+(knownPeer.name||knownPeer.id)+'...');let d=await post('/api/contacts/ping',{target:String(knownPeer.id)});close();if(d.ok)showToast('Ping reply',(knownPeer.name||knownPeer.id)+': '+d.rtt_ms+' ms'+(Number.isInteger(d.hops)&&d.hops>=0?', '+d.hops+' hop'+(d.hops===1?'':'s'):''));else showToast('Ping failed',d.error||'No reply')}));
     if([2,3].includes(Number(knownPeer.type)))sheet.append(action('Manage','user',()=>{
-      if(nodeMode&&Number(knownPeer.type)===2){close();openRepeaterManage(knownPeer);return}
+      if([2,3].includes(Number(knownPeer.type))){close();openRepeaterManage(knownPeer);return}
       sheet.querySelector('.sheet-manage')?.remove();let box=document.createElement('div');box.className='sheet-paths sheet-manage';
       let pw=document.createElement('input');pw.type='password';pw.placeholder='Admin password';pw.autocomplete='off';
       let login=document.createElement('button');login.type='button';login.textContent='Log in';
@@ -7164,6 +7243,13 @@ async def manage_contact_handler(request):
             command = str(data.get("command", "")).strip()
             if not command or len(command) > 150:
                 return web.json_response({"error": "Enter a command (150 characters max)"}, status=400)
+            cmd_lc = command.lower()
+            if cmd_lc == "repeater on":
+                command = "set repeat on"
+            elif cmd_lc == "repeater off":
+                command = "set repeat off"
+            elif cmd_lc in {"repeater", "get repeater"}:
+                command = "get repeat"
             prefix = str(contact["public_key"]).lower()[:12]
             queue = asyncio.Queue()
             cli_reply_waiters[prefix] = queue
