@@ -5091,6 +5091,26 @@ body[data-theme="tron"] .map-search-overlay .search-input-row{background:rgba(0,
 body[data-theme="tron"] #map-view .map-search-overlay:not(.open) #map-node-list{display:none}
 #map-view .map-layout,body[data-theme="tron"].tron-overview #map-view .map-layout{grid-template-columns:minmax(0,1fr)!important}
 #map-view .map-surface,#map-view #map-canvas{width:100%}
+
+.mc-admin{display:flex;flex-direction:column;height:100%;min-height:0;background:var(--log-bg);border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.mc-admin-top{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;background:var(--panel-bg);border-bottom:1px solid var(--border)}
+.mc-admin-title{display:flex;align-items:center;gap:10px}.mc-admin-title h3{margin:0;font-size:14px}.mc-admin-title small{display:block;color:var(--muted);font-size:11px}
+.mc-admin-body{flex:1;min-height:0;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:12px}
+.mc-admin-banner{padding:8px 12px;border-radius:6px;background:color-mix(in srgb,var(--accent) 18%,transparent);border:1px solid var(--accent);font-size:11px}
+.mc-card{border:1px solid var(--border);border-radius:8px;background:var(--panel-bg);overflow:hidden}
+.mc-card-hdr{display:flex;align-items:center;justify-content:space-between;padding:9px 12px;border-bottom:1px solid var(--border);font-weight:700;font-size:12px}
+.mc-card-btns{display:flex;gap:6px}.mc-card-btns button{padding:3px 8px;font-size:11px}
+.mc-field{padding:9px 12px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:4px}.mc-field:last-child{border-bottom:0}
+.mc-field label{font-size:10px;color:var(--muted)}.mc-field input,.mc-field select{width:100%}
+.mc-tool{width:100%;display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border:0;border-bottom:1px solid var(--border);background:transparent;color:var(--text);text-align:left;border-radius:0}
+.mc-tool:hover{background:var(--panel-raised)}.mc-tool strong{display:block;font-size:12px}.mc-tool small{color:var(--muted);font-size:10px}
+.mc-tool-drawer{padding:10px 12px;background:var(--log-bg);border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.mc-cli-wrap{flex:1;min-height:0;display:flex;flex-direction:column;background:#080b0f}
+.mc-cli-out{flex:1;min-height:0;overflow-y:auto;padding:12px;margin:0;font:12px ui-monospace,monospace;white-space:pre-wrap;color:#e6edf3}
+.mc-cli-bar{position:relative;display:flex;gap:8px;padding:10px;background:var(--panel-bg);border-top:1px solid var(--border)}
+.mc-admin-nav{display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--border);background:var(--panel-bg)}
+.mc-admin-nav button{border:0;border-radius:0;padding:10px 6px;font-size:11px;color:var(--muted);background:transparent}
+.mc-admin-nav button.active{color:var(--accent);border-top:2px solid var(--accent);font-weight:700}
 </style>
 <script>
 let gatewayTelemetry={};
@@ -5433,120 +5453,141 @@ function closeRepeaterManage(){
 }
 async function repeaterApi(body){let r=await fetch('/api/contacts/manage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),d=await r.json().catch(()=>({}));d._status=r.status;return d}
 function openRepeaterManage(peer){
-  let id=String(peer.id),name=peer.name||id,panel=document.getElementById('node-manage-panel'),box=document.getElementById('node-chat-history');
+  let id=String(peer.id),name=peer.name||id,isRoom=Number(peer.type)===3;
+  let panel=document.getElementById('node-manage-panel'),box=document.getElementById('node-chat-history');
   showView('nodes');selectConversation('node',id);manageNodeId=id;box.hidden=true;panel.hidden=false;panel.replaceChildren();
-  let mk=(tag,text,cls)=>{let e=document.createElement(tag);if(text)e.textContent=text;if(cls)e.className=cls;return e};
-  let btn=(text,fn)=>{let b=mk('button',text);b.type='button';b.onclick=fn;return b};
-  let out=mk('pre','','manage-out'),unlockables=[];
-  let run=async text=>{if(!text)return;out.textContent+='> '+text+'\n';out.scrollTop=out.scrollHeight;let d=await repeaterApi({target:id,action:'command',command:text});out.textContent+=(d.reply||d.error||'No reply')+'\n';out.scrollTop=out.scrollHeight};
+  panel.style.padding='0';
+  let cp=panel.closest('.chat-panel'),cf=cp?.querySelector('form'),chHdr=cp?.querySelector('.chat-header');
+  if(cf)cf.hidden=true;if(chHdr)chHdr.hidden=true;
+  let mk=(t,txt,cls)=>{let e=document.createElement(t);if(txt)e.textContent=txt;if(cls)e.className=cls;return e};
+  let btn=(txt,fn,cls='')=>{let b=mk('button',txt,cls);b.type='button';b.onclick=fn;return b};
+  let root=mk('div','','mc-admin'),unlockables=[],authed=false;
   let lock=el=>{el.disabled=true;unlockables.push(el);return el};
-  let head=mk('div','','manage-login'),title=mk('strong','Manage '+name),pw=mk('input');pw.type='password';pw.placeholder='Admin password';pw.autocomplete='off';
-  let chatPanel=panel.closest('.chat-panel');
-  let chatForm=chatPanel?.querySelector('form');
-  const expandManageBox=()=>{
-    panel.classList.add('expanded');
-    if(chatPanel)chatPanel.classList.add('managing-full');
+  let run=async(c,silent=false)=>{
+    if(!c)return '';
+    if(!silent){out.textContent+='> '+c+'\n';out.scrollTop=out.scrollHeight;}
+    let d=await repeaterApi({target:id,action:'command',command:c});
+    let rep=d.reply||d.error||'No reply';
+    if(!silent){out.textContent+=rep+'\n';out.scrollTop=out.scrollHeight;}
+    return rep;
   };
-  if(chatForm)chatForm.hidden=true;
+  let top=mk('div','','mc-admin-top'),left=mk('div','','mc-admin-title');
+  let back=btn('←',()=>{if(chHdr)chHdr.hidden=false;panel.style.padding='';closeRepeaterManage();},'secondary');
+  let tbox=mk('div');tbox.append(mk('h3',isRoom?'Room Admin':'Repeater Admin'),mk('small',name));
+  left.append(back,tbox);
+  let authBox=mk('div');authBox.style.cssText='display:flex;gap:6px;align-items:center';
+  let pw=mk('input');pw.type='password';pw.placeholder='Admin password';pw.style.width='145px';
   let login=btn('Log in',async()=>{
     login.disabled=true;out.textContent+='Logging in...\n';
     let d=await repeaterApi({target:id,action:'login',password:pw.value});
     pw.value='';login.disabled=false;
     if(d.ok){
-      out.textContent+='Logged in.\n';
-      expandManageBox();
-      unlockables.forEach(e=>e.disabled=false);
-      cmd.focus();
+      authed=true;out.textContent+='Logged in.\n';
+      authBox.replaceChildren(mk('small','Authenticated'));
+      panel.classList.add('expanded');if(cp)cp.classList.add('managing-full');
+      unlockables.forEach(e=>e.disabled=false);cmd.focus();
     }else out.textContent+=(d.error||'Login failed')+'\n';
   });
   pw.onkeydown=e=>{if(e.key==='Enter')login.click()};
-  head.append(title,pw,login,btn('Close',closeRepeaterManage));
-  let tabs=mk('div','','manage-tabs'),term=mk('div'),opts=mk('div');opts.hidden=true;
-  term.style.cssText='display:flex;flex-direction:column;gap:6px;flex:1;min-height:0';
-  let tTerm=btn('Terminal',()=>{term.hidden=false;opts.hidden=true;tTerm.classList.add('active');tOpts.classList.remove('active')}),tOpts=btn('Options',()=>{term.hidden=true;opts.hidden=false;tOpts.classList.add('active');tTerm.classList.remove('active')});
-  tTerm.classList.add('active');tabs.append(tTerm,tOpts);
-  const CLI_COMMANDS=[
-    ['repeater on','Enable packet repeating'],['repeater off','Disable packet repeating'],
-    ['set repeat on','Enable repeat mode'],['set repeat off','Disable repeat mode'],
-    ['advert','Send flood advertisement'],['ver','Show firmware version'],
-    ['clock','Show node clock'],['clock sync','Sync node clock to host'],
-    ['neighbors','List heard neighbors'],['temps','Show temperature sensors'],
-    ['batt','Show battery voltage'],['stats-core','Show core statistics'],
-    ['stats-radio','Show radio statistics'],['stats-packets','Show packet counters'],
-    ['get name','Read node name'],['get freq','Read radio frequency'],
-    ['get tx','Read TX power (dBm)'],['get radio','Read freq,bw,sf,cr'],
-    ['get af','Read airtime factor'],['get rxdelay','Read RX delay'],
-    ['get txdelay','Read TX delay'],['get advert.interval','Read local advert interval'],
-    ['get flood.advert.interval','Read flood advert interval'],['get flood.max','Read max flood hops'],
-    ['get agc.reset.interval','Read AGC reset interval'],['get multi.acks','Read multi-ACK setting'],
-    ['get allow.read.only','Read guest read-only mode'],['get guest.password','Read room guest password'],
-    ['set name ','Set node name'],['set freq ','Set frequency in MHz'],
-    ['set tx ','Set TX power in dBm'],['set radio ','Set freq,bw,sf,cr'],
-    ['set af ','Set airtime factor'],['set rxdelay ','Set RX delay'],
-    ['set txdelay ','Set TX delay'],['set advert.interval ','Set local advert minutes'],
-    ['set flood.advert.interval ','Set flood advert hours'],['set flood.max ','Set max flood hops'],
-    ['set agc.reset.interval ','Set AGC reset seconds'],['set multi.acks ','Set multi-ACK (0 or 1)'],
-    ['set allow.read.only ','Set guest read-only (on/off)'],['set password ','Change admin password'],
-    ['set guest.password ','Set room guest password'],['set lat ','Set latitude'],
-    ['set lon ','Set longitude'],['log start','Start packet logging'],
-    ['log stop','Stop packet logging'],['log erase','Erase stored logs'],
-    ['clear stats','Reset statistics counters'],['reboot','Reboot remote node']
-  ];
-  let cmdWrap=mk('div');cmdWrap.style.cssText='position:relative;flex:1;min-width:160px;display:flex';
-  let cmd=lock(mk('input'));cmd.autocomplete='off';cmd.spellcheck=false;cmd.style.width='100%';
-  cmd.placeholder='Start typing a command (e.g. repeater on, set repeat, get, advert)...';
-  let sugBox=mk('div','','cli-suggest');sugBox.hidden=true;
-  let sugIdx=-1;
-  const renderCliSug=()=>{
-    if(cmd.disabled){sugBox.hidden=true;return}
+  authBox.append(pw,login);top.append(left,authBox);
+  let vStatus=mk('div','','mc-admin-body'),vCli=mk('div','','mc-cli-wrap'),vSet=mk('div','','mc-admin-body');
+  vStatus.hidden=true;vSet.hidden=true;
+  let out=mk('pre','','mc-cli-out');
+  const CMDS=[['get repeat','Repeat state'],['set repeat on','Enable repeat'],['set repeat off','Disable repeat'],['get name','Node name'],['set name ','Set name'],['get radio','Radio params'],['set radio ','Set freq,bw,sf,cr'],['get freq','Frequency'],['set freq ','Set frequency'],['get tx','TX power'],['set tx ','Set TX dBm'],['get advert.interval','Zero-hop advert min'],['set advert.interval ','Set advert min'],['get flood.advert.interval','Flood advert hrs'],['set flood.advert.interval ','Set flood hrs'],['get allow.read.only','Guest read-only'],['set allow.read.only ','Set read-only on/off'],['get guest.password','Guest password'],['set guest.password ','Set guest pass'],['password ','Set admin pass'],['setperm ','Set ACL pubkey perm'],['get acl','View ACL'],['advert','Flood advert'],['advert.zerohop','Zero-hop advert'],['clock','Node clock'],['clock sync','Sync clock'],['neighbors','Neighbors'],['ver','Firmware version'],['board','Hardware name'],['reboot','Reboot node']];
+  let bar=mk('div','','mc-cli-bar'),wrap=mk('div','','cli-ghost-wrap');
+  let ghost=mk('div','','cli-ghost'),cmd=lock(mk('input'));
+  cmd.placeholder='Send a command...';cmd.autocomplete='off';cmd.spellcheck=false;
+  let sug=mk('div','','cli-suggest');sug.hidden=true;let sIdx=-1;
+  const updGhost=()=>{let v=cmd.value;if(!v){ghost.textContent='';return;}let m=CMDS.find(([c])=>c.toLowerCase().startsWith(v.toLowerCase())&&c.length>v.length);ghost.textContent=m?v+m.slice(v.length):'';};
+  const renderSug=()=>{
+    updGhost();if(cmd.disabled){sug.hidden=true;return;}
     let q=cmd.value.trim().toLowerCase();
-    let matches=CLI_COMMANDS.filter(([c,d])=>!q||c.toLowerCase().includes(q)||d.toLowerCase().includes(q));
-    sugBox.replaceChildren();sugIdx=-1;
-    if(!matches.length||(!q&&document.activeElement!==cmd)){sugBox.hidden=true;return}
-    matches.slice(0,14).forEach(([c,d],i)=>{
-      let item=document.createElement('button');item.type='button';
-      let left=mk('span',c),right=mk('small',d);
-      item.append(left,right);
-      item.onmousedown=e=>{e.preventDefault();cmd.value=c;sugBox.hidden=true;cmd.focus();if(!c.endsWith(' '))send.click();};
-      sugBox.appendChild(item);
+    let ms=CMDS.filter(([c,d])=>!q||c.toLowerCase().includes(q)||d.toLowerCase().includes(q));
+    sug.replaceChildren();sIdx=-1;
+    if(!ms.length||!q){sug.hidden=true;return;}
+    ms.slice(0,12).forEach(([c,d])=>{
+      let b=document.createElement('button');b.type='button';b.append(mk('span',c),mk('small',d));
+      b.onmousedown=e=>{e.preventDefault();cmd.value=c;updGhost();sug.hidden=true;cmd.focus();if(!c.endsWith(' '))send.click();};
+      sug.appendChild(b);
     });
-    sugBox.hidden=false;
+    sug.hidden=false;
   };
-  cmd.oninput=renderCliSug;
-  cmd.onfocus=renderCliSug;
-  cmd.onblur=()=>setTimeout(()=>{sugBox.hidden=true},140);
+  cmd.oninput=renderSug;cmd.onblur=()=>setTimeout(()=>{sug.hidden=true},140);
   cmd.onkeydown=e=>{
-    let items=[...sugBox.querySelectorAll('button')];
-    if(!sugBox.hidden&&items.length){
-      if(e.key==='ArrowDown'){e.preventDefault();sugIdx=(sugIdx+1)%items.length;items.forEach((b,i)=>b.classList.toggle('active',i===sugIdx));items[sugIdx].scrollIntoView({block:'nearest'});return}
-      if(e.key==='ArrowUp'){e.preventDefault();sugIdx=(sugIdx-1+items.length)%items.length;items.forEach((b,i)=>b.classList.toggle('active',i===sugIdx));items[sugIdx].scrollIntoView({block:'nearest'});return}
-      if(e.key==='Tab'){e.preventDefault();let pick=items[sugIdx>=0?sugIdx:0];if(pick){cmd.value=pick.firstChild.textContent;sugBox.hidden=true;}return}
-      if(e.key==='Escape'){sugBox.hidden=true;return}
+    let its=[...sug.querySelectorAll('button')];
+    if((e.key==='Tab'||(e.key==='ArrowRight'&&cmd.selectionStart===cmd.value.length))&&ghost.textContent){e.preventDefault();cmd.value=ghost.textContent;updGhost();renderSug();return;}
+    if(!sug.hidden&&its.length){
+      if(e.key==='ArrowDown'){e.preventDefault();sIdx=(sIdx+1)%its.length;its.forEach((b,i)=>b.classList.toggle('active',i===sIdx));return;}
+      if(e.key==='ArrowUp'){e.preventDefault();sIdx=(sIdx-1+its.length)%its.length;its.forEach((b,i)=>b.classList.toggle('active',i===sIdx));return;}
     }
-    if(e.key==='Enter'){sugBox.hidden=true;send.click();}
+    if(e.key==='Enter'){sug.hidden=true;ghost.textContent='';send.click();}
   };
-  cmdWrap.append(cmd,sugBox);
-  let send=lock(btn('Send',()=>{let t=cmd.value.trim();cmd.value='';sugBox.hidden=true;run(t)}));
-  let row=mk('div','','manage-cmd-row');row.append(cmdWrap,send);
-  let hints=mk('div','','manage-actions');hints.style.margin='2px 0';
-  ['repeater on','repeater off','advert','ver','clock','neighbors','get name','reboot'].forEach(c=>{
-    let chip=lock(btn(c,()=>{cmd.value=c;cmd.focus();renderCliSug();}));
-    chip.className='secondary';chip.style.cssText='padding:2px 7px;font-size:10px';
-    hints.appendChild(chip);
-  });
-  term.append(row,hints);
-  let actionButton=([label,command,confirmText])=>lock(btn(label,()=>{if(confirmText&&!confirm(confirmText))return;tTerm.click();run(command)}));
-  for(let group of REPEATER_OPTION_GROUPS){
-    let g=mk('div','','manage-group');g.append(mk('h4',group.name));
-    for(let [label,key,kind] of group.options||[]){
-      let o=mk('div','','manage-option'),l=mk('label',label),input=lock(mk('input'));input.type=kind==='number'?'text':'text';input.inputMode=kind==='number'?'decimal':'text';input.placeholder='value';
-      o.append(l,lock(btn('Get',()=>{tTerm.click();run('get '+key)})),input,lock(btn('Set',()=>{let v=input.value.trim();if(!v){showToast('Value needed',label);return}tTerm.click();run('set '+key+' '+v)})));g.append(o)}
-    for(let [label,key,hint] of group.raw||[]){
-      let o=mk('div','','manage-option'),l=mk('label',label),input=lock(mk('input'));input.style.width='200px';input.placeholder='e.g. 910.525,62.5,7,5';
-      o.append(l,lock(btn('Get',()=>{tTerm.click();run('get '+key)})),input,lock(btn('Set',()=>{let v=input.value.trim();if(!v){showToast('Value needed',label);return}tTerm.click();run('set '+key+' '+v)})));g.append(o)}
-    if(group.actions){let a=mk('div','','manage-actions');for(let item of group.actions)a.append(actionButton(item));g.append(a)}
-    opts.append(g)}
-  term.append(out);panel.append(head,tabs,term,opts);pw.focus();
+  let send=lock(btn('➤',()=>{let t=cmd.value.trim();cmd.value='';ghost.textContent='';sug.hidden=true;run(t);}));
+  wrap.append(ghost,cmd);bar.append(wrap,sug,send);vCli.append(out,bar);
+    let stCard=mk('div','','mc-card'),stHdr=mk('div','','mc-card-hdr'),stPre=mk('pre','','mc-cli-out');
+  stPre.style.minHeight='220px';stPre.textContent='Log in and click Refresh to fetch status.';
+  stHdr.append(mk('span','Node Status & Telemetry'),lock(btn('↻ Refresh',async()=>{
+    stPre.textContent='Querying node...';
+    let lines=[];
+    for(let q of ['ver','board','clock','get repeat',isRoom?'get allow.read.only':'neighbors']){
+      let r=await run(q,true);lines.push(q+': '+r);
+    }
+    stPre.textContent=lines.join('\n');
+  },'secondary')));
+  stCard.append(stHdr,stPre);vStatus.append(stCard);
+  vSet.append(mk('div','To minimize mesh traffic, use the refresh icons to request the info you need.','mc-admin-banner'));
+  let cPub=mk('div','','mc-card'),hPub=mk('div','','mc-card-hdr'),bPub=mk('div','','mc-card-btns');
+  let iName=lock(mk('input'));iName.value=name;
+  bPub.append(lock(btn('↻',async()=>{let r=await run('get name',true);iName.value=r.replace(/^->\s*/,'');},'secondary')),lock(btn('✓',async()=>{await run('set name '+iName.value.trim(),true);showToast('Saved','Name updated');},'secondary')));
+  hPub.append(mk('span','Public Info'),bPub);
+  let f1=mk('div','','mc-field');f1.append(mk('label','Name'),iName);
+  let f2=mk('div','','mc-field'),pkRow=mk('div');pkRow.style.cssText='display:flex;gap:6px;align-items:center';
+  let pkTxt=mk('small',String(peer.public_key||id));pkTxt.style.wordBreak='break-all';
+  pkRow.append(pkTxt,btn('Copy',()=>copyText(String(peer.public_key||id)),'secondary'));
+  f2.append(mk('label','Public Key'),pkRow);cPub.append(hPub,f1,f2);
+  let cRad=mk('div','','mc-card'),hRad=mk('div','','mc-card-hdr'),bRad=mk('div','','mc-card-btns');
+  let iFreq=lock(mk('input'));iFreq.placeholder='e.g. 910.525';
+  let sBw=lock(mk('select'));['7.8','10.4','15.6','20.8','31.25','41.7','62.5','125','250','500'].forEach(v=>sBw.add(new Option(v+' kHz',v)));sBw.value='62.5';
+  let sSf=lock(mk('select'));for(let v=5;v<=12;v++)sSf.add(new Option('SF'+v,String(v)));sSf.value='7';
+  let sCr=lock(mk('select'));.forEach(v=>sCr.add(new Option('4/'+v,String(v))));sCr.value='5';
+  bRad.append(lock(btn('↻',async()=>{
+    let r=await run('get radio',true);let m=r.match(/([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+    if(m){iFreq.value=m;sBw.value=m;sSf.value=m;sCr.value=m;}
+  },'secondary')),lock(btn('✓',async()=>{
+    if(!iFreq.value.trim())return;
+    await run(`set radio ${iFreq.value.trim()},${sBw.value},${sSf.value},${sCr.value}`,true);
+    showToast('Radio saved','Reboot node to apply');
+  },'secondary')));
+  hRad.append(mk('span','Radio Settings'),bRad);
+  let rf1=mk('div','','mc-field');rf1.append(mk('label','Frequency (MHz)'),iFreq);
+  let rf2=mk('div','','mc-field');rf2.append(mk('label','Bandwidth'),sBw);
+  let rf3=mk('div','','mc-field');rf3.append(mk('label','Spreading Factor'),sSf);
+  let rf4=mk('div','','mc-field');rf4.append(mk('label','Coding Rate'),sCr);
+  cRad.append(hRad,rf1,rf2,rf3,rf4);
+    let cTools=mk('div','','mc-card');
+  let hTools=mk('div','','mc-card-hdr');hTools.append(mk('span','Extra Tools'));cTools.append(hTools);
+  const addTool=(titleTxt,subTxt,builder)=>{
+    let row=mk('button','','mc-tool'),L=mk('div');row.type='button';
+    L.append(mk('strong',titleTxt),mk('small',subTxt));row.append(L,mk('span','›'));
+    let drw=mk('div','','mc-tool-drawer');drw.hidden=true;builder(drw);
+    row.onclick=()=>{if(!authed){showToast('Login required','Log in first');return;}drw.hidden=!drw.hidden;};
+    cTools.append(row,drw);
+  };
+  addTool('Advert','Send a flood advert',d=>{d.append(btn('Send Flood Advert',async()=>{await run('advert',true);showToast('Sent','Flood advert sent');}),btn('Zero-Hop Advert',async()=>{await run('advert.zerohop',true);showToast('Sent','Zero-hop advert sent');}));});
+  addTool('Repeat Mode','Enable or disable packet repeating',d=>{d.append(btn('Repeat ON',async()=>{await run('set repeat on',true);showToast('Updated','Repeat enabled');}),btn('Repeat OFF',async()=>{await run('set repeat off',true);showToast('Updated','Repeat disabled');}));});
+  addTool('Advert Intervals','Set auto advert intervals',d=>{let ia=mk('input');ia.placeholder='Flood hrs (3-168)';ia.style.width='140px';d.append(ia,btn('Save',async()=>{if(ia.value.trim())await run('set flood.advert.interval '+ia.value.trim(),true);showToast('Saved','Interval updated');}));});
+  addTool('Position','Set node position on the map',d=>{let la=mk('input'),lo=mk('input');la.placeholder='Latitude';lo.placeholder='Longitude';la.style.width='110px';lo.style.width='110px';d.append(la,lo,btn('Save',async()=>{if(la.value.trim())await run('set lat '+la.value.trim(),true);if(lo.value.trim())await run('set lon '+lo.value.trim(),true);showToast('Saved','Position updated');}));});
+  addTool('Sync Clock','Updates the node clock',d=>{d.append(btn('Sync Clock Now',async()=>{let r=await run('clock sync',true);showToast('Clock',r);}));});
+  addTool('Access Control','Add or remove user permissions',d=>{let pk=mk('input'),pm=mk('select');pk.placeholder='Companion pubkey';pk.style.width='180px';[['0','Guest'],['1','Read-only'],['2','Read-write'],['3','Admin']].forEach(([v,l])=>pm.add(new Option(l,v)));d.append(pk,pm,btn('Apply',async()=>{if(pk.value.trim())await run(`setperm ${pk.value.trim()} ${pm.value}`,true);showToast('ACL','Permission updated');}));});
+  addTool('Admin Password','Set remote management password',d=>{let ap=mk('input');ap.type='password';ap.placeholder='New admin password';d.append(ap,btn('Save',async()=>{if(ap.value.trim()){await run('password '+ap.value.trim(),true);ap.value='';showToast('Saved','Admin password updated');}}));});
+  addTool('Guest Password','Set room access password',d=>{let gp=mk('input');gp.placeholder='Guest password';d.append(gp,btn('Save',async()=>{await run('set guest.password '+gp.value.trim(),true);showToast('Saved','Guest password updated');}));});
+  addTool('Read Only Settings','Turn read only mode on/off',d=>{d.append(btn('Read-Only ON',async()=>{await run('set allow.read.only on',true);showToast('Saved','Read-only enabled');}),btn('Read-Only OFF',async()=>{await run('set allow.read.only off',true);showToast('Saved','Read-only disabled');}));});
+  vSet.append(cPub,cRad,cTools);
+  let nav=mk('div','','mc-admin-nav');
+  let nSt=btn('ⓘ Status',()=>sw('st')),nCl=btn('>_ Command Line',()=>sw('cl'),'active'),nSe=btn('⚙ Settings',()=>sw('se'));
+  const sw=k=>{vStatus.hidden=k!=='st';vCli.hidden=k!=='cl';vSet.hidden=k!=='se';[nSt,nCl,nSe].forEach(b=>b.classList.remove('active'));(k==='st'?nSt:k==='cl'?nCl:nSe).classList.add('active');};
+  nav.append(nSt,nCl,nSe);
+  root.append(top,vStatus,vCli,vSet,nav);panel.append(root);pw.focus();
 }
 function selectNode(id){selectConversation('node',id)}
 function selectChannel(id){selectConversation('channel',id)}
