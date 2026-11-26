@@ -4657,7 +4657,7 @@ button:hover{transform:translateY(-1px);border-color:var(--accent);background:va
 .manage-login,.manage-tabs,.manage-cmd-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 .manage-login input,.manage-cmd-row input{flex:1;min-width:120px}
 .manage-tabs button{opacity:.65}.manage-tabs button.active{opacity:1;border-color:var(--accent);color:var(--accent)}
-.manage-out{margin:0;min-height:140px;max-height:260px;overflow:auto;padding:8px;border:1px solid var(--border);border-radius:4px;white-space:pre-wrap;font:11px ui-monospace,monospace}.manage-panel.expanded{flex:1 1 auto;min-height:0;height:100%}.manage-panel.expanded .manage-out{flex:1 1 auto;min-height:260px;max-height:none}.chat-panel.managing-full{position:fixed;inset:76px 18px 18px 18px;z-index:85;height:auto;max-height:none;box-shadow:0 18px 48px #000c;border-color:var(--accent)}.cli-suggest{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:40;max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--panel-bg);box-shadow:0 10px 24px #0008;display:grid;gap:2px;padding:4px}.cli-suggest[hidden]{display:none}.cli-suggest button{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 8px;text-align:left;font:11px ui-monospace,monospace;border:1px solid transparent;border-radius:4px;background:transparent;color:var(--text)}.cli-suggest button:hover,.cli-suggest button.active{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}.cli-suggest small{color:var(--muted);font-family:inherit;font-size:10px}.cli-ghost-wrap{position:relative;flex:1;min-width:160px;display:flex;align-items:center}.cli-ghost{position:absolute;inset:0;padding:8px 10px;pointer-events:none;color:var(--muted);opacity:.55;font:12px ui-monospace,monospace;white-space:pre;overflow:hidden}.cli-ghost-wrap input{position:relative;z-index:1;background:transparent !important;font:12px ui-monospace,monospace;width:100%}
+.manage-out{margin:0;min-height:140px;max-height:260px;overflow:auto;padding:8px;border:1px solid var(--border);border-radius:4px;white-space:pre-wrap;font:11px ui-monospace,monospace}.manage-panel.expanded{flex:1 1 auto;min-height:0;height:100%}.manage-panel.expanded .manage-out{flex:1 1 auto;min-height:260px;max-height:none}.chat-panel.managing-full{position:fixed;inset:76px 18px 18px 18px;z-index:85;height:auto;max-height:none;box-shadow:0 18px 48px #000c;border-color:var(--accent)}.cli-suggest{position:absolute;left:16px;right:58px;bottom:calc(100% + 4px);top:auto;z-index:40;max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--panel-bg);box-shadow:0 10px 24px #0008;display:grid;gap:2px;padding:4px}.cli-suggest[hidden]{display:none}.cli-suggest button{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 8px;text-align:left;font:11px ui-monospace,monospace;border:1px solid transparent;border-radius:4px;background:transparent;color:var(--text)}.cli-suggest button:hover,.cli-suggest button.active{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}.cli-suggest small{color:var(--muted);font-family:inherit;font-size:10px}.cli-ghost-wrap{position:relative;flex:1;min-width:160px;display:flex;align-items:center}.cli-ghost{position:absolute;inset:0;display:flex;align-items:center;padding:0 11px;pointer-events:none;color:var(--muted);opacity:.6;font:12px ui-monospace,monospace;white-space:pre;overflow:hidden}.cli-ghost-wrap input{position:relative;z-index:1;background:transparent !important;font:12px ui-monospace,monospace;width:100%}
 .manage-group{display:flex;flex-direction:column;gap:6px;padding:6px 0;border-top:1px solid var(--border)}
 .manage-group h4{margin:0;color:var(--muted);font-size:10px;text-transform:uppercase}
 .manage-actions{display:flex;flex-wrap:wrap;gap:4px}
@@ -5110,7 +5110,7 @@ body[data-theme="tron"] #map-view .map-search-overlay:not(.open) #map-node-list{
 .mc-field label{font-size:11px;color:var(--muted)}.mc-field input,.mc-field select{width:100%}
 .mc-tool{width:100%;display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border:0;border-bottom:1px solid var(--border);background:transparent;color:var(--text);text-align:left;border-radius:0}
 .mc-tool:hover{background:var(--panel-raised)}.mc-tool strong{display:block;font-size:13px}.mc-tool small{color:var(--muted);font-size:11px}
-.mc-tool-drawer{padding:10px 14px;background:var(--log-bg);border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.mc-tool-drawer{padding:10px 14px;background:var(--log-bg);border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;gap:8px;align-items:center}.mc-tool-drawer[hidden]{display:none !important}.mc-admin-body .mc-field input,.mc-admin-body .mc-field select{width:100%;box-sizing:border-box;margin:0}
 .mc-cli-wrap{flex:1;min-height:0;display:flex;flex-direction:column;background:#070a0f}
 .mc-cli-out{flex:1;min-height:0;overflow-y:auto;padding:14px 18px;margin:0;font:12px ui-monospace,monospace;white-space:pre-wrap;color:#e6edf3}
 .mc-cli-bar{position:relative;display:flex;gap:8px;padding:10px 16px;background:var(--panel-bg);border-top:1px solid var(--border)}
@@ -5574,10 +5574,13 @@ function openRepeaterManage(peer){
   stPre.style.minHeight='220px';stPre.textContent='Log in and click Refresh to fetch status.';
   stHdr.append(mk('span','Node Status & Telemetry'),lock(btn('↻ Refresh',async()=>{
     stPre.textContent='Querying node...';
+    let stRes=await repeaterApi({target:id,action:'status'});
     let lines=[];
-    for(let q of ['ver','board','clock','get repeat',isRoom?'get allow.read.only':'neighbors']){
-      let r=await run(q,true);lines.push(q+': '+r);
+    if(stRes.ok&&stRes.status){
+      for(let [k,v] of Object.entries(stRes.status))lines.push(k+': '+v);
     }
+    let vRep=await run('ver',true);
+    lines.push('ver: '+vRep);
     stPre.textContent=lines.join('\n');
   },'secondary')));
   stCard.append(stHdr,stPre);vStatus.append(stCard);
@@ -7322,6 +7325,13 @@ async def manage_contact_handler(request):
                 return web.json_response({"error": "Login failed or timed out. Check the password."}, status=401)
             log_to_dash(f"Remote management login to {name}")
             return web.json_response({"ok": True})
+        if action == "status":
+            async with paced_hardware_lock():
+                if hasattr(commands, "req_status_sync"):
+                    ev = await asyncio.wait_for(commands.req_status_sync(contact, min_timeout=6), timeout=20)
+                    if ev is not None and ev.type != EventType.ERROR and isinstance(ev.payload, dict):
+                        return web.json_response({"ok": True, "status": ev.payload})
+            return web.json_response({"ok": False, "error": "Status telemetry unavailable from peer"})
         if action == "logout":
             async with paced_hardware_lock():
                 await commands.send_logout(contact)
@@ -7342,7 +7352,11 @@ async def manage_contact_handler(request):
             cli_reply_waiters[prefix] = queue
             try:
                 async with paced_hardware_lock():
-                    result = await commands.send_cmd(contact, command, dst_type=contact.get("type"))
+                    sig = inspect.signature(commands.send_cmd)
+                    if "dst_type" in sig.parameters and int(contact.get("type") or 0) == 2:
+                        result = await commands.send_cmd(contact, command, dst_type=2)
+                    else:
+                        result = await commands.send_cmd(contact, command)
                 if result.type == EventType.ERROR:
                     return web.json_response({"error": f"Device rejected command: {result.payload}"}, status=502)
                 try:
