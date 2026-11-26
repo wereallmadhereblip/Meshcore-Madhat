@@ -1,0 +1,54 @@
+# History settings
+HISTFILE=~/.zsh_history
+HISTSIZE=10000
+SAVEHIST=10000
+setopt APPEND_HISTORY INC_APPEND_HISTORY SHARE_HISTORY HIST_IGNORE_DUPS HIST_IGNORE_SPACE
+
+# Keep standard Debian PATH & color aliases
+export PATH="$HOME/bin:$HOME/.local/bin:$PATH"
+if [ -x /usr/bin/dircolors ]; then
+    test -r ~/.dircolors && eval "$(dircolors -b ~/.dircolors)" || eval "$(dircolors -b)"
+    alias ls='ls --color=auto'
+    alias grep='grep --color=auto'
+fi
+alias ll='ls -l'
+alias la='ls -A'
+alias l='ls -CF'
+
+# Kali-style interactive Tab completion
+autoload -Uz compinit
+compinit
+zstyle ':completion:*' menu select
+zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'
+zstyle ':completion:*' list-colors "${(s.:.)LS_COLORS}"
+
+# Standard keybindings (Home, End, Delete, Ctrl+Arrows)
+bindkey -e
+bindkey '^[[H' beginning-of-line
+bindkey '^[[F' end-of-line
+bindkey '^[[3~' delete-char
+bindkey '^[[1;5C' forward-word
+bindkey '^[[1;5D' backward-word
+
+# Bind Up/Down arrows for history search across all terminal modes
+autoload -Uz up-line-or-beginning-search down-line-or-beginning-search
+zle -N up-line-or-beginning-search
+zle -N down-line-or-beginning-search
+bindkey '^[[A' up-line-or-beginning-search
+bindkey '^[[B' down-line-or-beginning-search
+bindkey '^[OA' up-line-or-beginning-search
+bindkey '^[OB' down-line-or-beginning-search
+[[ -n "${terminfo[kcuu1]}" ]] && bindkey "${terminfo[kcuu1]}" up-line-or-beginning-search
+[[ -n "${terminfo[kcud1]}" ]] && bindkey "${terminfo[kcud1]}" down-line-or-beginning-search
+
+# Kali Linux two-line prompt (blue for regular user, red for root)
+if [[ $EUID -eq 0 ]]; then
+    PROMPT=$'%F{red}┌──(%B%F{white}%n㉿%m%b%F{red})-[%B%F{white}%~%b%F{red}]\n└─%B%F{white}#%b%f '
+else
+    PROMPT=$'%F{blue}┌──(%B%F{green}%n㉿%m%b%F{blue})-[%B%F{white}%~%b%F{blue}]\n└─%B%F{green}$%b%f '
+fi
+
+# Autosuggestions & Syntax Highlighting (syntax highlighting must stay last)
+ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='fg=#999'
+[ -f /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh ] && source /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh
+[ -f /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ] && source /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh

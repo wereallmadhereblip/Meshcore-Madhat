@@ -353,6 +353,9 @@ EOF
 fi
 
 bash "$SCRIPT_DIR/assets/install-motd.sh"
+if [[ -f "$SCRIPT_DIR/assets/install-zsh.sh" ]]; then
+  bash "$SCRIPT_DIR/assets/install-zsh.sh"
+fi
 
 LOGO_SCRIPT="$SCRIPT_DIR/assets/fastfetch-logo.sh"
 if [[ -f "$LOGO_SCRIPT" ]]; then
