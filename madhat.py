@@ -4653,7 +4653,7 @@ button:hover{transform:translateY(-1px);border-color:var(--accent);background:va
 .manage-login,.manage-tabs,.manage-cmd-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 .manage-login input,.manage-cmd-row input{flex:1;min-width:120px}
 .manage-tabs button{opacity:.65}.manage-tabs button.active{opacity:1;border-color:var(--accent);color:var(--accent)}
-.manage-out{margin:0;min-height:120px;max-height:260px;overflow:auto;padding:6px;border:1px solid var(--border);border-radius:4px;white-space:pre-wrap;font:11px ui-monospace,monospace}
+.manage-out{margin:0;min-height:140px;max-height:260px;overflow:auto;padding:8px;border:1px solid var(--border);border-radius:4px;white-space:pre-wrap;font:11px ui-monospace,monospace}.manage-panel.expanded{min-height:420px;flex:1 1 auto}.manage-panel.expanded .manage-out{min-height:300px;max-height:54vh}
 .manage-group{display:flex;flex-direction:column;gap:6px;padding:6px 0;border-top:1px solid var(--border)}
 .manage-group h4{margin:0;color:var(--muted);font-size:10px;text-transform:uppercase}
 .manage-actions{display:flex;flex-wrap:wrap;gap:4px}
@@ -5370,6 +5370,26 @@ function renderKnownPeers(){let list=document.getElementById('map-node-list');if
 document.addEventListener('pointerdown',e=>{document.querySelectorAll('details.chat-actions[open],details.search-filter-menu[open]').forEach(d=>{if(!d.contains(e.target))d.open=false;});},true);
 document.addEventListener('click',e=>{let btn=e.target.closest('details.chat-actions .chat-action-menu button');if(btn){let d=btn.closest('details');if(d)d.open=false;}},true);
 function updateConversationMenu(type,metadata={}){let prefix=type==='node'?'node':'channel',clear=document.getElementById(prefix+'-clear-action'),archive=document.getElementById(prefix+'-archive-action'),pin=document.getElementById(prefix+'-pin-action'),enabled=Boolean(type==='node'?selectedNodeId:selectedChannelId);clear.disabled=!enabled;archive.disabled=!enabled;pin.disabled=!enabled;document.getElementById(prefix+'-delete-action').disabled=!enabled;archive.textContent=metadata.archived?'Unarchive chat':'Archive chat';pin.textContent=metadata.pinned?'Unpin chat':'Pin chat'}
+const _FILTER_PREF_IDS=['node-sort','node-type-filter','node-chat-filter','channel-chat-filter'];
+function saveFilterPrefs(){
+  try{
+    let obj={};
+    _FILTER_PREF_IDS.forEach(id=>{let el=document.getElementById(id);if(el)obj[id]=el.value;});
+    localStorage.setItem('meshcore-filter-prefs',JSON.stringify(obj));
+  }catch(e){}
+}
+function loadFilterPrefs(){
+  try{
+    let raw=localStorage.getItem('meshcore-filter-prefs');
+    if(!raw)return;
+    let obj=JSON.parse(raw);
+    _FILTER_PREF_IDS.forEach(id=>{
+      let el=document.getElementById(id);
+      if(el&&obj[id]&&[...el.options].some(o=>o.value===obj[id]))el.value=obj[id];
+    });
+  }catch(e){}
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',loadFilterPrefs);else loadFilterPrefs();
 function renderConversationTargets(type){let isNode=type==='node',filter=document.getElementById(isNode?'node-chat-filter':'channel-chat-filter').value,query=isNode?'':document.getElementById('channel-search').value.trim().toLowerCase(),items=[...(isNode?sortedFilteredNodes():meshChannels)].filter(item=>(!query||String(item.name||'').toLowerCase().includes(query)||String(item.id).toLowerCase().includes(query))&&(filter==='all'||(filter==='archived'?Boolean(item.archived):!item.archived))),list=document.getElementById(isNode?'node-target-list':'channel-target-list'),selected=isNode?selectedNodeId:selectedChannelId;items.sort((left,right)=>Number(Boolean(left.archived))-Number(Boolean(right.archived))||Number(Boolean(right.pinned))-Number(Boolean(left.pinned)));list.replaceChildren();if(!items.length){let empty=document.createElement('p');empty.className='map-empty';empty.textContent=filter==='archived'?'No archived chats.':(isNode?(mapNodes.length?'No nodes match this filter.':'No nodes found. Connect to a MeshCore radio to load contacts.'):(query?'No channels match this search.':'No channels found on this device.'));list.appendChild(empty);return}for(let item of items){let button=document.createElement('button');button.type='button';button.className='conversation-target'+(selected===String(item.id)?' active':'');button.onclick=()=>selectConversation(type,item.id);let avatar=document.createElement('span');avatar.className='conversation-avatar';avatar.style.background=hashColor(item.id);avatar.textContent=String(item.name||'?').trim().charAt(0)||'?';let title=document.createElement('strong');title.textContent=item.name;let detail=document.createElement('small');detail.textContent=[item.pinned?'Pinned':'',item.archived?'Archived':''].filter(Boolean).join(' · ');button.append(avatar,title);if(detail.textContent)button.append(detail);if(isNode){let entry=document.createElement('div');entry.className='conversation-entry';entry.addEventListener('mousedown',e=>{if(e.button!==0)return;entry._touchStart=Date.now();entry._holdTimer=setTimeout(()=>{window.openNodeActions(item)},500)});entry.addEventListener('mouseup',e=>{if(entry._holdTimer)clearTimeout(entry._holdTimer);entry._touchStart=null});entry.addEventListener('mouseleave',e=>{if(entry._holdTimer)clearTimeout(entry._holdTimer);entry._touchStart=null});entry.addEventListener('contextmenu',e=>e.preventDefault());entry.append(button,createNodeFavoriteButton(item.id));list.appendChild(entry);}else list.appendChild(button)}}
 function selectConversation(type,id){let normalized=String(id);if(type==='node'){let peer=mapNodes.find(item=>String(item.id)===normalized)||{id:normalized},repeater=Number(peer.type)===2,form=document.querySelector('#nodes-view .chat-panel form'),input=document.getElementById('node-message');if(manageNodeId&&manageNodeId!==normalized)closeRepeaterManage();selectedNodeId=normalized;document.getElementById('node-chat-title').textContent=peer.name||normalized;document.getElementById('node-chat-detail').textContent=repeater?'Direct messages are not supported for repeater nodes.':peerSummary(peer);document.getElementById('node-send').disabled=repeater;input.disabled=repeater;form.hidden=repeater;updateConversationMenu('node',peer);renderConversationTargets('node');history('node',normalized,'node-chat-history',true)}else{let channel=meshChannels.find(item=>String(item.id)===normalized)||{id:normalized};selectedChannelId=normalized;document.getElementById('channel-chat-title').textContent=channel.name||'Channel '+normalized;document.getElementById('channel-chat-detail').textContent='Channel '+normalized;document.getElementById('channel-send').disabled=false;updateConversationMenu('channel',channel);renderConversationTargets('channel');history('channel',normalized,'channel-chat-history',true)}}
 let incomingAdvertSignature='';
@@ -5394,7 +5414,9 @@ const REPEATER_OPTION_GROUPS=[
 {name:'Routing',options:[['Repeat (on/off)','repeat','text'],['Loop detect','loop.detect','text'],['Path hash mode (0-2)','path.hash.mode','number'],['Flood TX delay (0-2)','txdelay','number'],['Direct TX delay (0-2)','direct.txdelay','number'],['RX delay (0-20)','rxdelay','number'],['Duty cycle (%)','dutycycle','number'],['Airtime factor','af','number'],['Multi-acks','multi.acks','text'],['Flood max hops','flood.max','number'],['Unscoped flood max hops','flood.max.unscoped','number'],['Advert flood max hops','flood.max.advert','number']]},
 {name:'Adverts and power',options:[['Flood advert interval (hours)','flood.advert.interval','number'],['Zero-hop advert interval (min)','advert.interval','number'],['ADC multiplier (0-10)','adc.multiplier','number']],actions:[['Power saving on','powersaving on'],['Power saving off','powersaving off'],['Power saving status','powersaving']]}
 ];
-function closeRepeaterManage(){manageNodeId='';let panel=document.getElementById('node-manage-panel'),box=document.getElementById('node-chat-history');if(panel){panel.hidden=true;panel.replaceChildren()}if(box)box.hidden=false}
+function closeRepeaterManage(){
+  let pEl=document.getElementById('node-manage-panel');
+  if(pEl){pEl.classList.remove('expanded');let f=pEl.parentElement?.querySelector('form');if(f)f.hidden=false;}manageNodeId='';let panel=document.getElementById('node-manage-panel'),box=document.getElementById('node-chat-history');if(panel){panel.hidden=true;panel.replaceChildren()}if(box)box.hidden=false}
 async function repeaterApi(body){let r=await fetch('/api/contacts/manage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),d=await r.json().catch(()=>({}));d._status=r.status;return d}
 function openRepeaterManage(peer){
   let id=String(peer.id),name=peer.name||id,panel=document.getElementById('node-manage-panel'),box=document.getElementById('node-chat-history');
@@ -5405,14 +5427,35 @@ function openRepeaterManage(peer){
   let run=async text=>{if(!text)return;out.textContent+='> '+text+'\n';out.scrollTop=out.scrollHeight;let d=await repeaterApi({target:id,action:'command',command:text});out.textContent+=(d.reply||d.error||'No reply')+'\n';out.scrollTop=out.scrollHeight};
   let lock=el=>{el.disabled=true;unlockables.push(el);return el};
   let head=mk('div','','manage-login'),title=mk('strong','Manage '+name),pw=mk('input');pw.type='password';pw.placeholder='Admin password';pw.autocomplete='off';
-  let login=btn('Log in',async()=>{login.disabled=true;out.textContent+='Logging in...\n';let d=await repeaterApi({target:id,action:'login',password:pw.value});pw.value='';login.disabled=false;if(d.ok){out.textContent+='Logged in.\n';unlockables.forEach(e=>e.disabled=false)}else out.textContent+=(d.error||'Login failed')+'\n'});
+  let chatForm=panel.parentElement?.querySelector('form');
+  if(chatForm)chatForm.hidden=true;
+  let login=btn('Log in',async()=>{login.disabled=true;out.textContent+='Logging in...\n';let d=await repeaterApi({target:id,action:'login',password:pw.value});pw.value='';login.disabled=false;if(d.ok){out.textContent+='Logged in.\n';panel.classList.add('expanded');unlockables.forEach(e=>e.disabled=false);cmd.focus()}else out.textContent+=(d.error||'Login failed')+'\n'});
   pw.onkeydown=e=>{if(e.key==='Enter')login.click()};
   head.append(title,pw,login,btn('Close',closeRepeaterManage));
   let tabs=mk('div','','manage-tabs'),term=mk('div'),opts=mk('div');opts.hidden=true;
   let tTerm=btn('Terminal',()=>{term.hidden=false;opts.hidden=true;tTerm.classList.add('active');tOpts.classList.remove('active')}),tOpts=btn('Options',()=>{term.hidden=true;opts.hidden=false;tOpts.classList.add('active');tTerm.classList.remove('active')});
   tTerm.classList.add('active');tabs.append(tTerm,tOpts);
-  let cmd=lock(mk('input'));cmd.placeholder='Command (e.g. ver, get name, neighbors)';let send=lock(btn('Send',()=>{let t=cmd.value.trim();cmd.value='';run(t)}));cmd.onkeydown=e=>{if(e.key==='Enter')send.click()};
-  let row=mk('div','','manage-cmd-row');row.append(cmd,send);term.append(row);
+  const CLI_SYNTAX=[
+    'repeater on','repeater off','set repeat on','set repeat off',
+    'advert','ver','clock','clock sync','neighbors','temps','batt',
+    'get name','get freq','get tx','get radio','get af','get rxdelay',
+    'set name ','set freq ','set tx ','set radio ','set password ',
+    'log start','log stop','log erase','reboot'
+  ];
+  let dl=document.createElement('datalist');dl.id='manage-cli-datalist';
+  CLI_SYNTAX.forEach(c=>{let o=document.createElement('option');o.value=c;dl.appendChild(o);});
+  let cmd=lock(mk('input'));cmd.setAttribute('list','manage-cli-datalist');
+  cmd.placeholder='Command (e.g. repeater on, repeater off, advert, ver, get name)';
+  let send=lock(btn('Send',()=>{let t=cmd.value.trim();cmd.value='';run(t)}));
+  cmd.onkeydown=e=>{if(e.key==='Enter')send.click()};
+  let row=mk('div','','manage-cmd-row');row.append(cmd,dl,send);
+  let hints=mk('div','','manage-actions');hints.style.margin='4px 0';
+  ['repeater on','repeater off','advert','ver','clock','neighbors','get name','reboot'].forEach(c=>{
+    let chip=lock(btn(c,()=>{cmd.value=c;cmd.focus();}));
+    chip.className='secondary';chip.style.cssText='padding:2px 7px;font-size:10px';
+    hints.appendChild(chip);
+  });
+  term.append(row,hints);
   let actionButton=([label,command,confirmText])=>lock(btn(label,()=>{if(confirmText&&!confirm(confirmText))return;tTerm.click();run(command)}));
   for(let group of REPEATER_OPTION_GROUPS){
     let g=mk('div','','manage-group');g.append(mk('h4',group.name));
@@ -5673,14 +5716,14 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 </header>
 <main id="nodes-view" class="view-panel page-view">
 <div class="messages-layout">
-<aside class="card conversation-rail"><div class="panel-heading"><div><span class="eyebrow">DIRECT MESSAGES</span><h2>Nodes</h2></div><span class="panel-index">02</span></div><div class="conversation-filters"><div class="node-search-label"><label for="node-search">Search</label><div class="search-input-row"><input type="search" id="node-search" placeholder="Filter by name or ID" oninput="renderConversationTargets('node')"><details class="search-filter-menu"><summary aria-label="Sort and type filters" title="Sort and type filters"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16l-6.5 7.5v5l-3 1.5v-6.5L4 5Z"/></svg></summary><div class="search-filter-panel"><label for="node-sort">Sort<select id="node-sort" onchange="renderConversationTargets('node')"><option value="az">A-Z</option><option value="heard">Heard recently</option><option value="messages">Latest messages</option></select></label><label for="node-type-filter">Type<select id="node-type-filter" onchange="renderConversationTargets('node')"><option value="all">All</option><option value="favorites">Favorites</option><option value="users">Users</option><option value="repeaters">Repeaters</option><option value="room-servers">Room servers</option><option value="sensors">Sensors</option></select></label><label for="node-chat-filter">Chats<select id="node-chat-filter" onchange="renderConversationTargets('node')"><option value="active">Active</option><option value="archived">Archived</option><option value="all">All</option></select></label></div></details></div></div></div><div class="conversation-target-list" id="node-target-list"><p class="map-empty">Waiting for nodes...</p></div></aside>
+<aside class="card conversation-rail"><div class="panel-heading"><div><span class="eyebrow">DIRECT MESSAGES</span><h2>Nodes</h2></div><span class="panel-index">02</span></div><div class="conversation-filters"><div class="node-search-label"><label for="node-search">Search</label><div class="search-input-row"><input type="search" id="node-search" placeholder="Filter by name or ID" oninput="renderConversationTargets('node')"><details class="search-filter-menu"><summary aria-label="Sort and type filters" title="Sort and type filters"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16l-6.5 7.5v5l-3 1.5v-6.5L4 5Z"/></svg></summary><div class="search-filter-panel"><label for="node-sort">Sort<select id="node-sort" onchange="saveFilterPrefs();renderConversationTargets('node')"><option value="az">A-Z</option><option value="heard">Heard recently</option><option value="messages">Latest messages</option></select></label><label for="node-type-filter">Type<select id="node-type-filter" onchange="saveFilterPrefs();renderConversationTargets('node')"><option value="all">All</option><option value="favorites">Favorites</option><option value="users">Users</option><option value="repeaters">Repeaters</option><option value="room-servers">Room servers</option><option value="sensors">Sensors</option></select></label><label for="node-chat-filter">Chats<select id="node-chat-filter" onchange="saveFilterPrefs();renderConversationTargets('node')"><option value="active">Active</option><option value="archived">Archived</option><option value="all">All</option></select></label></div></details></div></div></div><div class="conversation-target-list" id="node-target-list"><p class="map-empty">Waiting for nodes...</p></div></aside>
 <section class="card chat-panel"><div class="chat-header"><div class="chat-header-main"><div class="chat-header-copy"><strong id="node-chat-title">Select a node</strong><span id="node-chat-detail">Choose a node to view its conversation.</span></div><details class="chat-actions" id="node-chat-options"><summary aria-label="Node chat options">Options</summary><div class="chat-action-menu"><button id="node-clear-action" type="button" disabled onclick="manageConversation('node','clear')">Clear chat</button><button id="node-archive-action" type="button" disabled onclick="manageConversation('node','archive')">Archive chat</button><button id="node-pin-action" type="button" disabled onclick="manageConversation('node','pin')">Pin chat</button><button id="node-delete-action" type="button" disabled onclick="deleteTarget('node')">Delete node</button></div></details></div></div><div id="node-chat-history"></div><div id="node-manage-panel" class="manage-panel" hidden></div><form onsubmit="sendMessage(event,'node','node-message','node-chat-history')"><input id="node-message" maxlength="100" placeholder="Message selected node" required><button id="node-send" disabled>Send</button></form></section>
 </div>
 </main>
 <main id="openwebrx-view" class="view-panel page-view" hidden><section class="card" style="padding:14px"><div class="panel-heading" style="margin-bottom:10px"><div><span class="eyebrow">ON-DEMAND USB RTL-SDR WATERFALL &amp; DECODERS</span><h2>OpenWebRX+</h2></div><div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center"><button type="button" id="owrx-start-btn" onclick="startOpenWebRx()">Start OpenWebRX+</button><button type="button" class="secondary" id="owrx-stop-btn" onclick="stopOpenWebRx()">Stop &amp; Resume NOAA Alerts</button><a id="owrx-ext-link" href="#" target="_blank" rel="noopener" onclick="this.href='http://'+location.hostname+':8073/'" style="margin-left:6px;font-size:0.88rem">Open Full Tab (:8073) ↗</a></div></div><p id="owrx-status" class="settings-description" style="margin:0 0 10px">Stopped (0% CPU). Click <strong>Start OpenWebRX+</strong> to pause background NOAA SAME alerts and launch the live USB SDR waterfall &amp; decoders (admin login: <code>admin</code> / <code>meshcore</code>).</p><iframe id="owrx-frame" title="OpenWebRX+" style="width:100%;height:78vh;min-height:580px;border:1px solid rgba(255,255,255,0.14);border-radius:10px;background:#090d12" hidden></iframe></section></main>
 <main id="channels-view" class="view-panel page-view" hidden>
 <div class="messages-layout">
-<aside class="card conversation-rail"><div class="panel-heading"><div><span class="eyebrow">SHARED FREQUENCY</span><h2>Channels</h2></div><span class="panel-index">03</span></div><div class="conversation-filters"><div class="node-search-label"><label for="channel-search">Search</label><div class="search-input-row"><input type="search" id="channel-search" placeholder="Filter by name or ID" oninput="renderConversationTargets('channel')"><details class="search-filter-menu"><summary aria-label="Chat filters" title="Chat filters"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16l-6.5 7.5v5l-3 1.5v-6.5L4 5Z"/></svg></summary><div class="search-filter-panel"><label for="channel-chat-filter">Chats<select id="channel-chat-filter" onchange="renderConversationTargets('channel')"><option value="active">Active</option><option value="archived">Archived</option><option value="all">All</option></select></label></div></details></div></div></div><div class="conversation-target-list" id="channel-target-list"><p class="map-empty">Waiting for channels...</p></div></aside>
+<aside class="card conversation-rail"><div class="panel-heading"><div><span class="eyebrow">SHARED FREQUENCY</span><h2>Channels</h2></div><span class="panel-index">03</span></div><div class="conversation-filters"><div class="node-search-label"><label for="channel-search">Search</label><div class="search-input-row"><input type="search" id="channel-search" placeholder="Filter by name or ID" oninput="renderConversationTargets('channel')"><details class="search-filter-menu"><summary aria-label="Chat filters" title="Chat filters"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16l-6.5 7.5v5l-3 1.5v-6.5L4 5Z"/></svg></summary><div class="search-filter-panel"><label for="channel-chat-filter">Chats<select id="channel-chat-filter" onchange="saveFilterPrefs();renderConversationTargets('channel')"><option value="active">Active</option><option value="archived">Archived</option><option value="all">All</option></select></label></div></details></div></div></div><div class="conversation-target-list" id="channel-target-list"><p class="map-empty">Waiting for channels...</p></div></aside>
 <section class="card chat-panel"><div class="chat-header"><div class="chat-header-main"><div class="chat-header-copy"><strong id="channel-chat-title">Select a channel</strong><span id="channel-chat-detail">Choose a channel to view its conversation.</span></div><details class="chat-actions" id="channel-chat-options"><summary aria-label="Channel chat options">Options</summary><div class="chat-action-menu"><button id="channel-clear-action" type="button" disabled onclick="manageConversation('channel','clear')">Clear chat</button><button id="channel-archive-action" type="button" disabled onclick="manageConversation('channel','archive')">Archive chat</button><button id="channel-pin-action" type="button" disabled onclick="manageConversation('channel','pin')">Pin chat</button><button id="channel-delete-action" type="button" disabled onclick="deleteTarget('channel')">Delete channel</button></div></details></div></div><div id="channel-chat-history"></div><form onsubmit="sendMessage(event,'channel','channel-message','channel-chat-history')"><input id="channel-message" maxlength="100" placeholder="Message selected channel" required><button id="channel-send" disabled>Send</button></form></section>
 </div>
 </main>
@@ -7092,10 +7135,23 @@ async def manage_contact_handler(request):
     try:
         if action == "login":
             password = str(data.get("password", ""))
+            peer_type = int(contact.get("type") or 2)
             async with paced_hardware_lock():
-                event = await asyncio.wait_for(
-                    commands.send_login_sync(contact, password, min_timeout=8), timeout=30
-                )
+                sig = inspect.signature(commands.send_login_sync)
+                if "dst_type" in sig.parameters:
+                    event = await asyncio.wait_for(
+                        commands.send_login_sync(contact, password, min_timeout=8, dst_type=peer_type),
+                        timeout=30,
+                    )
+                else:
+                    event = await asyncio.wait_for(
+                        commands.send_login_sync(contact, password, min_timeout=8),
+                        timeout=30,
+                    )
+                if (event is None or event.type == EventType.ERROR) and peer_type == 3 and hasattr(commands, "send_login"):
+                    res = await commands.send_login(contact, password)
+                    if res is not None and res.type != EventType.ERROR:
+                        event = res
             if event is None or event.type == EventType.ERROR:
                 return web.json_response({"error": "Login failed or timed out. Check the password."}, status=401)
             log_to_dash(f"Remote management login to {name}")
