@@ -5116,7 +5116,152 @@ function syncConfigControls(){let colorSelect=document.getElementById('theme-sel
 const weatherIcons={sun:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>',partly:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="16" cy="7" r="3"/><path d="M16 2v1m0 8v1m5-5h-1m-8 0h-1M5 19h12a3 3 0 0 0 .3-6A5 5 0 0 0 8 11.5 3.8 3.8 0 0 0 5 19Z"/></svg>',cloud:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19h13a4 4 0 0 0 .4-8A6 6 0 0 0 7 9.5 4.8 4.8 0 0 0 5 19Z"/></svg>',fog:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm-2 4h14m-10 3h14"/></svg>',rain:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 15h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 7 4 4 0 0 0 5 15Zm2 3-1 2m7-2-1 2m7-2-1 2"/></svg>',snow:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm2 4h.01M12 19h.01M18 18h.01"/></svg>',storm:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14h13a3.5 3.5 0 0 0 .3-7A5.5 5.5 0 0 0 7 6 4 4 0 0 0 5 14Zm8 1-3 4h3l-1 3 4-5h-3l1-2"/></svg>'};
 function weatherIconName(code){if(code===null||code===undefined||!Number.isFinite(Number(code)))return 'cloud';code=Number(code);if(code===0)return 'sun';if(code===1||code===2)return 'partly';if(code===45||code===48)return 'fog';if(code===51||code===53||code===55||code===56||code===57||code===61||code===63||code===65||code===66||code===67||code===80||code===81||code===82)return 'rain';if(code===71||code===73||code===75||code===77||code===85||code===86)return 'snow';if(code===95||code===96||code===99)return 'storm';return 'cloud'}
 function renderWeatherIcon(code,condition='Weather condition unavailable'){let icon=document.getElementById('weather-icon');icon.innerHTML=weatherIcons[weatherIconName(code)]||weatherIcons.cloud;icon.setAttribute('aria-label',condition);icon.title=condition}
-function syncNoaaControls(){let n=(appConfig&&appConfig.noaa)||{enabled:true,frequency:"162.475M",gain:40,same_codes:["009003"],target_channel:0};let elEn=document.getElementById("noaa-enabled");if(!elEn)return;elEn.checked=n.enabled!==false;document.getElementById("noaa-freq").value=n.frequency||"162.475M";document.getElementById("noaa-gain").value=n.gain??40;document.getElementById("noaa-same").value=Array.isArray(n.same_codes)?n.same_codes.join(","):"009003";let hmsEl=document.getElementById("noaa-every-hms");if(hmsEl){let pad=v=>String(Math.max(0,Number(v)||0)).padStart(2,"0");hmsEl.value=n.broadcast_every||`${pad(n.interval_hours??0)}:${pad(n.interval_minutes??30)}:${pad(n.interval_seconds??0)}`;}let srEl=document.getElementById("noaa-samp-rate");if(srEl)srEl.value=String(n.samp_rate||1024000);let dsEl=document.getElementById("noaa-direct-sampling");if(dsEl)dsEl.value=String(n.direct_sampling??0);let sqEl=document.getElementById("noaa-squelch");if(sqEl)sqEl.value=String(n.squelch??0);let chSel=document.getElementById("noaa-channel");let savedCh=String(n.target_channel??0);fetch("/api/status").then(r=>r.json()).then(st=>{if(st&&st.channels&&Object.keys(st.channels).length){chSel.innerHTML="";Object.entries(st.channels).sort((a,b)=>Number(a[0])-Number(b[0])).forEach(([idx,info])=>{let opt=document.createElement("option");opt.value=String(idx);let cname=(info&&(info.channel_name||info.name))||(idx==="0"?"Public":"Channel "+idx);opt.textContent=idx+" — "+cname;chSel.appendChild(opt);});}chSel.value=savedCh;}).catch(()=>{chSel.value=savedCh;});}async function saveNoaaSettings(e){e.preventDefault();let codes=document.getElementById("noaa-same").value.split(",").map(s=>s.trim()).filter(Boolean);let noaa={enabled:document.getElementById("noaa-enabled").checked,frequency:document.getElementById("noaa-freq").value,gain:Number(document.getElementById("noaa-gain").value||40),same_codes:codes,broadcast_every:(()=>{let raw=(document.getElementById("noaa-every-hms")?.value||"00:30:00").trim();let p=raw.split(":").map(x=>Math.max(0,parseInt(x,10)||0));while(p.length<3)p.push(0);let pad=v=>String(v).padStart(2,"0");return `${pad(Math.min(99,p[0]))}:${pad(Math.min(59,p[1]))}:${pad(Math.min(59,p[2]))}`;})(),samp_rate:Number(document.getElementById("noaa-samp-rate")?.value||1024000),direct_sampling:Number(document.getElementById("noaa-direct-sampling")?.value||0),squelch:Number(document.getElementById("noaa-squelch")?.value||0),target_channels:[...document.querySelectorAll(".noaa-ch-cb:checked")].map(cb=>Number(cb.value))};await saveAppConfig({...appConfig,noaa},"noaa-settings-status");}async function startOpenWebRx(){let btn=document.getElementById('owrx-start-btn'),st=document.getElementById('owrx-status'),fr=document.getElementById('owrx-frame');if(btn)btn.disabled=true;if(st)st.textContent='Pausing NOAA SAME monitor and starting OpenWebRX+ on port 8073...';try{let r=await fetch('/api/openwebrx/start',{method:'POST'}),d=await r.json();if(!r.ok)throw new Error(d.error||'Failed to start OpenWebRX+');if(fr){fr.hidden=false;fr.src='http://'+location.hostname+':8073/';}if(st)st.textContent='OpenWebRX+ running on :8073 (NOAA SAME paused). Click Stop when finished to resume NOAA alerts.';}catch(e){if(st)st.textContent='Error: '+e.message;}finally{if(btn)btn.disabled=false;}}
+let _noaaSelectedTargets=[];
+function _noaaAllCandidates(){
+  let out=[];
+  let chMap=new Map((Array.isArray(meshChannels)?meshChannels:[]).map(c=>[Number(c.id),c.name||("Channel "+c.id)]));
+  for(let i=0;i<8;i++){
+    let nm=chMap.get(i)||(i===0?"Public":"Channel "+i);
+    out.push({kind:"channel",target:String(i),label:`Ch ${i} — ${nm}`,badge:"CHANNEL"});
+  }
+  (Array.isArray(mapNodes)?mapNodes:[]).forEach(n=>{
+    let t=Number(n.type||0);
+    if(t===2)return;
+    let pk=String(n.id||""),nm=n.name||pk.slice(0,12);
+    out.push({kind:t===3?"room":"node",target:pk,label:`${nm} (${pk.slice(0,8)})`,badge:t===3?"ROOM SERVER":"NODE"});
+  });
+  return out;
+}
+function addNoaaBroadcastTarget(kind,target,label,password=""){
+  let k=String(target||"").trim();if(!k)return;
+  if(!_noaaSelectedTargets.some(x=>x.kind===kind&&x.target.toLowerCase()===k.toLowerCase()))
+    _noaaSelectedTargets.push({kind,target:k,label:label||k,password:password||""});
+  let inp=document.getElementById("noaa-target-search");if(inp)inp.value="";
+  let sug=document.getElementById("noaa-target-suggestions");if(sug)sug.hidden=true;
+  renderNoaaSelectedTargets();
+}
+function renderNoaaTargetSuggestions(){
+  let inp=document.getElementById("noaa-target-search"),box=document.getElementById("noaa-target-suggestions");
+  if(!inp||!box)return;
+  let q=inp.value.trim().toLowerCase();
+  let cands=_noaaAllCandidates().filter(c=>
+    !_noaaSelectedTargets.some(s=>s.kind===c.kind&&s.target.toLowerCase()===c.target.toLowerCase()) &&
+    (!q||c.label.toLowerCase().includes(q)||c.target.toLowerCase().includes(q)||c.badge.toLowerCase().includes(q))
+  );
+  box.innerHTML="";
+  if(!cands.length){
+    if(q){
+      let btn=document.createElement("button");btn.type="button";btn.className="secondary";
+      btn.style.cssText="text-align:left;font-size:11px;padding:6px 8px";
+      btn.textContent=`+ Add custom room server "${inp.value.trim()}"`;
+      btn.onclick=()=>addNoaaBroadcastTarget("room",inp.value.trim(),inp.value.trim(),"");
+      box.appendChild(btn);box.hidden=false;
+    }else box.hidden=true;
+    return;
+  }
+  cands.slice(0,25).forEach(c=>{
+    let btn=document.createElement("button");btn.type="button";btn.className="secondary";
+    btn.style.cssText="display:flex;justify-content:space-between;align-items:center;text-align:left;font-size:11px;padding:6px 8px";
+    let l=document.createElement("span");l.textContent=c.label;
+    let tg=document.createElement("span");tg.textContent=c.badge;
+    tg.style.cssText="font-size:9px;opacity:0.75;border:1px solid var(--border);border-radius:4px;padding:1px 5px";
+    btn.append(l,tg);btn.onclick=()=>addNoaaBroadcastTarget(c.kind,c.target,c.label,"");
+    box.appendChild(btn);
+  });
+  box.hidden=false;
+}
+function refreshNoaaTargetLabels(){
+  if(!Array.isArray(_noaaSelectedTargets)||!_noaaSelectedTargets.length)return;
+  let cands=_noaaAllCandidates();
+  let changed=false;
+  _noaaSelectedTargets.forEach(item=>{
+    let m=cands.find(c=>c.kind===item.kind&&c.target.toLowerCase()===String(item.target).toLowerCase());
+    if(m&&m.label&&item.label!==m.label){item.label=m.label;changed=true;}
+  });
+  if(changed)renderNoaaSelectedTargets();
+}
+function renderNoaaSelectedTargets(){
+  let box=document.getElementById("noaa-selected-targets");if(!box)return;
+  box.innerHTML="";
+  if(!_noaaSelectedTargets.length){
+    box.innerHTML='<span class="settings-description">No targets selected. Search below to add channels, room servers, or nodes.</span>';
+    return;
+  }
+  _noaaSelectedTargets.forEach((item,idx)=>{
+    let row=document.createElement("div");
+    row.style.cssText="display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--panel-raised)";
+    let badge=document.createElement("span");
+    badge.textContent=item.kind==="channel"?"CH":(item.kind==="room"?"ROOM":"NODE");
+    badge.style.cssText="font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;border:1px solid var(--accent);color:var(--accent)";
+    let lbl=document.createElement("span");lbl.textContent=item.label;lbl.style.cssText="flex:1;min-width:140px;font-size:12px";
+    row.append(badge,lbl);
+    if(item.kind==="room"){
+      let pw=document.createElement("input");pw.type="password";pw.placeholder="Room password (optional)";
+      pw.value=item.password||"";pw.style.width="165px";
+      pw.oninput=()=>{_noaaSelectedTargets[idx].password=pw.value;};
+      row.appendChild(pw);
+    }
+    let rm=document.createElement("button");rm.type="button";rm.className="secondary";rm.textContent="Remove";
+    rm.style.cssText="padding:3px 8px;font-size:11px";
+    rm.onclick=()=>{_noaaSelectedTargets.splice(idx,1);renderNoaaSelectedTargets();};
+    row.appendChild(rm);box.appendChild(row);
+  });
+}
+document.addEventListener("click",e=>{
+  let inp=document.getElementById("noaa-target-search"),sug=document.getElementById("noaa-target-suggestions");
+  if(sug&&inp&&!sug.contains(e.target)&&e.target!==inp)sug.hidden=true;
+});
+function syncNoaaControls(){
+  let n=(appConfig&&appConfig.noaa)||{enabled:true,frequency:"162.475M",gain:40,same_codes:["009003"],target_channels:Array.of(5)};
+  let elEn=document.getElementById("noaa-enabled");if(!elEn)return;
+  elEn.checked=n.enabled!==false;
+  document.getElementById("noaa-freq").value=n.frequency||"162.475M";
+  document.getElementById("noaa-gain").value=n.gain??40;
+  document.getElementById("noaa-same").value=Array.isArray(n.same_codes)?n.same_codes.join(","):"009003";
+  let hmsEl=document.getElementById("noaa-every-hms");
+  if(hmsEl){let pad=v=>String(Math.max(0,Number(v)||0)).padStart(2,"0");hmsEl.value=n.broadcast_every||`${pad(n.interval_hours??0)}:${pad(n.interval_minutes??30)}:${pad(n.interval_seconds??0)}`;}
+  let srEl=document.getElementById("noaa-samp-rate");if(srEl)srEl.value=String(n.samp_rate||1024000);
+  let dsEl=document.getElementById("noaa-direct-sampling");if(dsEl)dsEl.value=String(n.direct_sampling??0);
+  let sqEl=document.getElementById("noaa-squelch");if(sqEl)sqEl.value=String(n.squelch??0);
+  let cands=_noaaAllCandidates();
+  let findLbl=(kind,t)=>{let m=cands.find(c=>c.kind===kind&&c.target.toLowerCase()===String(t).toLowerCase());return m?m.label:String(t);};
+  _noaaSelectedTargets=[];
+  let chs=Array.isArray(n.target_channels)?n.target_channels:(n.target_channel!==undefined?Array.of(n.target_channel):Array.of(5));
+  chs.forEach(c=>_noaaSelectedTargets.push({kind:"channel",target:String(c),label:findLbl("channel",c),password:""}));
+  (Array.isArray(n.target_room_servers)?n.target_room_servers:[]).forEach(r=>{
+    let t=typeof r==="string"?r:String(r.target||""),pw=typeof r==="string"?"":String(r.password||"");
+    if(t)_noaaSelectedTargets.push({kind:"room",target:t,label:findLbl("room",t),password:pw});
+  });
+  (Array.isArray(n.target_nodes)?n.target_nodes:[]).forEach(nd=>{
+    let t=typeof nd==="string"?nd:String(nd.target||"");
+    if(t)_noaaSelectedTargets.push({kind:"node",target:t,label:findLbl("node",t),password:""});
+  });
+  renderNoaaSelectedTargets();
+}
+async function saveNoaaSettings(e){
+  e.preventDefault();
+  let codes=document.getElementById("noaa-same").value.split(",").map(s=>s.trim()).filter(Boolean);
+  let target_channels=_noaaSelectedTargets.filter(x=>x.kind==="channel").map(x=>Number(x.target));
+  let target_room_servers=_noaaSelectedTargets.filter(x=>x.kind==="room").map(x=>({target:x.target,password:x.password||""}));
+  let target_nodes=_noaaSelectedTargets.filter(x=>x.kind==="node").map(x=>x.target);
+  let rawHms=(document.getElementById("noaa-every-hms")?.value||"00:30:00").trim();
+  let p=rawHms.split(":").map(x=>Math.max(0,parseInt(x,10)||0));
+  let pad=v=>String(v).padStart(2,"0");
+  let broadcast_every=`${pad(Math.min(99,p.at(0)||0))}:${pad(Math.min(59,p.at(1)||0))}:${pad(Math.min(59,p.at(2)||0))}`;
+  let noaa={
+    enabled:document.getElementById("noaa-enabled").checked,
+    frequency:document.getElementById("noaa-freq").value,
+    gain:Number(document.getElementById("noaa-gain").value||40),
+    same_codes:codes,
+    broadcast_every,
+    samp_rate:Number(document.getElementById("noaa-samp-rate")?.value||1024000),
+    direct_sampling:Number(document.getElementById("noaa-direct-sampling")?.value||0),
+    squelch:Number(document.getElementById("noaa-squelch")?.value||0),
+    target_channels,target_room_servers,target_nodes
+  };
+  await saveAppConfig({...appConfig,noaa},"noaa-settings-status");
+}
+async function startOpenWebRx(){let btn=document.getElementById('owrx-start-btn'),st=document.getElementById('owrx-status'),fr=document.getElementById('owrx-frame');if(btn)btn.disabled=true;if(st)st.textContent='Pausing NOAA SAME monitor and starting OpenWebRX+ on port 8073...';try{let r=await fetch('/api/openwebrx/start',{method:'POST'}),d=await r.json();if(!r.ok)throw new Error(d.error||'Failed to start OpenWebRX+');if(fr){fr.hidden=false;fr.src='http://'+location.hostname+':8073/';}if(st)st.textContent='OpenWebRX+ running on :8073 (NOAA SAME paused). Click Stop when finished to resume NOAA alerts.';}catch(e){if(st)st.textContent='Error: '+e.message;}finally{if(btn)btn.disabled=false;}}
 async function stopOpenWebRx(){let st=document.getElementById('owrx-status'),fr=document.getElementById('owrx-frame');if(fr){fr.src='about:blank';fr.hidden=true;}if(st)st.textContent='Stopping OpenWebRX+ and resuming NOAA SAME alert monitor...';await fetch('/api/openwebrx/stop',{method:'POST'}).catch(()=>{});if(st)st.textContent='Stopped (0% CPU). NOAA SAME alert monitor resumed.';}
 async function stopSdrLive(resumeSame=true){['noaa-live-audio','sdr-analyzer-audio'].forEach(id=>{let a=document.getElementById(id);if(a){a.pause();a.removeAttribute('src');a.load();}});if(resumeSame){await fetch('/api/sdr/stop',{method:'POST'}).catch(()=>{});}let s1=document.getElementById('noaa-live-status');if(s1)s1.textContent='Stopped (SAME alert monitor resumed)';let s2=document.getElementById('sdr-analyzer-status');if(s2)s2.textContent='Stopped';}
 async function tuneNoaaLive(freq,label){await stopSdrLive(false);let gain=document.getElementById('noaa-gain')?.value||40;let a=document.getElementById('noaa-live-audio'),st=document.getElementById('noaa-live-status');if(st)st.textContent='Connecting SDR to '+label+'...';if(a){a.volume=1.0;let sq=document.getElementById('noaa-squelch')?.value||0;a.src='/api/sdr/stream?freq='+encodeURIComponent(freq)+'&mod=fm&gain='+encodeURIComponent(gain)+'&squelch='+encodeURIComponent(sq)+'&_='+Date.now();a.onplaying=()=>{if(st)st.textContent='Playing live: '+label;};a.play().catch(e=>{if(st)st.textContent='Click Play on the audio bar ('+e.message+')';});}}
@@ -5236,7 +5381,7 @@ async function loadAnalyzerRadioStatus(){let panel=document.getElementById('anal
 async function loadTronAnalyzerRadioStatus(){let panel=document.getElementById('analyzer-radio-status');if(!panel||activeView!=='tron-overview'||analyzerRadioStatusLoading)return;analyzerRadioStatusLoading=true;let groups=[['Radio','radio'],['Core','core'],['Packets','packets']],labels={noise_floor:['Noise floor','dBm'],last_rssi:['Last RSSI','dBm'],last_snr:['Last SNR','dB'],tx_air_secs:['TX airtime','s'],rx_air_secs:['RX airtime','s'],battery_mv:['Battery voltage','mV'],uptime_secs:['Uptime','s'],errors:['Errors',''],queue_len:['Transmit queue',''],recv:['Received packets',''],sent:['Sent packets',''],flood_tx:['Flood TX',''],direct_tx:['Direct TX',''],flood_rx:['Flood RX',''],direct_rx:['Direct RX',''],recv_errors:['Receive errors','']};let state=panel.querySelector('.analyzer-radio-state');if(!state){state=panel.querySelector('.analyzer-detail');if(state)state.className='analyzer-radio-state analyzer-detail'}let contentReady=Boolean(panel.querySelector('[data-stat-key]')),issues=[];try{for(let [title,statsType] of groups){try{let response=await fetch('/api/device-settings/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'stats',stats_type:statsType})}),data=await response.json();if(!response.ok){if(response.status===503){if(state)state.textContent='Connect to a MeshCore radio to view live statistics.';return}throw new Error(data.error||'Statistics unavailable')}let values=data.result&&typeof data.result==='object'&&!Array.isArray(data.result)?data.result:{};let section=panel.querySelector('[data-radio-group="'+statsType+'"]'),list;if(!section){if(!contentReady){panel.replaceChildren();contentReady=true;state=document.createElement('p');state.className='analyzer-radio-state';panel.appendChild(state)}section=document.createElement('section');section.className='analyzer-radio-group';section.dataset.radioGroup=statsType;let heading=document.createElement('h4');heading.textContent=title;list=document.createElement('dl');list.className='analyzer-radio-list';list.dataset.radioGroup=statsType;section.append(heading,list);panel.appendChild(section)}else list=section.querySelector('.analyzer-radio-list');for(let [key,value] of Object.entries(values)){let detail=[...list.querySelectorAll('[data-stat-key]')].find(item=>item.dataset.statKey===key);if(!detail){let term=document.createElement('dt');term.textContent=(labels[key]||[key.replaceAll('_',' ').replace(/\b\w/g,char=>char.toUpperCase()),''])[0];detail=document.createElement('dd');detail.dataset.statKey=key;list.append(term,detail)}let unit=(labels[key]||['',''])[1];detail.textContent=value===null||value===undefined?'Unavailable':String(value)+(unit?' '+unit:'')}}catch(error){issues.push(title)}}let timestamp=panel.querySelector('.analyzer-radio-updated');if(!timestamp){timestamp=document.createElement('p');timestamp.className='analyzer-radio-updated';panel.appendChild(timestamp)}timestamp.textContent='Updated '+fmtTime(new Date());if(state)state.textContent=issues.length?'Some readings did not refresh; previous values are retained.':'LIVE'}finally{analyzerRadioStatusLoading=false}}
 setInterval(()=>{if(activeView==='analyzer')loadAnalyzerRadioStatus();else if(activeView==='tron-overview')loadTronAnalyzerRadioStatus()},15000);
 function updateSearchPlaceholders(){let contactPlaceholder='Search '+mapNodes.length+' contacts';for(let id of ['node-search','map-node-search']){let input=document.getElementById(id);if(input)input.placeholder=contactPlaceholder}let channelSearch=document.getElementById('channel-search');if(channelSearch)channelSearch.placeholder='Search '+meshChannels.length+' channels'}
-async function peers(){let r=await fetch('/api/peers'),d=await r.json();gatewayTelemetry=d.gateway_telemetry||{};mapNodes=d.nodes||[];meshChannels=d.channels||[];peerLimits=d.limits||{};updateAddCapacity();updateSearchPlaceholders();gateway_battery.textContent=gatewayTelemetry.battery!=null?gatewayTelemetry.battery+'%':'Unavailable';system_battery.textContent=d.system_battery!=null?d.system_battery+'%':'Unavailable';if(!mapNodes.some(item=>String(item.id)===selectedNodeId))selectedNodeId='';if(!meshChannels.some(item=>String(item.id)===selectedChannelId))selectedChannelId='';renderConversationTargets('node');renderConversationTargets('channel');renderKnownPeers();renderMapMarkers();renderAnalyzerStats();renderIncomingAdverts(d.incoming_adverts||[]);if(liveTraceMap)renderLiveTraceMarkers()}
+async function peers(){let r=await fetch('/api/peers'),d=await r.json();gatewayTelemetry=d.gateway_telemetry||{};mapNodes=d.nodes||[];meshChannels=d.channels||[];peerLimits=d.limits||{};updateAddCapacity();updateSearchPlaceholders();gateway_battery.textContent=gatewayTelemetry.battery!=null?gatewayTelemetry.battery+'%':'Unavailable';system_battery.textContent=d.system_battery!=null?d.system_battery+'%':'Unavailable';if(!mapNodes.some(item=>String(item.id)===selectedNodeId))selectedNodeId='';if(!meshChannels.some(item=>String(item.id)===selectedChannelId))selectedChannelId='';renderConversationTargets('node');renderConversationTargets('channel');if(typeof refreshNoaaTargetLabels==='function')refreshNoaaTargetLabels();renderKnownPeers();renderMapMarkers();renderAnalyzerStats();renderIncomingAdverts(d.incoming_adverts||[]);if(liveTraceMap)renderLiveTraceMarkers()}
 function parseChannelSender(text){let bracket=text.match(/^\[([^\]]{1,24})\]\s*/);if(bracket)return bracket[1];let colon=text.match(/^([A-Za-z0-9 _-]{1,24}):\s/);if(colon)return colon[1];return null}
 async function history(type,id,boxId,scrollToLatest=false){let box=document.getElementById(boxId);if(!id){box.replaceChildren();updateConversationMenu(type);return}if(type==='node'&&isRepeaterNode(id)){if(manageNodeId===String(id))return;let note=document.createElement('p');note.className='map-empty';note.textContent='Direct messages are not supported for repeater nodes.';box.replaceChildren(note);return}try{let response=await fetch('/api/chat-history?target_type='+encodeURIComponent(type)+'&target='+encodeURIComponent(id)),data=await response.json();if(!response.ok)throw new Error(data.error||'Message history could not be loaded');updateConversationMenu(type,data.metadata||{});let wasAtLatest=box.scrollHeight-box.clientHeight-box.scrollTop<=40,previousTop=box.scrollTop,previousBehavior=box.style.scrollBehavior;box.style.scrollBehavior='auto';box.replaceChildren();let peerName=type==='node'?(mapNodes.find(item=>String(item.id)===id)?.name||id):(meshChannels.find(item=>String(item.id)===id)?.name||('Channel '+id));for(let message of data.messages||[]){let outgoing=message.direction==='outgoing';let item=document.createElement('div');item.className='chat-message '+(outgoing?'outgoing':'incoming');let sender=outgoing?'You':(type==='channel'?(parseChannelSender(message.text)||peerName):peerName);let meta=document.createElement('div');meta.className='chat-message-meta';let avatar=document.createElement('span');avatar.className='chat-avatar';avatar.style.background=hashColor(outgoing?'you':id);avatar.textContent=sender.charAt(0)||'?';let senderLabel=document.createElement('span');senderLabel.className='chat-sender';senderLabel.textContent=sender;let time=document.createElement('span');time.className='chat-time';let timeStr=fmtTime(message.timestamp,message.sort_timestamp);if(!outgoing&&Number.isInteger(Number(message.path_len))&&Number(message.path_len)>=0){let hLen=Number(message.path_len);let modeEl=document.getElementById('path-hash-mode');let fallbackBytes=(modeEl&&['0','1','2'].includes(modeEl.value))?(Number(modeEl.value)+1):1;let hBytes=Number(message.path_hash_bytes)||(Array.isArray(message.path_nodes)&&message.path_nodes[0]?Math.max(1,Math.round(String(message.path_nodes[0]).length/2)):fallbackBytes);let hopLabel=hLen===0?'Direct':(hLen+(hLen===1?' hop':' hops'));timeStr+=' · '+hopLabel+' ('+hBytes+'-byte)'}time.textContent=timeStr;let body=document.createElement('div');body.className='chat-message-body';body.textContent=message.text;if(outgoing){let status=document.createElement('span');status.className='chat-status';let statusLabels={sent:'Sent',delivered:'Delivered',failed:'Failed'},heardCount=Number(message.heard);status.textContent=message.status==='delivered'&&Number.isInteger(heardCount)&&heardCount>0?'Delivered · '+heardCount+' heard':(statusLabels[message.status]||'Sent');let bubble=document.createElement('div');bubble.className='chat-bubble';bubble.append(body);meta.className='chat-caption';meta.append(status,time);item.append(bubble,meta)}else{let bubble=document.createElement('div'),caption=document.createElement('div');bubble.className='chat-bubble';bubble.append(body);meta.append(avatar,senderLabel);caption.className='chat-caption';caption.append(time);item.append(meta,bubble,caption)}item.tabIndex=0;item.setAttribute('role','button');item.oncontextmenu=event=>{event.preventDefault();openMessageActions(type,id,message,sender,data.blocked||[])};item.onkeydown=event=>{if(event.key==='Enter')openMessageActions(type,id,message,sender,data.blocked||[])};box.appendChild(item)}box.scrollTop=scrollToLatest||wasAtLatest?box.scrollHeight:previousTop;box.style.scrollBehavior=previousBehavior}catch(error){box.textContent=error.message}}
 async function deleteTarget(type){let selected=type==='node'?selectedNodeId:selectedChannelId;if(!selected)return;if(!confirm('Delete this '+type+' from the device? This cannot be undone.'))return;let response=await fetch('/api/delete-target',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_type:type,target:selected})}),data=await response.json();if(!response.ok){alert(data.error||'Delete failed');return}if(type==='node'){selectedNodeId=null;document.getElementById('node-chat-title').textContent='Select a node';document.getElementById('node-chat-detail').textContent='Choose a node to view its conversation.';document.getElementById('node-send').disabled=true;document.getElementById('node-chat-history').replaceChildren()}else{selectedChannelId=null;document.getElementById('channel-chat-title').textContent='Select a channel';document.getElementById('channel-chat-detail').textContent='Choose a channel to view its conversation.';document.getElementById('channel-send').disabled=true;document.getElementById('channel-chat-history').replaceChildren()}updateConversationMenu(type);let menu=document.getElementById(type+'-chat-options');if(menu)menu.open=false;await peers()}
@@ -5608,7 +5753,7 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 <label for="weather-state">State (optional)<input id="weather-state" name="state" maxlength="80" value="" placeholder="Optional"></label>
 <div class="settings-actions"><button type="submit">Save location</button><p id="weather-settings-status" class="preferences-status" aria-live="polite"></p></div>
 </form>
-<hr style="margin:18px 0;opacity:0.2"><form class="weather-settings-layout" onsubmit="saveNoaaSettings(event)"><h3 style="margin:0 0 8px">NOAA USB SDR Weather Radio (Scheduled Broadcast)</h3><label class="settings-item-full"><input type="checkbox" id="noaa-enabled" checked> Enable scheduled NOAA capture + 24/7 SAME alerts</label><label for="noaa-freq">NOAA Frequency<select id="noaa-freq"><option value="162.400M">162.400 MHz (WX2)</option><option value="162.425M">162.425 MHz (WX4)</option><option value="162.450M">162.450 MHz (WX5)</option><option value="162.475M" selected>162.475 MHz (WX3 - Hartford/Burlington)</option><option value="162.500M">162.500 MHz (WX6)</option><option value="162.525M">162.525 MHz (WX7)</option><option value="162.550M">162.550 MHz (WX1)</option></select></label><label for="noaa-gain">SDR Gain (0-50)<input id="noaa-gain" type="number" min="0" max="50" value="40"></label><label for="noaa-same">SAME County FIPS Codes<input id="noaa-same" value="009003" placeholder="009003"></label><label for="noaa-every-hms">Broadcast Every (HH:MM:SS)<input id="noaa-every-hms" value="00:30:00" placeholder="00:30:00" pattern="\d{1,2}:\d{2}:\d{2}"></label><label for="noaa-samp-rate">OpenWebRX+ Sample Rate<select id="noaa-samp-rate"><option value="1024000" selected>1.024 MS/s (Smoothest Audio)</option><option value="2048000">2.048 MS/s (Wider Waterfall)</option><option value="2400000">2.400 MS/s (Max Span)</option></select></label><label for="noaa-direct-sampling">Direct Sampling Mode<select id="noaa-direct-sampling"><option value="0" selected>Disabled (VHF/UHF — NOAA 162 MHz)</option><option value="1">I-branch (HF &lt; 24 MHz)</option><option value="2">Q-branch (HF &lt; 24 MHz)</option></select></label><label for="noaa-squelch">Live Stream Squelch (0 = open)<input id="noaa-squelch" type="number" min="0" max="200" value="0"></label><div class="settings-item-full"><span style="display:block;margin-bottom:6px;font-weight:600">Channels to Broadcast</span><div id="noaa-channels-box" style="display:flex;flex-wrap:wrap;gap:10px"><label><input type="checkbox" class="noaa-ch-cb" value="0"> 0 — Public</label><label><input type="checkbox" class="noaa-ch-cb" value="1"> 1 — Channel 1</label><label><input type="checkbox" class="noaa-ch-cb" value="2"> 2 — Channel 2</label><label><input type="checkbox" class="noaa-ch-cb" value="3"> 3 — Channel 3</label><label><input type="checkbox" class="noaa-ch-cb" value="4"> 4 — Channel 4</label><label><input type="checkbox" class="noaa-ch-cb" value="5" checked> 5 — Channel 5</label><label><input type="checkbox" class="noaa-ch-cb" value="6"> 6 — Channel 6</label><label><input type="checkbox" class="noaa-ch-cb" value="7"> 7 — Channel 7</label></div></div><div class="settings-actions"><button type="submit">Save NOAA settings</button><button type="button" class="secondary" id="noaa-test-btn" onclick="runNoaaCaptureNow()">Run 90s Capture Now</button><p id="noaa-settings-status" class="preferences-status" aria-live="polite"></p></div></form><hr style="margin:18px 0;opacity:0.2"><div class="weather-settings-layout"><h3 style="margin:0 0 6px">Listen Live to NOAA Weather Radio (7 Channels)</h3><p class="settings-description" style="margin:0 0 10px">Click any NOAA frequency to stream live audio from your USB SDR (pauses SAME monitor while listening and resumes when stopped).</p><div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px"><button type="button" class="secondary" onclick="tuneNoaaLive('162.400M','162.400 MHz (WX2)')">162.400 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.425M','162.425 MHz (WX4)')">162.425 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.450M','162.450 MHz (WX5)')">162.450 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.475M','162.475 MHz (WX3 Hartford)')">162.475 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.500M','162.500 MHz (WX6)')">162.500 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.525M','162.525 MHz (WX7)')">162.525 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.550M','162.550 MHz (WX1)')">162.550 MHz</button><button type="button" onclick="stopSdrLive()">Stop Audio</button></div><audio id="noaa-live-audio" controls style="width:100%;max-width:460px;margin-bottom:6px"></audio><p id="noaa-live-status" class="preferences-status" aria-live="polite">Idle</p></div>
+<hr style="margin:18px 0;opacity:0.2"><form class="weather-settings-layout" onsubmit="saveNoaaSettings(event)"><h3 style="margin:0 0 8px">NOAA USB SDR Weather Radio (Scheduled Broadcast)</h3><label class="settings-item-full"><input type="checkbox" id="noaa-enabled" checked> Enable scheduled NOAA capture + 24/7 SAME alerts</label><label for="noaa-freq">NOAA Frequency<select id="noaa-freq"><option value="162.400M">162.400 MHz (WX2)</option><option value="162.425M">162.425 MHz (WX4)</option><option value="162.450M">162.450 MHz (WX5)</option><option value="162.475M" selected>162.475 MHz (WX3 - Hartford/Burlington)</option><option value="162.500M">162.500 MHz (WX6)</option><option value="162.525M">162.525 MHz (WX7)</option><option value="162.550M">162.550 MHz (WX1)</option></select></label><label for="noaa-gain">SDR Gain (0-50)<input id="noaa-gain" type="number" min="0" max="50" value="40"></label><label for="noaa-same">SAME County FIPS Codes<input id="noaa-same" value="009003" placeholder="009003"></label><label for="noaa-every-hms">Broadcast Every (HH:MM:SS)<input id="noaa-every-hms" value="00:30:00" placeholder="00:30:00" pattern="\d{1,2}:\d{2}:\d{2}"></label><label for="noaa-samp-rate">OpenWebRX+ Sample Rate<select id="noaa-samp-rate"><option value="1024000" selected>1.024 MS/s (Smoothest Audio)</option><option value="2048000">2.048 MS/s (Wider Waterfall)</option><option value="2400000">2.400 MS/s (Max Span)</option></select></label><label for="noaa-direct-sampling">Direct Sampling Mode<select id="noaa-direct-sampling"><option value="0" selected>Disabled (VHF/UHF — NOAA 162 MHz)</option><option value="1">I-branch (HF &lt; 24 MHz)</option><option value="2">Q-branch (HF &lt; 24 MHz)</option></select></label><label for="noaa-squelch">Live Stream Squelch (0 = open)<input id="noaa-squelch" type="number" min="0" max="200" value="0"></label><div class="settings-item-full"><label for="noaa-target-search" style="font-weight:600">Broadcast Targets (Channels, Room Servers &amp; Nodes)</label><p class="settings-description" style="margin:2px 0 8px">Search channels, room servers, or nodes to build your broadcast target list.</p><div id="noaa-selected-targets" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px"></div><div style="position:relative"><input id="noaa-target-search" autocomplete="off" placeholder="Search channels, room servers, or nodes to add..." oninput="renderNoaaTargetSuggestions()" onfocus="renderNoaaTargetSuggestions()"><div id="noaa-target-suggestions" hidden style="margin-top:4px;max-height:210px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--panel-bg);padding:4px;display:flex;flex-direction:column;gap:4px"></div></div></div><div class="settings-actions"><button type="submit">Save NOAA settings</button><button type="button" class="secondary" id="noaa-test-btn" onclick="runNoaaCaptureNow()">Run 90s Capture Now</button><p id="noaa-settings-status" class="preferences-status" aria-live="polite"></p></div></form><hr style="margin:18px 0;opacity:0.2"><div class="weather-settings-layout"><h3 style="margin:0 0 6px">Listen Live to NOAA Weather Radio (7 Channels)</h3><p class="settings-description" style="margin:0 0 10px">Click any NOAA frequency to stream live audio from your USB SDR (pauses SAME monitor while listening and resumes when stopped).</p><div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px"><button type="button" class="secondary" onclick="tuneNoaaLive('162.400M','162.400 MHz (WX2)')">162.400 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.425M','162.425 MHz (WX4)')">162.425 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.450M','162.450 MHz (WX5)')">162.450 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.475M','162.475 MHz (WX3 Hartford)')">162.475 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.500M','162.500 MHz (WX6)')">162.500 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.525M','162.525 MHz (WX7)')">162.525 MHz</button><button type="button" class="secondary" onclick="tuneNoaaLive('162.550M','162.550 MHz (WX1)')">162.550 MHz</button><button type="button" onclick="stopSdrLive()">Stop Audio</button></div><audio id="noaa-live-audio" controls style="width:100%;max-width:460px;margin-bottom:6px"></audio><p id="noaa-live-status" class="preferences-status" aria-live="polite">Idle</p></div>
 </section>
 <section id="settings-logs-panel" class="settings-tab-panel" hidden>
 <pre id="app-log-output" class="device-debug-output" style="max-height:60vh;margin:0 0 12px">Loading...</pre>
@@ -7746,8 +7891,21 @@ async def transmit_handler(request):
         return web.json_response({"error": str(error)}, status=500)
 
 
+def _restart_bluetooth_stack():
+    for cmd in (
+        ["rfkill", "unblock", "bluetooth"],
+        ["systemctl", "restart", "bluetooth"],
+        ["bluetoothctl", "power", "on"],
+    ):
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, timeout=15, check=False)
+        except Exception:
+            pass
+
+
 async def auto_connect_hardware():
     # Keeps retrying so the bot recovers when the radio is unplugged or reboots.
+    ble_fail_streak = 0
     while True:
         try:
             # A dropped serial/BLE link leaves is_connected stuck on True otherwise.
@@ -7755,12 +7913,22 @@ async def auto_connect_hardware():
                 if getattr(meshcore_instance, "is_connected", True) is False:
                     log_to_dash("Device link lost; reconnecting...")
                     app_state["is_connected"] = False
+                    _NOAA_LOGGED_IN_ROOMS.clear()
             if app_state["auto_reconnect"] and not app_state["is_connected"] and not connection_lock.locked():
                 if app_state["connection_type"] == "bluetooth":
                     target = (app_state["ble_mac"] or "").strip()
                     if target:
                         log_to_dash(f"Auto-connecting to configured Bluetooth device {target}...")
                         await connect_hardware()
+                        if app_state["is_connected"]:
+                            ble_fail_streak = 0
+                            _NOAA_LOGGED_IN_ROOMS.clear()
+                        else:
+                            ble_fail_streak += 1
+                            if ble_fail_streak >= 2:
+                                log_to_dash("Bluetooth reconnect failed twice; restarting bluetooth service...")
+                                await asyncio.to_thread(_restart_bluetooth_stack)
+                                ble_fail_streak = 0
                 else:
                     target = app_state["serial_port"]
                     if target == DEFAULT_SERIAL_PORT and not os.path.exists(target):
@@ -8023,23 +8191,137 @@ document.addEventListener('click',e=>{document.querySelectorAll('details[open]')
 
 
 
+_NOAA_LOGGED_IN_ROOMS = set()
+
+
+async def _send_noaa_room_messages(msg):
+    if not meshcore_instance or not app_state.get("is_connected"):
+        return
+    rooms = (globals().get("app_config", {}).get("noaa") or {}).get("target_room_servers") or []
+    if not isinstance(rooms, list) or not rooms:
+        return
+
+    commands = meshcore_instance.commands
+    for room in rooms:
+        if isinstance(room, str):
+            target_id, password = room.strip(), ""
+        elif isinstance(room, dict):
+            target_id = str(room.get("target") or room.get("public_key") or room.get("name") or "").strip()
+            password = str(room.get("password") or "")
+        else:
+            continue
+
+        if not target_id or target_id == "YOUR_ROOM_SERVER_PUBKEY_OR_NAME":
+            continue
+
+        entry, contact = find_contact_entry(target_id)
+        if contact is None:
+            for cid, item in app_state.get("contacts", {}).items():
+                c = item.get("contact", item) if isinstance(item, dict) else {}
+                if isinstance(c, dict) and (
+                    str(c.get("public_key", "")).lower().startswith(target_id.lower())
+                    or display_name(cid, item).lower() == target_id.lower()
+                ):
+                    entry, contact = item, c
+                    break
+
+        if contact is None:
+            log_to_dash(f"NOAA room server '{target_id}' not found in contacts")
+            continue
+
+        pubkey = str(contact.get("public_key") or target_id)
+        room_label = display_name(pubkey, entry)
+        try:
+            async with paced_hardware_lock():
+                if password and pubkey not in _NOAA_LOGGED_IN_ROOMS:
+                    ev = await asyncio.wait_for(
+                        commands.send_login_sync(contact, password, min_timeout=8),
+                        timeout=25,
+                    )
+                    if ev is None or ev.type == EventType.ERROR:
+                        log_to_dash(f"NOAA room server login failed for {room_label}")
+                        continue
+                    _NOAA_LOGGED_IN_ROOMS.add(pubkey)
+
+                result, pending_delivery, hops = await send_to_target_with_pending_confirmation(
+                    contact, "node", msg
+                )
+            if result.type == EventType.ERROR:
+                _NOAA_LOGGED_IN_ROOMS.discard(pubkey)
+                log_to_dash(f"NOAA transmit error to room server {room_label}: {result.payload}")
+                continue
+            sent_message = add_chat_message("node", pubkey, "outgoing", msg)
+            update_chat_message_status(sent_message, "sent")
+            schedule_delivery_status_update(sent_message, pending_delivery, hops)
+            record_trace_event("node", "outbound", pubkey)
+            log_to_dash(f"Broadcast NOAA packet to room server {room_label}")
+        except Exception as err:
+            _NOAA_LOGGED_IN_ROOMS.discard(pubkey)
+            log_to_dash(f"NOAA room server error ({room_label}): {err}")
+
+
+async def _send_noaa_node_messages(msg):
+    nodes = (globals().get("app_config", {}).get("noaa") or {}).get("target_nodes") or []
+    if not isinstance(nodes, list) or not nodes:
+        return
+    for item in nodes:
+        tid = item.strip() if isinstance(item, str) else str(item.get("target") or "").strip()
+        if not tid:
+            continue
+        entry, contact = find_contact_entry(tid)
+        if contact is None:
+            for cid, citem in app_state.get("contacts", {}).items():
+                c = citem.get("contact", citem) if isinstance(citem, dict) else {}
+                if isinstance(c, dict) and (
+                    str(c.get("public_key", "")).lower().startswith(tid.lower())
+                    or display_name(cid, citem).lower() == tid.lower()
+                ):
+                    entry, contact = citem, c
+                    break
+        if contact is None:
+            log_to_dash(f"NOAA target node '{tid}' not in contacts")
+            continue
+        pk = str(contact.get("public_key") or tid)
+        lbl = display_name(pk, entry)
+        try:
+            async with paced_hardware_lock():
+                res, pend, hops = await send_to_target_with_pending_confirmation(contact, "node", msg)
+            if res.type == EventType.ERROR:
+                log_to_dash(f"NOAA node send error ({lbl}): {res.payload}")
+                continue
+            sm = add_chat_message("node", pk, "outgoing", msg)
+            update_chat_message_status(sm, "sent")
+            schedule_delivery_status_update(sm, pend, hops)
+            record_trace_event("node", "outbound", pk)
+            log_to_dash(f"Broadcast NOAA packet to node {lbl}")
+        except Exception as err:
+            log_to_dash(f"NOAA node error ({lbl}): {err}")
+
+
 async def send_noaa_channel_message(ch, message):
     if not meshcore_instance or not app_state.get("is_connected"):
         return
-    target = str(int(ch))
     msg = str(message)[:155]
-    async with paced_hardware_lock():
-        result, pending_delivery, hops = await send_to_target_with_pending_confirmation(
-            target, "channel", msg
-        )
-    if result.type == EventType.ERROR:
-        log_to_dash(f"NOAA transmit error on channel {target}: {result.payload}")
-        return
-    sent_message = add_chat_message("channel", target, "outgoing", msg)
-    update_chat_message_status(sent_message, "sent")
-    schedule_delivery_status_update(sent_message, pending_delivery, hops)
-    record_trace_event("channel", "outbound", target)
-    log_to_dash(f"NOAA message sent to channel {target}")
+    ch_int = int(ch)
+    if ch_int >= 0:
+        target = str(ch_int)
+        async with paced_hardware_lock():
+            result, pending_delivery, hops = await send_to_target_with_pending_confirmation(
+                target, "channel", msg
+            )
+        if result.type == EventType.ERROR:
+            log_to_dash(f"NOAA transmit error on channel {target}: {result.payload}")
+        else:
+            sent_message = add_chat_message("channel", target, "outgoing", msg)
+            update_chat_message_status(sent_message, "sent")
+            schedule_delivery_status_update(sent_message, pending_delivery, hops)
+            record_trace_event("channel", "outbound", target)
+            log_to_dash(f"NOAA message sent to channel {target}")
+
+    chs = (globals().get("app_config", {}).get("noaa") or {}).get("target_channels") or []
+    if ch_int < 0 or not chs or ch_int == int(chs[0]):
+        await _send_noaa_room_messages(msg)
+        await _send_noaa_node_messages(msg)
 
 
 async def noaa_alert_handler(request):
@@ -8050,7 +8332,10 @@ async def noaa_alert_handler(request):
         cfg = globals().get("app_config", {})
         noaa_cfg = cfg.get("noaa", {})
         chs = noaa_cfg.get("target_channels")
-        channels = chs if isinstance(chs, list) and len(chs) > 0 else list((5,))
+        if isinstance(chs, list):
+            channels = chs if chs else ([-1] if (noaa_cfg.get("target_room_servers") or noaa_cfg.get("target_nodes")) else [])
+        else:
+            channels = [5]
         packets = split_into_packets(f"NOAA: {alert_text}", max_len=145, max_packets=6)
         for ch in channels:
             for idx, pkt in enumerate(packets, start=1):

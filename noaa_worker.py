@@ -166,12 +166,16 @@ def transcribe_wav(wav_path):
     return " ".join(results).strip()
 
 def _get_target_channels(noaa_cfg):
-    chs = noaa_cfg.get("target_channels")
-    if isinstance(chs, list) and len(chs) > 0:
-        return [int(c) for c in chs]
+    if "target_channels" in noaa_cfg and isinstance(noaa_cfg["target_channels"], list):
+        chs = [int(c) for c in noaa_cfg["target_channels"]]
+        if chs:
+            return chs
+        if noaa_cfg.get("target_room_servers") or noaa_cfg.get("target_nodes"):
+            return [-1]
+        return []
     if "target_channel" in noaa_cfg:
         return [int(noaa_cfg["target_channel"])]
-    return list((5,))
+    return [5]
 
 def _blocking_noaa_capture(noaa_cfg, ollama_model):
     freq = noaa_cfg.get("frequency", "162.475M")
