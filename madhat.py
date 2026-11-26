@@ -5092,24 +5092,30 @@ body[data-theme="tron"] #map-view .map-search-overlay:not(.open) #map-node-list{
 #map-view .map-layout,body[data-theme="tron"].tron-overview #map-view .map-layout{grid-template-columns:minmax(0,1fr)!important}
 #map-view .map-surface,#map-view #map-canvas{width:100%}
 
-.mc-admin{display:flex;flex-direction:column;height:100%;min-height:0;background:var(--log-bg);border:1px solid var(--border);border-radius:8px;overflow:hidden}
-.mc-admin-top{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;background:var(--panel-bg);border-bottom:1px solid var(--border)}
-.mc-admin-title{display:flex;align-items:center;gap:10px}.mc-admin-title h3{margin:0;font-size:14px}.mc-admin-title small{display:block;color:var(--muted);font-size:11px}
-.mc-admin-body{flex:1;min-height:0;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:12px}
-.mc-admin-banner{padding:8px 12px;border-radius:6px;background:color-mix(in srgb,var(--accent) 18%,transparent);border:1px solid var(--accent);font-size:11px}
+.mc-overlay{position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;background:var(--bg,#0b0f17);color:var(--text)}
+.mc-admin{display:flex;flex-direction:column;height:100%;width:100%;overflow:hidden}
+.mc-admin-top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 18px;background:var(--panel-bg);border-bottom:1px solid var(--border)}
+.mc-admin-title{display:flex;align-items:center;gap:12px}.mc-admin-title h3{margin:0;font-size:15px}.mc-admin-title small{display:block;color:var(--muted);font-size:11px}
+.mc-login-stage{flex:1;display:grid;place-items:center;padding:20px}
+.mc-login-card{width:min(380px,100%);display:flex;flex-direction:column;gap:12px;padding:24px;border:1px solid var(--border);border-radius:10px;background:var(--panel-bg);text-align:center}
+.mc-login-card h4{margin:0;font-size:16px}.mc-login-card p{margin:0;color:var(--muted);font-size:12px}
+.mc-login-card label{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);text-align:left;cursor:pointer}
+.mc-admin-body{flex:1;min-height:0;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px;max-width:960px;width:100%;margin:0 auto}
+.mc-admin-body[hidden],.mc-cli-wrap[hidden],.mc-login-stage[hidden]{display:none !important}
+.mc-admin-banner{padding:10px 14px;border-radius:6px;background:color-mix(in srgb,var(--accent) 18%,transparent);border:1px solid var(--accent);font-size:12px}
 .mc-card{border:1px solid var(--border);border-radius:8px;background:var(--panel-bg);overflow:hidden}
-.mc-card-hdr{display:flex;align-items:center;justify-content:space-between;padding:9px 12px;border-bottom:1px solid var(--border);font-weight:700;font-size:12px}
-.mc-card-btns{display:flex;gap:6px}.mc-card-btns button{padding:3px 8px;font-size:11px}
-.mc-field{padding:9px 12px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:4px}.mc-field:last-child{border-bottom:0}
-.mc-field label{font-size:10px;color:var(--muted)}.mc-field input,.mc-field select{width:100%}
-.mc-tool{width:100%;display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border:0;border-bottom:1px solid var(--border);background:transparent;color:var(--text);text-align:left;border-radius:0}
-.mc-tool:hover{background:var(--panel-raised)}.mc-tool strong{display:block;font-size:12px}.mc-tool small{color:var(--muted);font-size:10px}
-.mc-tool-drawer{padding:10px 12px;background:var(--log-bg);border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.mc-cli-wrap{flex:1;min-height:0;display:flex;flex-direction:column;background:#080b0f}
-.mc-cli-out{flex:1;min-height:0;overflow-y:auto;padding:12px;margin:0;font:12px ui-monospace,monospace;white-space:pre-wrap;color:#e6edf3}
-.mc-cli-bar{position:relative;display:flex;gap:8px;padding:10px;background:var(--panel-bg);border-top:1px solid var(--border)}
+.mc-card-hdr{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border);font-weight:700;font-size:13px}
+.mc-card-btns{display:flex;gap:6px}.mc-card-btns button{padding:4px 10px;font-size:12px}
+.mc-field{padding:10px 14px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:5px}.mc-field:last-child{border-bottom:0}
+.mc-field label{font-size:11px;color:var(--muted)}.mc-field input,.mc-field select{width:100%}
+.mc-tool{width:100%;display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border:0;border-bottom:1px solid var(--border);background:transparent;color:var(--text);text-align:left;border-radius:0}
+.mc-tool:hover{background:var(--panel-raised)}.mc-tool strong{display:block;font-size:13px}.mc-tool small{color:var(--muted);font-size:11px}
+.mc-tool-drawer{padding:10px 14px;background:var(--log-bg);border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.mc-cli-wrap{flex:1;min-height:0;display:flex;flex-direction:column;background:#070a0f}
+.mc-cli-out{flex:1;min-height:0;overflow-y:auto;padding:14px 18px;margin:0;font:12px ui-monospace,monospace;white-space:pre-wrap;color:#e6edf3}
+.mc-cli-bar{position:relative;display:flex;gap:8px;padding:10px 16px;background:var(--panel-bg);border-top:1px solid var(--border)}
 .mc-admin-nav{display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--border);background:var(--panel-bg)}
-.mc-admin-nav button{border:0;border-radius:0;padding:10px 6px;font-size:11px;color:var(--muted);background:transparent}
+.mc-admin-nav button{border:0;border-radius:0;padding:11px 6px;font-size:12px;color:var(--muted);background:transparent}
 .mc-admin-nav button.active{color:var(--accent);border-top:2px solid var(--accent);font-weight:700}
 </style>
 <script>
@@ -5453,14 +5459,12 @@ function closeRepeaterManage(){
 }
 async function repeaterApi(body){let r=await fetch('/api/contacts/manage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),d=await r.json().catch(()=>({}));d._status=r.status;return d}
 function openRepeaterManage(peer){
+  document.getElementById('mc-admin-overlay')?.remove();
   let id=String(peer.id),name=peer.name||id,isRoom=Number(peer.type)===3;
-  let panel=document.getElementById('node-manage-panel'),box=document.getElementById('node-chat-history');
-  showView('nodes');selectConversation('node',id);manageNodeId=id;box.hidden=true;panel.hidden=false;panel.replaceChildren();
-  panel.style.padding='0';
-  let cp=panel.closest('.chat-panel'),cf=cp?.querySelector('form'),chHdr=cp?.querySelector('.chat-header');
-  if(cf)cf.hidden=true;if(chHdr)chHdr.hidden=true;
+  manageNodeId=id;
   let mk=(t,txt,cls)=>{let e=document.createElement(t);if(txt)e.textContent=txt;if(cls)e.className=cls;return e};
   let btn=(txt,fn,cls='')=>{let b=mk('button',txt,cls);b.type='button';b.onclick=fn;return b};
+  let overlay=mk('div','','mc-overlay');overlay.id='mc-admin-overlay';
   let root=mk('div','','mc-admin'),unlockables=[],authed=false;
   let lock=el=>{el.disabled=true;unlockables.push(el);return el};
   let run=async(c,silent=false)=>{
@@ -5471,25 +5475,41 @@ function openRepeaterManage(peer){
     if(!silent){out.textContent+=rep+'\n';out.scrollTop=out.scrollHeight;}
     return rep;
   };
+  let closeOverlay=()=>{overlay.remove();manageNodeId='';};
   let top=mk('div','','mc-admin-top'),left=mk('div','','mc-admin-title');
-  let back=btn('←',()=>{if(chHdr)chHdr.hidden=false;panel.style.padding='';closeRepeaterManage();},'secondary');
-  let tbox=mk('div');tbox.append(mk('h3',isRoom?'Room Admin':'Repeater Admin'),mk('small',name));
+  let back=btn('←',closeOverlay,'secondary');
+  let hTitle=mk('h3',isRoom?'Room Login':'Repeater Login');
+  let tbox=mk('div');tbox.append(hTitle,mk('small',name));
   left.append(back,tbox);
-  let authBox=mk('div');authBox.style.cssText='display:flex;gap:6px;align-items:center';
-  let pw=mk('input');pw.type='password';pw.placeholder='Admin password';pw.style.width='145px';
-  let login=btn('Log in',async()=>{
-    login.disabled=true;out.textContent+='Logging in...\n';
-    let d=await repeaterApi({target:id,action:'login',password:pw.value});
-    pw.value='';login.disabled=false;
+  let statusBadge=mk('small','Not authenticated');
+  top.append(left,statusBadge);
+  let loginStage=mk('div','','mc-login-stage'),card=mk('div','','mc-login-card');
+  let lockIcon=mk('div','🔒');lockIcon.style.fontSize='28px';
+  let titleEl=mk('h4','Authentication Required');
+  let subEl=mk('p','Please log in to manage this '+(isRoom?'room server':'repeater'));
+  let savedKey='mc-admin-pw-'+id;
+  let pw=mk('input');pw.type='password';pw.placeholder='Password';pw.autocomplete='off';
+  try{let sp=localStorage.getItem(savedKey);if(sp)pw.value=sp;}catch(e){}
+  let remLbl=mk('label'),remCb=mk('input');remCb.type='checkbox';remCb.checked=!!pw.value;
+  remLbl.append(remCb,document.createTextNode(' Remember Password?'));
+  let errTxt=mk('p');errTxt.style.color='var(--danger,#f85149)';
+  let loginBtn=btn('Log In',async()=>{
+    loginBtn.disabled=true;errTxt.textContent='Logging in...';
+    let val=pw.value;
+    let d=await repeaterApi({target:id,action:'login',password:val});
+    loginBtn.disabled=false;
     if(d.ok){
-      authed=true;out.textContent+='Logged in.\n';
-      authBox.replaceChildren(mk('small','Authenticated'));
-      panel.classList.add('expanded');if(cp)cp.classList.add('managing-full');
-      unlockables.forEach(e=>e.disabled=false);cmd.focus();
-    }else out.textContent+=(d.error||'Login failed')+'\n';
+      try{if(remCb.checked)localStorage.setItem(savedKey,val);else localStorage.removeItem(savedKey);}catch(e){}
+      authed=true;hTitle.textContent=isRoom?'Room Admin':'Repeater Admin';
+      statusBadge.textContent='Authenticated';
+      loginStage.hidden=true;nav.hidden=false;sw('se');
+      unlockables.forEach(e=>e.disabled=false);
+    }else errTxt.textContent=d.error||'Login failed. Check password.';
   });
-  pw.onkeydown=e=>{if(e.key==='Enter')login.click()};
-  authBox.append(pw,login);top.append(left,authBox);
+  pw.onkeydown=e=>{if(e.key==='Enter')loginBtn.click();};
+  let guestNote=mk('p','Some nodes allow guests to view status without a password.');
+  card.append(lockIcon,titleEl,subEl,pw,remLbl,loginBtn,errTxt,guestNote);
+  loginStage.append(card);
   let vStatus=mk('div','','mc-admin-body'),vCli=mk('div','','mc-cli-wrap'),vSet=mk('div','','mc-admin-body');
   vStatus.hidden=true;vSet.hidden=true;
   let out=mk('pre','','mc-cli-out');
@@ -5587,7 +5607,7 @@ function openRepeaterManage(peer){
   let nSt=btn('ⓘ Status',()=>sw('st')),nCl=btn('>_ Command Line',()=>sw('cl'),'active'),nSe=btn('⚙ Settings',()=>sw('se'));
   const sw=k=>{vStatus.hidden=k!=='st';vCli.hidden=k!=='cl';vSet.hidden=k!=='se';[nSt,nCl,nSe].forEach(b=>b.classList.remove('active'));(k==='st'?nSt:k==='cl'?nCl:nSe).classList.add('active');};
   nav.append(nSt,nCl,nSe);
-  root.append(top,vStatus,vCli,vSet,nav);panel.append(root);pw.focus();
+  nav.hidden=true;vCli.hidden=true;root.append(top,loginStage,vStatus,vCli,vSet,nav);overlay.append(root);document.body.append(overlay);pw.focus();
 }
 function selectNode(id){selectConversation('node',id)}
 function selectChannel(id){selectConversation('channel',id)}
