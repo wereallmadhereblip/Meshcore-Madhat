@@ -5549,10 +5549,10 @@ function openRepeaterManage(peer){
   let iFreq=lock(mk('input'));iFreq.placeholder='e.g. 910.525';
   let sBw=lock(mk('select'));['7.8','10.4','15.6','20.8','31.25','41.7','62.5','125','250','500'].forEach(v=>sBw.add(new Option(v+' kHz',v)));sBw.value='62.5';
   let sSf=lock(mk('select'));for(let v=5;v<=12;v++)sSf.add(new Option('SF'+v,String(v)));sSf.value='7';
-  let sCr=lock(mk('select'));.forEach(v=>sCr.add(new Option('4/'+v,String(v))));sCr.value='5';
+  let sCr=lock(mk('select'));Array.of('5','6','7','8').forEach(v=>sCr.add(new Option('4/'+v,String(v))));sCr.value='5';
   bRad.append(lock(btn('↻',async()=>{
     let r=await run('get radio',true);let m=r.match(/([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*(\d+)\s*,\s*(\d+)/);
-    if(m){iFreq.value=m;sBw.value=m;sSf.value=m;sCr.value=m;}
+    if(m){iFreq.value=m.at(1);sBw.value=m.at(2);sSf.value=m.at(3);sCr.value=m.at(4);}
   },'secondary')),lock(btn('✓',async()=>{
     if(!iFreq.value.trim())return;
     await run(`set radio ${iFreq.value.trim()},${sBw.value},${sSf.value},${sCr.value}`,true);
