@@ -639,7 +639,8 @@ blocked_senders = set()
 processed_messages = set()
 announced_contact_adverts = {}
 advert_seen_at = {}
-incoming_advert_events = deque(maxlen=20)
+incoming_advert_events = deque(maxlen=100)
+discovered_nodes_by_key = {}
 meshcore_instance = None
 ollama_process = None
 
@@ -3715,35 +3716,45 @@ async def handle_incoming_channel_message(event):
 
 async def handle_advertisement(event):
     payload = event.payload if isinstance(event.payload, dict) else {}
-    public_key = payload.get("public_key")
+    public_key = payload.get("public_key") or payload.get("pubkey")
     if not public_key:
         return
-    public_key = str(public_key)
+    public_key = str(public_key).lower()
     received_at = int(time.time())
     advert_seen_at[public_key] = received_at
     contact = {}
     node_id = public_key
     for candidate_id, entry in app_state["contacts"].items():
         candidate = entry.get("contact", entry) if isinstance(entry, dict) else {}
-        if isinstance(candidate, dict) and str(candidate.get("public_key", candidate_id)) == public_key:
+        if isinstance(candidate, dict) and str(candidate.get("public_key", candidate_id)).lower() == public_key:
             node_id = str(candidate_id)
             contact = candidate
             break
+    prev = discovered_nodes_by_key.get(public_key, {})
     name = next(
         (
             str(value)
-            for value in (payload.get("name"), payload.get("adv_name"), contact.get("name"), contact.get("adv_name"))
+            for value in (
+                payload.get("name"),
+                payload.get("adv_name"),
+                contact.get("name"),
+                contact.get("adv_name"),
+                prev.get("name"),
+            )
             if value
         ),
         f"Node {public_key[:8]}",
     )
-    incoming_advert_events.append({
+    rec = {
         "id": node_id,
         "public_key": public_key,
         "name": name,
+        "type": payload.get("type") or payload.get("adv_type") or contact.get("type") or prev.get("type"),
         "last_heard": received_at,
-        "hops": contact.get("out_path_len", payload.get("out_path_len")),
-    })
+        "hops": contact.get("out_path_len", payload.get("out_path_len", prev.get("hops"))),
+    }
+    discovered_nodes_by_key[public_key] = rec
+    incoming_advert_events.append(rec)
 
 
 async def handle_new_contact(event):
@@ -5755,7 +5766,7 @@ async function refreshDiscoveredNodes(){
   try{
     let r=await fetch("/api/peers"),d=await r.json();
     let seen=new Map();
-    for(let item of (d.incoming_adverts||[])){
+    for(let item of [...(d.discovered_nodes||[]),...(d.incoming_adverts||[]),...(d.nodes||[])]){
       let pk=String(item.public_key||item.id||"").toLowerCase();
       if(pk&&!seen.has(pk))seen.set(pk,item);
     }
@@ -6949,6 +6960,7 @@ async def peers_handler(request):
     return web.json_response({
         "nodes": nodes,
         "incoming_adverts": list(reversed(incoming_advert_events)),
+        "discovered_nodes": sorted(discovered_nodes_by_key.values(), key=lambda x: int(x.get("last_heard") or 0), reverse=True),
         "channels": [
             {
                 "id": str(i),
