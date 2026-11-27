@@ -7344,12 +7344,24 @@ async def manage_contact_handler(request):
     try:
         if action == "login":
             password = str(data.get("password", ""))
+            peer_type = int(contact.get("type") or 2)
             async with paced_hardware_lock():
-                event = await asyncio.wait_for(
-                    commands.send_login_sync(contact, password, min_timeout=10),
-                    timeout=30,
-                )
-            if event is None or event.type in (EventType.ERROR, getattr(EventType, "LOGIN_FAILED", None)):
+                sig = inspect.signature(commands.send_login_sync)
+                if "dst_type" in sig.parameters:
+                    event = await asyncio.wait_for(
+                        commands.send_login_sync(contact, password, min_timeout=8, dst_type=peer_type),
+                        timeout=30,
+                    )
+                else:
+                    event = await asyncio.wait_for(
+                        commands.send_login_sync(contact, password, min_timeout=8),
+                        timeout=30,
+                    )
+                if (event is None or event.type == EventType.ERROR) and peer_type == 3 and hasattr(commands, "send_login"):
+                    res = await commands.send_login(contact, password)
+                    if res is not None and res.type != EventType.ERROR:
+                        event = res
+            if event is None or event.type == EventType.ERROR:
                 return web.json_response({"error": "Login failed or timed out. Check the password."}, status=401)
             log_to_dash(f"Remote management login to {name}")
             return web.json_response({"ok": True})
