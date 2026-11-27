@@ -7346,38 +7346,45 @@ async def manage_contact_handler(request):
             password = str(data.get("password", ""))
 
             async def _attempt_login(target_contact, timeout_s):
-                t_ok = asyncio.create_task(meshcore_instance.dispatcher.wait_for_event(EventType.LOGIN_SUCCESS, timeout=timeout_s))
-                tasks = {t_ok}
-                t_fail = None
-                if hasattr(EventType, "LOGIN_FAILED"):
-                    t_fail = asyncio.create_task(meshcore_instance.dispatcher.wait_for_event(EventType.LOGIN_FAILED, timeout=timeout_s))
-                    tasks.add(t_fail)
-                await asyncio.sleep(0)
-                async with paced_hardware_lock():
-                    raw_res = await commands._send_login_raw(target_contact, password)
-                if raw_res is None or raw_res.type == EventType.ERROR:
-                    for t in tasks:
-                        t.cancel()
-                    return "tx_error", raw_res
-                log_to_dash(f"Sent login to {name} (path_len={target_contact.get('out_path_len')}, meta={raw_res.payload})")
-                done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-                for t in pending:
-                    t.cancel()
-                if t_fail and t_fail in done and t_fail.result() is not None:
-                    return "rejected", t_fail.result()
-                if t_ok in done and t_ok.result() is not None and t_ok.result().type != EventType.ERROR:
-                    return "ok", t_ok.result()
-                return "timeout", None
+                loop = asyncio.get_running_loop()
+                fut = loop.create_future()
 
-            status_code, ev = await _attempt_login(contact, 10.0)
+                def _on_ok(ev):
+                    if not fut.done():
+                        fut.set_result(("ok", ev))
+
+                def _on_fail(ev):
+                    if not fut.done():
+                        fut.set_result(("rejected", ev))
+
+                sub_ok = meshcore_instance.dispatcher.subscribe(EventType.LOGIN_SUCCESS, _on_ok)
+                sub_fail = (
+                    meshcore_instance.dispatcher.subscribe(EventType.LOGIN_FAILED, _on_fail)
+                    if hasattr(EventType, "LOGIN_FAILED")
+                    else None
+                )
+                try:
+                    async with paced_hardware_lock():
+                        raw_res = await commands._send_login_raw(target_contact, password)
+                    if raw_res is None or raw_res.type == EventType.ERROR:
+                        return "tx_error", raw_res
+                    log_to_dash(f"Sent login to {name} (path_len={target_contact.get('out_path_len')}, meta={raw_res.payload})")
+                    return await asyncio.wait_for(fut, timeout=timeout_s)
+                except asyncio.TimeoutError:
+                    return "timeout", None
+                finally:
+                    sub_ok.unsubscribe()
+                    if sub_fail:
+                        sub_fail.unsubscribe()
+
+            status_code, ev = await _attempt_login(contact, 12.0)
             if status_code == "timeout" and int(contact.get("out_path_len") or 0) >= 0:
-                log_to_dash(f"Direct/cached path to {name} timed out; resetting path to flood and retrying...")
+                log_to_dash(f"Direct path to {name} timed out; resetting path to flood and retrying...")
                 async with paced_hardware_lock():
                     await commands.reset_path(contact)
-                await refresh_contacts()
-                _, refreshed = find_contact_entry(data.get("target", ""))
-                if refreshed is not None:
-                    contact = refreshed
+                contact = dict(contact)
+                contact["out_path_len"] = -1
+                contact["out_path"] = ""
                 status_code, ev = await _attempt_login(contact, 15.0)
             if status_code == "tx_error":
                 return web.json_response({"error": f"Radio failed to transmit login: {getattr(ev, 'payload', '')}"}, status=502)
