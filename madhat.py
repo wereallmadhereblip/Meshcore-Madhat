@@ -5564,8 +5564,18 @@ function openRepeaterManage(peer){
     }else errTxt.textContent=d.error||'Login failed. Check password.';
   });
   pw.onkeydown=e=>{if(e.key==='Enter')loginBtn.click();};
+  let pwRow=mk('div');pwRow.style.cssText='position:relative;display:flex;align-items:center';
+  pw.style.paddingRight='38px';
+  let eyeBtn=btn('👁',()=>{pw.type=pw.type==='password'?'text':'password';});
+  eyeBtn.style.cssText='position:absolute;right:4px;width:auto;padding:4px 8px;background:transparent;border:0;color:#8b9bb4';
+  pwRow.append(pw,eyeBtn);
+  let guestBtn=btn('View Status as Guest',()=>{
+    statusBadge.textContent='Guest';
+    loginStage.hidden=true;nav.hidden=false;sw('st');
+  });
+  guestBtn.style.cssText='width:100%;background:transparent;border-color:#2b3545;color:#8b9bb4;font-size:12px';
   let guestNote=mk('p','Some nodes allow guests to view status without a password.');
-  card.append(lockIcon,titleEl,subEl,pw,remLbl,loginBtn,errTxt,guestNote);
+  card.append(lockIcon,titleEl,subEl,pwRow,remLbl,loginBtn,errTxt,guestNote,guestBtn);
   loginStage.append(card);
   let vStatus=mk('div','','mc-admin-body'),vCli=mk('div','','mc-cli-wrap'),vSet=mk('div','','mc-admin-body');
   vStatus.hidden=true;vSet.hidden=true;
@@ -7335,10 +7345,14 @@ async def manage_contact_handler(request):
         if action == "login":
             password = str(data.get("password", ""))
             async with paced_hardware_lock():
-                event = await asyncio.wait_for(
-                    commands.send_login_sync(contact, password, min_timeout=8),
-                    timeout=30,
-                )
+                raw_res = await commands._send_login_raw(contact, password)
+            if raw_res is None or raw_res.type == EventType.ERROR:
+                return web.json_response({"error": "Device failed to send login packet."}, status=502)
+            wait_sec = max(12.0, float((raw_res.payload or {}).get("suggested_timeout", 8000)) / 800.0)
+            event = await meshcore_instance.dispatcher.wait_for_event(
+                EventType.LOGIN_SUCCESS,
+                timeout=wait_sec,
+            )
             if event is None or event.type in (EventType.ERROR, getattr(EventType, "LOGIN_FAILED", None)):
                 return web.json_response({"error": "Login failed or timed out. Check the password."}, status=401)
             log_to_dash(f"Remote management login to {name}")
