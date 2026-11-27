@@ -5117,6 +5117,9 @@ body[data-theme="tron"] #map-view .map-search-overlay:not(.open) #map-node-list{
 .mc-admin-nav{display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--border);background:var(--panel-bg)}
 .mc-admin-nav button{border:0;border-radius:0;padding:11px 6px;font-size:12px;color:var(--muted);background:transparent}
 .mc-admin-nav button.active{color:var(--accent);border-top:2px solid var(--accent);font-weight:700}
+#settings-view.page-view{width:calc(100% - 24px);max-width:none}
+#settings-view .settings-layout{width:100%;max-width:none;grid-template-columns:minmax(0,1fr)}
+#settings-view .settings-layout>.card{width:100%;max-width:none}
 </style>
 <script>
 let gatewayTelemetry={};
@@ -5903,7 +5906,6 @@ window.addEventListener('DOMContentLoaded',()=>{loadFavoriteNodes();fields();sta
 </div>
 </main>
 <main id="settings-view" class="view-panel page-view" hidden>
-<button type="button" class="tron-settings-back" onclick="showView('nodes')">Dashboard</button>
 <div class="settings-layout">
 <section class="card"><div class="panel-heading"><div><span class="eyebrow">APPLICATION</span><h2>Settings</h2></div><span class="panel-index">04</span></div>
 <div class="settings-tabs" role="tablist" aria-label="Settings sections"><button type="button" class="settings-tab" role="tab" data-settings-tab="preferences" aria-pressed="true" onclick="showSettingsTab('preferences')">Themes</button><button type="button" class="settings-tab" role="tab" data-settings-tab="ollama" aria-pressed="false" onclick="showSettingsTab('ollama')">Ollama</button><button type="button" class="settings-tab" role="tab" data-settings-tab="bot" aria-pressed="false" onclick="showSettingsTab('bot')">Bot</button><button type="button" class="settings-tab" role="tab" data-settings-tab="tightvnc" aria-pressed="false" onclick="showSettingsTab('tightvnc')">Remote Desktop</button><button type="button" class="settings-tab" role="tab" data-settings-tab="weather" aria-pressed="false" onclick="showSettingsTab('weather')">Weather</button><button type="button" class="settings-tab" role="tab" data-settings-tab="config" aria-pressed="false" onclick="showSettingsTab('config')">Update</button><button type="button" class="settings-tab" role="tab" data-settings-tab="banner" aria-pressed="false" onclick="showSettingsTab('banner')">Banner</button><button type="button" class="settings-tab" role="tab" data-settings-tab="logs" aria-pressed="false" onclick="showSettingsTab('logs')">Logs</button><button type="button" class="settings-tab" role="tab" data-settings-tab="security" aria-pressed="false" onclick="showSettingsTab('security')">Security</button></div>
