@@ -5569,19 +5569,13 @@ function openRepeaterManage(peer){
   let eyeBtn=btn('👁',()=>{pw.type=pw.type==='password'?'text':'password';});
   eyeBtn.style.cssText='position:absolute;right:4px;width:auto;padding:4px 8px;background:transparent;border:0;color:#8b9bb4';
   pwRow.append(pw,eyeBtn);
-  let resetBtn=btn('Reset RF Path & Retry',async()=>{
-    resetBtn.disabled=true;errTxt.textContent='Resetting RF route to flood...';
-    await post('/api/contacts/path',{target:id,action:'reset'});
-    resetBtn.disabled=false;loginBtn.click();
-  });
-  resetBtn.style.cssText='width:100%;background:transparent;border-color:#2b3545;color:#93c5fd;font-size:12px';
   let guestBtn=btn('View Status as Guest',()=>{
     statusBadge.textContent='Guest';
     loginStage.hidden=true;nav.hidden=false;sw('st');
   });
   guestBtn.style.cssText='width:100%;background:transparent;border-color:#2b3545;color:#8b9bb4;font-size:12px';
   let guestNote=mk('p','Some nodes allow guests to view status without a password.');
-  card.append(lockIcon,titleEl,subEl,pwRow,remLbl,loginBtn,errTxt,resetBtn,guestNote,guestBtn);
+  card.append(lockIcon,titleEl,subEl,pwRow,remLbl,loginBtn,errTxt,guestNote,guestBtn);
   loginStage.append(card);
   let vStatus=mk('div','','mc-admin-body'),vCli=mk('div','','mc-cli-wrap'),vSet=mk('div','','mc-admin-body');
   vStatus.hidden=true;vSet.hidden=true;
@@ -7350,17 +7344,20 @@ async def manage_contact_handler(request):
     try:
         if action == "login":
             password = str(data.get("password", ""))
-            async with paced_hardware_lock():
-                raw_res = await commands._send_login_raw(contact, password)
-            if raw_res is None or raw_res.type == EventType.ERROR:
-                return web.json_response({"error": "Radio failed to transmit login request."}, status=502)
-            wait_sec = max(12.0, float((raw_res.payload or {}).get("suggested_timeout", 8000)) / 800.0)
+            wait_sec = 15.0
             t_ok = asyncio.create_task(meshcore_instance.dispatcher.wait_for_event(EventType.LOGIN_SUCCESS, timeout=wait_sec))
             tasks = {t_ok}
             t_fail = None
             if hasattr(EventType, "LOGIN_FAILED"):
                 t_fail = asyncio.create_task(meshcore_instance.dispatcher.wait_for_event(EventType.LOGIN_FAILED, timeout=wait_sec))
                 tasks.add(t_fail)
+            await asyncio.sleep(0)
+            async with paced_hardware_lock():
+                raw_res = await commands._send_login_raw(contact, password)
+            if raw_res is None or raw_res.type == EventType.ERROR:
+                for t in tasks:
+                    t.cancel()
+                return web.json_response({"error": "Radio failed to transmit login request."}, status=502)
             done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for t in pending:
                 t.cancel()
