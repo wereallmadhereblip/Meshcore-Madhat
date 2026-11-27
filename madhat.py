@@ -3736,12 +3736,19 @@ load_discovered_nodes()
 def _parse_raw_rf_advert(payload):
     if not isinstance(payload, dict):
         return None
-    raw = payload.get("raw") or payload.get("data") or payload.get("packet") or payload.get("payload")
-    if isinstance(raw, str):
+    raw_hex = payload.get("raw_hex")
+    if isinstance(raw_hex, str) and len(raw_hex) > 4:
         try:
-            raw = bytes.fromhex(raw.replace(" ", ""))
+            raw = bytes.fromhex(raw_hex.replace(" ", ""))[2:]
         except ValueError:
             return None
+    else:
+        raw = payload.get("raw") or payload.get("data") or payload.get("packet") or payload.get("payload")
+        if isinstance(raw, str):
+            try:
+                raw = bytes.fromhex(raw.replace(" ", ""))
+            except ValueError:
+                return None
     if not isinstance(raw, (bytes, bytearray)) or len(raw) < 103:
         return None
     b0, b1 = tuple(raw[:2])
@@ -4517,7 +4524,7 @@ async def connect_hardware():
             )
             meshcore_instance.subscribe(EventType.NEW_CONTACT, handle_new_contact)
             meshcore_instance.subscribe(EventType.ADVERTISEMENT, handle_advertisement)
-            for _ev_name in ("PATH_UPDATE", "ADVERT_PATH", "DISCOVER_RESPONSE", "RX_LOG_DATA"):
+            for _ev_name in ("PATH_UPDATE", "ADVERT_PATH", "DISCOVER_RESPONSE", "RX_LOG_DATA", "RAW_DATA"):
                 if hasattr(EventType, _ev_name):
                     meshcore_instance.subscribe(getattr(EventType, _ev_name), handle_advertisement)
             app_state["is_connected"] = True
