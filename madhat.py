@@ -4412,7 +4412,19 @@ async def connect_hardware():
 
             await meshcore_instance.start_auto_message_fetching()
             meshcore_instance.set_decrypt_channel_logs(True)
+            async def handle_cli_reply(event):
+                packet = event.payload or {}
+                sender = str(packet.get("pubkey_prefix") or packet.get("sender") or "").lower()
+                text = str(packet.get("text") or "").strip()
+                if not sender or not text:
+                    return
+                for prefix, queue in list(cli_reply_waiters.items()):
+                    if sender.startswith(prefix) or prefix.startswith(sender):
+                        queue.put_nowait(text)
+
             meshcore_instance.subscribe(EventType.CONTACT_MSG_RECV, handle_incoming_message)
+            if hasattr(EventType, "CLI_REPLY"):
+                meshcore_instance.subscribe(EventType.CLI_REPLY, handle_cli_reply)
             meshcore_instance.subscribe(
                 EventType.CHANNEL_MSG_RECV,
                 handle_incoming_channel_message,
@@ -7322,24 +7334,12 @@ async def manage_contact_handler(request):
     try:
         if action == "login":
             password = str(data.get("password", ""))
-            peer_type = int(contact.get("type") or 2)
             async with paced_hardware_lock():
-                sig = inspect.signature(commands.send_login_sync)
-                if "dst_type" in sig.parameters:
-                    event = await asyncio.wait_for(
-                        commands.send_login_sync(contact, password, min_timeout=8, dst_type=peer_type),
-                        timeout=30,
-                    )
-                else:
-                    event = await asyncio.wait_for(
-                        commands.send_login_sync(contact, password, min_timeout=8),
-                        timeout=30,
-                    )
-                if (event is None or event.type == EventType.ERROR) and peer_type == 3 and hasattr(commands, "send_login"):
-                    res = await commands.send_login(contact, password)
-                    if res is not None and res.type != EventType.ERROR:
-                        event = res
-            if event is None or event.type == EventType.ERROR:
+                event = await asyncio.wait_for(
+                    commands.send_login_sync(contact, password, min_timeout=8),
+                    timeout=30,
+                )
+            if event is None or event.type in (EventType.ERROR, getattr(EventType, "LOGIN_FAILED", None)):
                 return web.json_response({"error": "Login failed or timed out. Check the password."}, status=401)
             log_to_dash(f"Remote management login to {name}")
             return web.json_response({"ok": True})
