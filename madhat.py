@@ -7453,18 +7453,28 @@ async def remove_contact_handler(request):
         return web.json_response({"error": "Invalid JSON"}, status=400)
     if not meshcore_instance or not app_state["is_connected"]:
         return web.json_response({"error": "MeshCore is not connected"}, status=503)
-    target = resolve_contact_id(str(data.get("target", "")).strip())
+    raw_target = str(data.get("target", "")).strip()
+    target = resolve_contact_id(raw_target)
     entry = app_state["contacts"].get(target)
     if entry is None:
         return web.json_response({"error": "Contact not found"}, status=404)
+    contact = entry.get("contact", entry) if isinstance(entry, dict) else {}
+    pubkey = str(contact.get("public_key") or target).strip()
     try:
         async with paced_hardware_lock():
-            result = await meshcore_instance.commands.remove_contact(contact_public_key(entry, target))
+            result = await meshcore_instance.commands.remove_contact(contact if isinstance(contact, dict) and contact.get("public_key") else pubkey)
         if result.type == EventType.ERROR:
             return web.json_response({"error": f"Device rejected removal: {result.payload}"}, status=502)
     except Exception as error:
         return web.json_response({"error": f"Could not remove contact: {error}"}, status=500)
-    log_to_dash("Contact removed from message actions")
+    for k in list(app_state["contacts"].keys()):
+        if k == target or k == raw_target or contact_public_key(app_state["contacts"][k], k).lower() == pubkey.lower():
+            app_state["contacts"].pop(k, None)
+    if hasattr(meshcore_instance, "contacts") and isinstance(meshcore_instance.contacts, dict):
+        for k in list(meshcore_instance.contacts.keys()):
+            if str(k).lower().startswith(pubkey.lower()[:12]):
+                meshcore_instance.contacts.pop(k, None)
+    log_to_dash("Contact removed")
     await refresh_contacts()
     return web.json_response({"ok": True})
 
@@ -7563,9 +7573,17 @@ async def delete_target_handler(request):
             if entry is None:
                 return web.json_response({"error": "Node not found"}, status=404)
             contact = entry.get("contact", entry) if isinstance(entry, dict) else {}
-            public_key = contact.get("public_key") or target
+            public_key = str(contact.get("public_key") or target).strip()
             async with paced_hardware_lock():
-                result = await commands.remove_contact(public_key)
+                result = await commands.remove_contact(contact if isinstance(contact, dict) and contact.get("public_key") else public_key)
+            if result.type != EventType.ERROR:
+                for k in list(app_state["contacts"].keys()):
+                    if k == target or contact_public_key(app_state["contacts"][k], k).lower() == public_key.lower():
+                        app_state["contacts"].pop(k, None)
+                if hasattr(meshcore_instance, "contacts") and isinstance(meshcore_instance.contacts, dict):
+                    for k in list(meshcore_instance.contacts.keys()):
+                        if str(k).lower().startswith(public_key.lower()[:12]):
+                            meshcore_instance.contacts.pop(k, None)
         else:
             entry = app_state["channels"].get(target)
             if entry is None:
