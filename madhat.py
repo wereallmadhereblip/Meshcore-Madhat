@@ -6221,13 +6221,26 @@ function action(label,icon,handler,danger){
   button.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true">'+ICONS[icon]+'</svg><span></span>';button.querySelector('span').textContent=label;
   button.onclick=handler;return button;
 }
+function formatRepeater2Byte(repeater){
+  let raw=String(repeater?.hash||'').trim();
+  if(raw.toLowerCase()==='direct')return {name:repeater?.name||'Direct',hash2:'DIRECT',label:(repeater?.name||'Direct')+' [DIRECT]'};
+  let hex=String(repeater?.public_key||repeater?.id||raw).replace(/[^0-9a-fA-F]/g,'').toUpperCase();
+  let hash2=hex.slice(0,4)||raw.toUpperCase();
+  let peer=(typeof mapNodes!=='undefined'?mapNodes:[]).find(n=>{
+    let npk=String(n.public_key||n.id||'').replace(/[^0-9a-fA-F]/g,'').toUpperCase();
+    return npk&&hash2&&npk.startsWith(hash2);
+  });
+  let name=repeater?.name||peer?.name||'Unknown repeater';
+  return {name,hash2,label:hash2?`${name} [${hash2}]`:name};
+}
 function showPaths(message,sender){
   let outgoing=message.direction==='outgoing',heardList=Array.isArray(message.heard_repeaters)?message.heard_repeaters:[],heardCount=Number(message.heard);
-  let rows=outgoing?[['Sent',fmtTime(message.timestamp)||'Unknown'],['Status',message.status?message.status.charAt(0).toUpperCase()+message.status.slice(1):'Sent'],['Repeaters heard',heardList.length?String(heardList.length):(Number.isInteger(heardCount)&&heardCount>0?String(heardCount):'None reported')]]:[['Sender',sender||'Unknown'],['Received',fmtTime(message.timestamp)||'Unknown'],['Hops',Number.isInteger(message.path_len)?(message.path_len===0?'Direct (0 hops)':message.path_len+' hop'+(message.path_len===1?'':'s')):'Not reported'],['Signal (SNR)',typeof message.snr==='number'?message.snr.toFixed(2)+' dB':'Not reported']];
+  let heardSummary=heardList.length?heardList.map(r=>formatRepeater2Byte(r).label).join(', '):(Number.isInteger(heardCount)&&heardCount>0?String(heardCount):'None reported');
+  let rows=outgoing?[['Sent',fmtTime(message.timestamp)||'Unknown'],['Status',message.status?message.status.charAt(0).toUpperCase()+message.status.slice(1):'Sent'],['Repeaters heard',heardSummary]]:[['Sender',sender||'Unknown'],['Received',fmtTime(message.timestamp)||'Unknown'],['Hops',Number.isInteger(message.path_len)?(message.path_len===0?'Direct (0 hops)':message.path_len+' hop'+(message.path_len===1?'':'s')):'Not reported'],['Signal (SNR)',typeof message.snr==='number'?message.snr.toFixed(2)+' dB':'Not reported']];
   let box=document.createElement('div');box.className='sheet-paths';
   for(let [label,value] of rows){let row=document.createElement('div'),a=document.createElement('span'),b=document.createElement('strong');a.textContent=label;b.textContent=value;row.append(a,b);box.append(row)}
   if(outgoing){
-    for(let repeater of heardList){let row=document.createElement('div'),a=document.createElement('span'),b=document.createElement('strong');a.textContent=repeater.hash==='direct'?'Direct':repeater.hash;b.textContent=repeater.name||(repeater.hash==='direct'?'Heard by the recipient':'Unknown repeater');row.append(a,b);box.append(row)}
+    for(let repeater of heardList){let info=formatRepeater2Byte(repeater),row=document.createElement('div'),a=document.createElement('span'),b=document.createElement('strong');a.textContent='['+info.hash2+']';b.textContent=info.name;row.append(a,b);box.append(row)}
     if(!heardList.length){let note=document.createElement('div');note.className='muted';note.textContent=message.status==='failed'?'No repeater or acknowledgement was heard for this message.':'No repeaters have been heard yet. Check again in a few seconds.';box.append(note)}
     sheet.querySelector('.sheet-paths')?.remove();sheet.append(box);return;
   }
