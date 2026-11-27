@@ -3714,7 +3714,7 @@ async def handle_incoming_channel_message(event):
             log_to_dash(f"Channel message send error: {error}")
 
 
-DISCOVERED_NODES_PATH = APP_DATA_DIR / "discovered_nodes.json"
+DISCOVERED_NODES_PATH = Path.home() / ".config" / "meshcore-ollama-bot" / "discovered_nodes.json"
 
 def load_discovered_nodes():
     try:
@@ -3726,6 +3726,7 @@ def load_discovered_nodes():
 
 def save_discovered_nodes():
     try:
+        DISCOVERED_NODES_PATH.parent.mkdir(parents=True, exist_ok=True)
         DISCOVERED_NODES_PATH.write_text(json.dumps(discovered_nodes_by_key), encoding="utf-8")
     except Exception:
         pass
@@ -3743,29 +3744,29 @@ def _parse_raw_rf_advert(payload):
             return None
     if not isinstance(raw, (bytes, bytearray)) or len(raw) < 103:
         return None
-    ptype = (raw[0] >> 2) & 0x0F
-    if ptype != 4:  # PAYLOAD_TYPE_ADVERT
+    b0, b1 = tuple(raw[:2])
+    ptype = (b0 >> 2) & 0x0F
+    if ptype != 4:
         return None
-    plen = raw[1]
-    hlen = (plen >> 6) + 1
-    hops = plen & 0x3F
+    hlen = (b1 >> 6) + 1
+    hops = b1 & 0x3F
     idx = 2 + hops * hlen
     if len(raw) < idx + 101:
         return None
     pk = raw[idx:idx + 32].hex()
-    idx += 32 + 4 + 64  # pubkey + timestamp + signature
-    flags = raw[idx]
+    idx += 100
+    flags = next(iter(raw[idx:idx + 1]))
     idx += 1
     adv_type = flags & 0x0F
     if flags & 0x10:
-        idx += 8  # lat + lon
+        idx += 8
     if flags & 0x20:
-        idx += 2  # feat1
+        idx += 2
     if flags & 0x40:
-        idx += 2  # feat2
+        idx += 2
     adv_name = ""
     if (flags & 0x80) and idx < len(raw):
-        adv_name = raw[idx:].split(b"\x00", 1)[0].decode("utf-8", errors="ignore").strip()
+        adv_name = bytes(raw[idx:]).partition(b"\x00")[0].decode("utf-8", errors="ignore").strip()
     return {"public_key": pk, "adv_name": adv_name, "type": adv_type, "out_path_len": hops}
 
 async def handle_advertisement(event):
