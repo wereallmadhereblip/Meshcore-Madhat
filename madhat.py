@@ -7344,56 +7344,13 @@ async def manage_contact_handler(request):
     try:
         if action == "login":
             password = str(data.get("password", ""))
-
-            async def _attempt_login(target_contact, timeout_s):
-                loop = asyncio.get_running_loop()
-                fut = loop.create_future()
-
-                def _on_ok(ev):
-                    if not fut.done():
-                        fut.set_result(("ok", ev))
-
-                def _on_fail(ev):
-                    if not fut.done():
-                        fut.set_result(("rejected", ev))
-
-                sub_ok = meshcore_instance.dispatcher.subscribe(EventType.LOGIN_SUCCESS, _on_ok)
-                sub_fail = (
-                    meshcore_instance.dispatcher.subscribe(EventType.LOGIN_FAILED, _on_fail)
-                    if hasattr(EventType, "LOGIN_FAILED")
-                    else None
+            async with paced_hardware_lock():
+                event = await asyncio.wait_for(
+                    commands.send_login_sync(contact, password, min_timeout=10),
+                    timeout=30,
                 )
-                try:
-                    async with paced_hardware_lock():
-                        raw_res = await commands._send_login_raw(target_contact, password)
-                    if raw_res is None or raw_res.type == EventType.ERROR:
-                        return "tx_error", raw_res
-                    log_to_dash(f"Sent login to {name} (path_len={target_contact.get('out_path_len')}, meta={raw_res.payload})")
-                    return await asyncio.wait_for(fut, timeout=timeout_s)
-                except asyncio.TimeoutError:
-                    return "timeout", None
-                finally:
-                    sub_ok.unsubscribe()
-                    if sub_fail:
-                        sub_fail.unsubscribe()
-
-            status_code, ev = await _attempt_login(contact, 12.0)
-            if status_code == "timeout" and int(contact.get("out_path_len") or 0) >= 0:
-                log_to_dash(f"Direct path to {name} timed out; resetting path to flood and retrying...")
-                async with paced_hardware_lock():
-                    await commands.reset_path(contact)
-                contact = dict(contact)
-                contact["out_path_len"] = -1
-                contact["out_path"] = ""
-                status_code, ev = await _attempt_login(contact, 15.0)
-            if status_code == "tx_error":
-                return web.json_response({"error": f"Radio failed to transmit login: {getattr(ev, 'payload', '')}"}, status=502)
-            if status_code == "rejected":
-                log_to_dash(f"Remote login rejected by {name} (wrong password)")
-                return web.json_response({"error": "Wrong password — rejected by node."}, status=401)
-            if status_code != "ok":
-                log_to_dash(f"Remote login timed out waiting for {name}")
-                return web.json_response({"error": "Timed out waiting for node reply over flood route."}, status=504)
+            if event is None or event.type in (EventType.ERROR, getattr(EventType, "LOGIN_FAILED", None)):
+                return web.json_response({"error": "Login failed or timed out. Check the password."}, status=401)
             log_to_dash(f"Remote management login to {name}")
             return web.json_response({"ok": True})
         if action == "status":
