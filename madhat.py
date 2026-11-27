@@ -3730,6 +3730,14 @@ async def handle_advertisement(event):
             node_id = str(candidate_id)
             contact = candidate
             break
+    if not contact and not (payload.get("name") or payload.get("adv_name")) and meshcore_instance and app_state["is_connected"]:
+        await refresh_contacts()
+        for candidate_id, entry in app_state["contacts"].items():
+            candidate = entry.get("contact", entry) if isinstance(entry, dict) else {}
+            if isinstance(candidate, dict) and str(candidate.get("public_key", candidate_id)).lower() == public_key:
+                node_id = str(candidate_id)
+                contact = candidate
+                break
     prev = discovered_nodes_by_key.get(public_key, {})
     name = next(
         (
