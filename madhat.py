@@ -5569,13 +5569,19 @@ function openRepeaterManage(peer){
   let eyeBtn=btn('👁',()=>{pw.type=pw.type==='password'?'text':'password';});
   eyeBtn.style.cssText='position:absolute;right:4px;width:auto;padding:4px 8px;background:transparent;border:0;color:#8b9bb4';
   pwRow.append(pw,eyeBtn);
+  let resetBtn=btn('Reset RF Path & Retry',async()=>{
+    resetBtn.disabled=true;errTxt.textContent='Resetting RF route to flood...';
+    await post('/api/contacts/path',{target:id,action:'reset'});
+    resetBtn.disabled=false;loginBtn.click();
+  });
+  resetBtn.style.cssText='width:100%;background:transparent;border-color:#2b3545;color:#93c5fd;font-size:12px';
   let guestBtn=btn('View Status as Guest',()=>{
     statusBadge.textContent='Guest';
     loginStage.hidden=true;nav.hidden=false;sw('st');
   });
   guestBtn.style.cssText='width:100%;background:transparent;border-color:#2b3545;color:#8b9bb4;font-size:12px';
   let guestNote=mk('p','Some nodes allow guests to view status without a password.');
-  card.append(lockIcon,titleEl,subEl,pwRow,remLbl,loginBtn,errTxt,guestNote,guestBtn);
+  card.append(lockIcon,titleEl,subEl,pwRow,remLbl,loginBtn,errTxt,resetBtn,guestNote,guestBtn);
   loginStage.append(card);
   let vStatus=mk('div','','mc-admin-body'),vCli=mk('div','','mc-cli-wrap'),vSet=mk('div','','mc-admin-body');
   vStatus.hidden=true;vSet.hidden=true;
