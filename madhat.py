@@ -3714,8 +3714,67 @@ async def handle_incoming_channel_message(event):
             log_to_dash(f"Channel message send error: {error}")
 
 
+DISCOVERED_NODES_PATH = APP_DATA_DIR / "discovered_nodes.json"
+
+def load_discovered_nodes():
+    try:
+        data = json.loads(DISCOVERED_NODES_PATH.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            discovered_nodes_by_key.update(data)
+    except Exception:
+        pass
+
+def save_discovered_nodes():
+    try:
+        DISCOVERED_NODES_PATH.write_text(json.dumps(discovered_nodes_by_key), encoding="utf-8")
+    except Exception:
+        pass
+
+load_discovered_nodes()
+
+def _parse_raw_rf_advert(payload):
+    if not isinstance(payload, dict):
+        return None
+    raw = payload.get("raw") or payload.get("data") or payload.get("packet") or payload.get("payload")
+    if isinstance(raw, str):
+        try:
+            raw = bytes.fromhex(raw.replace(" ", ""))
+        except ValueError:
+            return None
+    if not isinstance(raw, (bytes, bytearray)) or len(raw) < 103:
+        return None
+    ptype = (raw[0] >> 2) & 0x0F
+    if ptype != 4:  # PAYLOAD_TYPE_ADVERT
+        return None
+    plen = raw[1]
+    hlen = (plen >> 6) + 1
+    hops = plen & 0x3F
+    idx = 2 + hops * hlen
+    if len(raw) < idx + 101:
+        return None
+    pk = raw[idx:idx + 32].hex()
+    idx += 32 + 4 + 64  # pubkey + timestamp + signature
+    flags = raw[idx]
+    idx += 1
+    adv_type = flags & 0x0F
+    if flags & 0x10:
+        idx += 8  # lat + lon
+    if flags & 0x20:
+        idx += 2  # feat1
+    if flags & 0x40:
+        idx += 2  # feat2
+    adv_name = ""
+    if (flags & 0x80) and idx < len(raw):
+        adv_name = raw[idx:].split(b"\x00", 1)[0].decode("utf-8", errors="ignore").strip()
+    return {"public_key": pk, "adv_name": adv_name, "type": adv_type, "out_path_len": hops}
+
 async def handle_advertisement(event):
     payload = event.payload if isinstance(event.payload, dict) else {}
+    parsed = _parse_raw_rf_advert(payload)
+    if parsed:
+        payload = {**payload, **{k: v for k, v in parsed.items() if v not in ("", None)}}
+    elif getattr(event, "type", None) == getattr(EventType, "RX_LOG_DATA", None):
+        return
     public_key = payload.get("public_key") or payload.get("pubkey")
     if not public_key:
         return
@@ -3768,6 +3827,7 @@ async def handle_advertisement(event):
         "hops": contact.get("out_path_len", payload.get("out_path_len", prev.get("hops"))),
     }
     discovered_nodes_by_key[public_key] = rec
+    save_discovered_nodes()
     incoming_advert_events.append(rec)
 
 
@@ -4456,6 +4516,9 @@ async def connect_hardware():
             )
             meshcore_instance.subscribe(EventType.NEW_CONTACT, handle_new_contact)
             meshcore_instance.subscribe(EventType.ADVERTISEMENT, handle_advertisement)
+            for _ev_name in ("PATH_UPDATE", "ADVERT_PATH", "DISCOVER_RESPONSE", "RX_LOG_DATA"):
+                if hasattr(EventType, _ev_name):
+                    meshcore_instance.subscribe(getattr(EventType, _ev_name), handle_advertisement)
             app_state["is_connected"] = True
             app_state["limits"] = {"max_contacts": None, "max_channels": MAX_CHANNELS}
             if app_state["connection_type"] == "bluetooth":
