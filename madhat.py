@@ -7344,7 +7344,7 @@ async def manage_contact_handler(request):
     try:
         if action == "login":
             password = str(data.get("password", ""))
-            wait_sec = 15.0
+            wait_sec = 25.0
             t_ok = asyncio.create_task(meshcore_instance.dispatcher.wait_for_event(EventType.LOGIN_SUCCESS, timeout=wait_sec))
             tasks = {t_ok}
             t_fail = None
@@ -7357,7 +7357,8 @@ async def manage_contact_handler(request):
             if raw_res is None or raw_res.type == EventType.ERROR:
                 for t in tasks:
                     t.cancel()
-                return web.json_response({"error": "Radio failed to transmit login request."}, status=502)
+                return web.json_response({"error": f"Radio failed to transmit login request: {getattr(raw_res, 'payload', '')}"}, status=502)
+            log_to_dash(f"Sent login to {name} (path_len={contact.get('out_path_len')}, meta={raw_res.payload})")
             done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for t in pending:
                 t.cancel()
