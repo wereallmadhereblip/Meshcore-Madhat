@@ -7347,14 +7347,25 @@ async def manage_contact_handler(request):
             async with paced_hardware_lock():
                 raw_res = await commands._send_login_raw(contact, password)
             if raw_res is None or raw_res.type == EventType.ERROR:
-                return web.json_response({"error": "Device failed to send login packet."}, status=502)
+                return web.json_response({"error": "Radio failed to transmit login request."}, status=502)
             wait_sec = max(12.0, float((raw_res.payload or {}).get("suggested_timeout", 8000)) / 800.0)
-            event = await meshcore_instance.dispatcher.wait_for_event(
-                EventType.LOGIN_SUCCESS,
-                timeout=wait_sec,
-            )
-            if event is None or event.type in (EventType.ERROR, getattr(EventType, "LOGIN_FAILED", None)):
-                return web.json_response({"error": "Login failed or timed out. Check the password."}, status=401)
+            t_ok = asyncio.create_task(meshcore_instance.dispatcher.wait_for_event(EventType.LOGIN_SUCCESS, timeout=wait_sec))
+            tasks = {t_ok}
+            t_fail = None
+            if hasattr(EventType, "LOGIN_FAILED"):
+                t_fail = asyncio.create_task(meshcore_instance.dispatcher.wait_for_event(EventType.LOGIN_FAILED, timeout=wait_sec))
+                tasks.add(t_fail)
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for t in pending:
+                t.cancel()
+            ev_ok = t_ok.result() if t_ok in done else None
+            ev_fail = t_fail.result() if (t_fail and t_fail in done) else None
+            if ev_fail is not None:
+                log_to_dash(f"Remote login rejected by {name} (wrong password)")
+                return web.json_response({"error": "Wrong password — rejected by node."}, status=401)
+            if ev_ok is None or ev_ok.type == EventType.ERROR:
+                log_to_dash(f"Remote login timed out waiting for {name}")
+                return web.json_response({"error": "Timed out waiting for node reply (check RF path/hops)."}, status=504)
             log_to_dash(f"Remote management login to {name}")
             return web.json_response({"ok": True})
         if action == "status":
