@@ -3397,7 +3397,8 @@ async def generate_ai_response(sender_id, prompt, allow_settings_update=True):
 
 async def send_to_target(target, target_type, message, timestamp=None):
     if target_type == "node":
-        return await meshcore_instance.commands.send_msg(target, message)
+        _, contact = find_contact_entry(target)
+        return await meshcore_instance.commands.send_msg(contact or target, message)
 
     try:
         channel_index = int(target)
@@ -3451,15 +3452,19 @@ async def send_to_target_with_pending_confirmation(target, target_type, message)
         subscriptions.append(
             subscribe(ack_type, lambda event: early_ack_codes.add(event.attributes.get("code")))
         )
-    # Repeater re-broadcasts show up in the RX log; channel text (5) or the DM ACK (3).
-    echo_payload_type = 5 if target_type == "channel" else 3
+    is_room_server = False
+    if target_type == "node":
+        _, _c = find_contact_entry(target)
+        is_room_server = isinstance(_c, dict) and str(_c.get("type", "")) == "3"
+    # Repeater re-broadcasts show up in the RX log; channel text (5), room text (2), or DM ACK (3).
+    echo_payload_types = {5} if target_type == "channel" else ({2, 3} if is_room_server else {3})
     if subscribe and hasattr(EventType, "RX_LOG_DATA"):
         subscriptions.append(
             subscribe(
                 EventType.RX_LOG_DATA,
                 lambda event: echoes.append(event.payload)
                 if isinstance(event.payload, dict)
-                and event.payload.get("payload_type") == echo_payload_type
+                and event.payload.get("payload_type") in echo_payload_types
                 else None,
             )
         )
@@ -3492,6 +3497,8 @@ async def send_to_target_with_pending_confirmation(target, target_type, message)
                 if abs(int(log.get("sender_timestamp") or 0) - int(send_timestamp or 0)) <= 3
                 and str(log.get("message", "")).endswith(message)
             ]
+        if is_room_server and echoes:
+            return list(echoes)
         if ack_code is None:
             return []
         return [
@@ -3525,7 +3532,7 @@ async def send_to_target_with_pending_confirmation(target, target_type, message)
                         ]
                         update_chat_message_status(chat_message, "delivered")
                 await asyncio.sleep(0.5)
-            if not delivered and target_type != "channel":
+            if not delivered and target_type != "channel" and not is_room_server:
                 update_chat_message_status(chat_message, "failed")
         finally:
             cleanup()
@@ -5581,13 +5588,13 @@ function promptRoomChatLogin(peer){
   let ov=document.createElement('div');
   ov.id='mc-room-login-modal';
   ov.style.cssText='position:fixed;inset:0;z-index:9999;background:rgba(4,8,15,0.82);backdrop-filter:blur(2px);display:flex;align-items:center;justify-content:center;padding:16px';
-  ov.onclick=e=>{if(e.target===ov){authenticatedRooms.add(id);ov.remove();}};
+  ov.onclick=e=>{if(e.target===ov){ov.remove();}};
   let card=document.createElement('div');
   card.style.cssText='position:relative;width:100%;max-width:340px;background:#111827;border:1px solid #1f2937;border-radius:10px;box-shadow:0 24px 60px rgba(0,0,0,0.8);padding:24px 22px 20px;color:#f3f4f6;font-family:inherit;text-align:center';
   let closeX=document.createElement('button');
   closeX.type='button';closeX.textContent='×';
   closeX.style.cssText='position:absolute;top:10px;right:12px;background:transparent;border:none;color:#6b7280;font-size:19px;line-height:1;cursor:pointer';
-  closeX.onclick=()=>{authenticatedRooms.add(id);ov.remove();};
+  closeX.onclick=()=>{ov.remove();};
   let lockWrap=document.createElement('div');
   lockWrap.style.cssText='display:flex;justify-content:center;margin-bottom:10px';
   lockWrap.innerHTML='<svg viewBox="0 0 24 24" width="28" height="28"><path fill="#9ca3af" d="M8 10V7a4 4 0 1 1 8 0v3h-2V7a2 2 0 1 0-4 0v3H8z"/><rect x="5" y="10" width="14" height="11" rx="2" fill="#f59e0b"/><circle cx="12" cy="15.5" r="1.4" fill="#111827"/></svg>';
@@ -5640,12 +5647,12 @@ function promptRoomChatLogin(peer){
   let guestBtn=document.createElement('button');
   guestBtn.type='button';guestBtn.textContent='VIEW STATUS AS GUEST';
   guestBtn.style.cssText='width:100%;padding:8px 12px;border-radius:6px;border:1px solid #374151;background:#161f2e;color:#d1d5db;font-size:10.5px;font-weight:600;letter-spacing:0.04em;cursor:pointer';
-  guestBtn.onclick=()=>{authenticatedRooms.add(id);ov.remove();};
+  guestBtn.onclick=()=>{ov.remove();};
   pw.addEventListener('keydown',e=>{if(e.key==='Enter')loginBtn.click();if(e.key==='Escape')guestBtn.click();});
   card.append(closeX,lockWrap,title,sub,pwWrap,remRow,err,loginBtn,divider,guestNote,guestBtn);
   ov.append(card);document.body.append(ov);pw.focus();
 }
-function selectConversation(type,id){let normalized=String(id);if(type==='node'){let peer=mapNodes.find(item=>String(item.id)===normalized)||{id:normalized},repeater=Number(peer.type)===2,isRoom=Number(peer.type)===3,form=document.querySelector('#nodes-view .chat-panel form'),input=document.getElementById('node-message');if(manageNodeId&&manageNodeId!==normalized)closeRepeaterManage();selectedNodeId=normalized;document.getElementById('node-chat-title').textContent=peer.name||normalized;document.getElementById('node-chat-detail').textContent=repeater?'Direct messages are not supported for repeater nodes.':peerSummary(peer);document.getElementById('node-send').disabled=repeater;input.disabled=repeater;form.hidden=repeater;updateConversationMenu('node',peer);renderConversationTargets('node');history('node',normalized,'node-chat-history',true);if(isRoom)promptRoomChatLogin(peer);}else{let channel=meshChannels.find(item=>String(item.id)===normalized)||{id:normalized};selectedChannelId=normalized;document.getElementById('channel-chat-title').textContent=channel.name||'Channel '+normalized;document.getElementById('channel-chat-detail').textContent='Channel '+normalized;document.getElementById('channel-send').disabled=false;updateConversationMenu('channel',channel);renderConversationTargets('channel');history('channel',normalized,'channel-chat-history',true)}}
+function selectConversation(type,id){let normalized=String(id);if(type==='node'){let peer=mapNodes.find(item=>String(item.id)===normalized)||{id:normalized},repeater=Number(peer.type)===2,isRoom=Number(peer.type)===3,form=document.querySelector('#nodes-view .chat-panel form'),input=document.getElementById('node-message');if(manageNodeId&&manageNodeId!==normalized)closeRepeaterManage();selectedNodeId=normalized;document.getElementById('node-chat-title').textContent=peer.name||normalized;document.getElementById('node-chat-detail').textContent=repeater?'Direct messages are not supported for repeater nodes.':peerSummary(peer);document.getElementById('node-send').disabled=repeater;input.disabled=repeater;form.hidden=repeater;updateConversationMenu('node',peer);renderConversationTargets('node');history('node',normalized,'node-chat-history',true);if(isRoom&&!authenticatedRooms.has(normalized))promptRoomChatLogin(peer);}else{let channel=meshChannels.find(item=>String(item.id)===normalized)||{id:normalized};selectedChannelId=normalized;document.getElementById('channel-chat-title').textContent=channel.name||'Channel '+normalized;document.getElementById('channel-chat-detail').textContent='Channel '+normalized;document.getElementById('channel-send').disabled=false;updateConversationMenu('channel',channel);renderConversationTargets('channel');history('channel',normalized,'channel-chat-history',true)}}
 let incomingAdvertSignature='';
 function renderAnalyzerStats(){let located=mapNodes.filter(peer=>Number.isFinite(peer.latitude)&&Number.isFinite(peer.longitude)).length;document.getElementById('analyzer-nodes').textContent=String(mapNodes.length);document.getElementById('analyzer-channels').textContent=String(meshChannels.length);document.getElementById('analyzer-located').textContent=String(located)}
 function advertAgeLabel(timestamp){let advertTime=Number(timestamp);if(!Number.isFinite(advertTime)||advertTime<=0)return 'Time unavailable';let elapsed=Math.max(0,Math.floor(Date.now()/1000-advertTime));if(elapsed<60)return 'Less than 1 min ago';if(elapsed<3600)return Math.floor(elapsed/60)+' min ago';if(elapsed<86400)return Math.floor(elapsed/3600)+' hr ago';return Math.floor(elapsed/86400)+' days ago'}
@@ -8360,15 +8367,7 @@ async def transmit_handler(request):
             return web.json_response({"error": str(result.payload)}, status=500)
         sent_message = add_chat_message(target_type, target, "outgoing", message)
         update_chat_message_status(sent_message, "sent")
-        is_room_server = False
-        if target_type == "node":
-            _entry = app_state["contacts"].get(target)
-            _contact = _entry.get("contact", _entry) if isinstance(_entry, dict) else {}
-            is_room_server = isinstance(_contact, dict) and str(_contact.get("type", "")) == "3"
-        if is_room_server:
-            update_chat_message_status(sent_message, "delivered")
-        else:
-            schedule_delivery_status_update(sent_message, pending_delivery, hops)
+        schedule_delivery_status_update(sent_message, pending_delivery, hops)
         record_trace_event(
             "direct" if target_type == "node" else "channel",
             "outbound",
