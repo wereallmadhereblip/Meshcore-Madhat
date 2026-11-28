@@ -5558,9 +5558,9 @@ function nodeRoleAvatar(item,isNode){
     return avatar;
   }
   if(t===3){
-    avatar.style.cssText='background:#2b3648;color:#9fb3c8';
+    avatar.style.cssText='background:#1e3a5f;color:#38bdf8';
     avatar.title='Room Server';
-    avatar.innerHTML='<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>';
+    avatar.innerHTML='<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><circle cx="7" cy="6.5" r="1" fill="currentColor"/><circle cx="7" cy="17.5" r="1" fill="currentColor"/><path d="M11 6.5h6"/><path d="M11 17.5h6"/></svg>';
     return avatar;
   }
   if(t===4){
@@ -5574,7 +5574,35 @@ function nodeRoleAvatar(item,isNode){
   return avatar;
 }
 function renderConversationTargets(type){let isNode=type==='node',filter=document.getElementById(isNode?'node-chat-filter':'channel-chat-filter').value,query=isNode?'':document.getElementById('channel-search').value.trim().toLowerCase(),items=[...(isNode?sortedFilteredNodes():meshChannels)].filter(item=>(!query||String(item.name||'').toLowerCase().includes(query)||String(item.id).toLowerCase().includes(query))&&(filter==='all'||(filter==='archived'?Boolean(item.archived):!item.archived))),list=document.getElementById(isNode?'node-target-list':'channel-target-list'),selected=isNode?selectedNodeId:selectedChannelId;items.sort((left,right)=>Number(Boolean(left.archived))-Number(Boolean(right.archived))||Number(Boolean(right.pinned))-Number(Boolean(left.pinned)));list.replaceChildren();if(!items.length){let empty=document.createElement('p');empty.className='map-empty';empty.textContent=filter==='archived'?'No archived chats.':(isNode?(mapNodes.length?'No nodes match this filter.':'No nodes found. Connect to a MeshCore radio to load contacts.'):(query?'No channels match this search.':'No channels found on this device.'));list.appendChild(empty);return}for(let item of items){let button=document.createElement('button');button.type='button';button.className='conversation-target'+(selected===String(item.id)?' active':'');button.onclick=()=>selectConversation(type,item.id);let avatar=nodeRoleAvatar(item,isNode);let title=document.createElement('strong');title.textContent=item.name;let detail=document.createElement('small');detail.textContent=[item.pinned?'Pinned':'',item.archived?'Archived':''].filter(Boolean).join(' · ');button.append(avatar,title);if(detail.textContent)button.append(detail);if(isNode){let entry=document.createElement('div');entry.className='conversation-entry';entry.addEventListener('mousedown',e=>{if(e.button!==0)return;entry._touchStart=Date.now();entry._holdTimer=setTimeout(()=>{window.openNodeActions(item)},500)});entry.addEventListener('mouseup',e=>{if(entry._holdTimer)clearTimeout(entry._holdTimer);entry._touchStart=null});entry.addEventListener('mouseleave',e=>{if(entry._holdTimer)clearTimeout(entry._holdTimer);entry._touchStart=null});entry.addEventListener('contextmenu',e=>e.preventDefault());entry.append(button,createNodeFavoriteButton(item.id));list.appendChild(entry);}else list.appendChild(button)}}
-function selectConversation(type,id){let normalized=String(id);if(type==='node'){let peer=mapNodes.find(item=>String(item.id)===normalized)||{id:normalized},repeater=Number(peer.type)===2,form=document.querySelector('#nodes-view .chat-panel form'),input=document.getElementById('node-message');if(manageNodeId&&manageNodeId!==normalized)closeRepeaterManage();selectedNodeId=normalized;document.getElementById('node-chat-title').textContent=peer.name||normalized;document.getElementById('node-chat-detail').textContent=repeater?'Direct messages are not supported for repeater nodes.':peerSummary(peer);document.getElementById('node-send').disabled=repeater;input.disabled=repeater;form.hidden=repeater;updateConversationMenu('node',peer);renderConversationTargets('node');history('node',normalized,'node-chat-history',true)}else{let channel=meshChannels.find(item=>String(item.id)===normalized)||{id:normalized};selectedChannelId=normalized;document.getElementById('channel-chat-title').textContent=channel.name||'Channel '+normalized;document.getElementById('channel-chat-detail').textContent='Channel '+normalized;document.getElementById('channel-send').disabled=false;updateConversationMenu('channel',channel);renderConversationTargets('channel');history('channel',normalized,'channel-chat-history',true)}}
+const authenticatedRooms=new Set();
+function promptRoomChatLogin(peer){
+  let id=String(peer.id),name=peer.name||id;
+  document.getElementById('mc-room-login-modal')?.remove();
+  let ov=document.createElement('div');ov.id='mc-room-login-modal';ov.className='mc-admin-overlay';
+  let card=document.createElement('div');card.className='mc-login-card';
+  let h=document.createElement('h3');h.textContent='Join Room Server — '+name;
+  let sub=document.createElement('p');sub.className='muted';sub.textContent='Enter the room password to authenticate and receive/post room messages.';
+  let pw=document.createElement('input');pw.type='password';pw.className='mc-input';pw.placeholder='Room password (leave blank if none)';
+  try{let saved=JSON.parse(localStorage.getItem('mc_admin_pw')||'{}');if(saved[id])pw.value=saved[id];}catch(e){}
+  let err=document.createElement('div');err.className='mc-err';
+  let row=document.createElement('div');row.style.cssText='display:flex;gap:8px;width:100%';
+  let loginBtn=document.createElement('button');loginBtn.type='button';loginBtn.className='mc-btn primary';loginBtn.style.flex='1';loginBtn.textContent='Join Room';
+  let skipBtn=document.createElement('button');skipBtn.type='button';skipBtn.className='mc-btn';skipBtn.textContent='Skip';
+  skipBtn.onclick=()=>{authenticatedRooms.add(id);ov.remove();};
+  loginBtn.onclick=async()=>{
+    loginBtn.disabled=true;err.textContent='Authenticating...';
+    try{
+      let r=await fetch('/api/contacts/manage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:id,action:'login',password:pw.value})});
+      let d=await r.json();
+      if(!r.ok||!d.ok){err.textContent=d.error||'Login failed';loginBtn.disabled=false;return;}
+      try{let s=JSON.parse(localStorage.getItem('mc_admin_pw')||'{}');if(pw.value)s[id]=pw.value;localStorage.setItem('mc_admin_pw',JSON.stringify(s));}catch(e){}
+      authenticatedRooms.add(id);ov.remove();
+    }catch(e){err.textContent='Connection error';loginBtn.disabled=false;}
+  };
+  pw.addEventListener('keydown',e=>{if(e.key==='Enter')loginBtn.click();});
+  row.append(loginBtn,skipBtn);card.append(h,sub,pw,err,row);ov.append(card);document.body.append(ov);pw.focus();
+}
+function selectConversation(type,id){let normalized=String(id);if(type==='node'){let peer=mapNodes.find(item=>String(item.id)===normalized)||{id:normalized},repeater=Number(peer.type)===2,isRoom=Number(peer.type)===3,form=document.querySelector('#nodes-view .chat-panel form'),input=document.getElementById('node-message');if(manageNodeId&&manageNodeId!==normalized)closeRepeaterManage();selectedNodeId=normalized;document.getElementById('node-chat-title').textContent=peer.name||normalized;document.getElementById('node-chat-detail').textContent=repeater?'Direct messages are not supported for repeater nodes.':peerSummary(peer);document.getElementById('node-send').disabled=repeater;input.disabled=repeater;form.hidden=repeater;updateConversationMenu('node',peer);renderConversationTargets('node');history('node',normalized,'node-chat-history',true);if(isRoom&&!authenticatedRooms.has(normalized))promptRoomChatLogin(peer);}else{let channel=meshChannels.find(item=>String(item.id)===normalized)||{id:normalized};selectedChannelId=normalized;document.getElementById('channel-chat-title').textContent=channel.name||'Channel '+normalized;document.getElementById('channel-chat-detail').textContent='Channel '+normalized;document.getElementById('channel-send').disabled=false;updateConversationMenu('channel',channel);renderConversationTargets('channel');history('channel',normalized,'channel-chat-history',true)}}
 let incomingAdvertSignature='';
 function renderAnalyzerStats(){let located=mapNodes.filter(peer=>Number.isFinite(peer.latitude)&&Number.isFinite(peer.longitude)).length;document.getElementById('analyzer-nodes').textContent=String(mapNodes.length);document.getElementById('analyzer-channels').textContent=String(meshChannels.length);document.getElementById('analyzer-located').textContent=String(located)}
 function advertAgeLabel(timestamp){let advertTime=Number(timestamp);if(!Number.isFinite(advertTime)||advertTime<=0)return 'Time unavailable';let elapsed=Math.max(0,Math.floor(Date.now()/1000-advertTime));if(elapsed<60)return 'Less than 1 min ago';if(elapsed<3600)return Math.floor(elapsed/60)+' min ago';if(elapsed<86400)return Math.floor(elapsed/3600)+' hr ago';return Math.floor(elapsed/86400)+' days ago'}
@@ -8289,7 +8317,13 @@ async def transmit_handler(request):
             return web.json_response({"error": str(result.payload)}, status=500)
         sent_message = add_chat_message(target_type, target, "outgoing", message)
         update_chat_message_status(sent_message, "sent")
-        schedule_delivery_status_update(sent_message, pending_delivery, hops)
+        is_room_server = False
+        if target_type == "node":
+            _entry = app_state["contacts"].get(target)
+            _contact = _entry.get("contact", _entry) if isinstance(_entry, dict) else {}
+            is_room_server = isinstance(_contact, dict) and str(_contact.get("type", "")) == "3"
+        if not is_room_server:
+            schedule_delivery_status_update(sent_message, pending_delivery, hops)
         record_trace_event(
             "direct" if target_type == "node" else "channel",
             "outbound",
