@@ -3468,6 +3468,17 @@ async def send_to_target_with_pending_confirmation(target, target_type, message)
                 else None,
             )
         )
+    if is_room_server and subscribe and hasattr(EventType, "CONTACT_MSG_RECV"):
+        target_prefix = str(target).lower()[:12]
+        subscriptions.append(
+            subscribe(
+                EventType.CONTACT_MSG_RECV,
+                lambda event: echoes.append(event.payload)
+                if isinstance(event.payload, dict)
+                and str(event.payload.get("pubkey_prefix", "")).lower().startswith(target_prefix[:8])
+                else None,
+            )
+        )
     send_timestamp = int(time.time()) if target_type == "channel" else None
 
     def cleanup():
@@ -5581,7 +5592,17 @@ function nodeRoleAvatar(item,isNode){
   return avatar;
 }
 function renderConversationTargets(type){let isNode=type==='node',filter=document.getElementById(isNode?'node-chat-filter':'channel-chat-filter').value,query=isNode?'':document.getElementById('channel-search').value.trim().toLowerCase(),items=[...(isNode?sortedFilteredNodes():meshChannels)].filter(item=>(!query||String(item.name||'').toLowerCase().includes(query)||String(item.id).toLowerCase().includes(query))&&(filter==='all'||(filter==='archived'?Boolean(item.archived):!item.archived))),list=document.getElementById(isNode?'node-target-list':'channel-target-list'),selected=isNode?selectedNodeId:selectedChannelId;items.sort((left,right)=>Number(Boolean(left.archived))-Number(Boolean(right.archived))||Number(Boolean(right.pinned))-Number(Boolean(left.pinned)));list.replaceChildren();if(!items.length){let empty=document.createElement('p');empty.className='map-empty';empty.textContent=filter==='archived'?'No archived chats.':(isNode?(mapNodes.length?'No nodes match this filter.':'No nodes found. Connect to a MeshCore radio to load contacts.'):(query?'No channels match this search.':'No channels found on this device.'));list.appendChild(empty);return}for(let item of items){let button=document.createElement('button');button.type='button';button.className='conversation-target'+(selected===String(item.id)?' active':'');button.onclick=()=>selectConversation(type,item.id);let avatar=nodeRoleAvatar(item,isNode);let title=document.createElement('strong');title.textContent=item.name;let detail=document.createElement('small');detail.textContent=[item.pinned?'Pinned':'',item.archived?'Archived':''].filter(Boolean).join(' · ');button.append(avatar,title);if(detail.textContent)button.append(detail);if(isNode){let entry=document.createElement('div');entry.className='conversation-entry';entry.addEventListener('mousedown',e=>{if(e.button!==0)return;entry._touchStart=Date.now();entry._holdTimer=setTimeout(()=>{window.openNodeActions(item)},500)});entry.addEventListener('mouseup',e=>{if(entry._holdTimer)clearTimeout(entry._holdTimer);entry._touchStart=null});entry.addEventListener('mouseleave',e=>{if(entry._holdTimer)clearTimeout(entry._holdTimer);entry._touchStart=null});entry.addEventListener('contextmenu',e=>e.preventDefault());entry.append(button,createNodeFavoriteButton(item.id));list.appendChild(entry);}else list.appendChild(button)}}
-const authenticatedRooms=new Set();
+const authenticatedRooms=new Set((()=>{try{return JSON.parse(localStorage.getItem('mc_room_authed')||'[]')}catch(e){return[]}})());
+function saveAuthenticatedRooms(){try{localStorage.setItem('mc_room_authed',JSON.stringify([...authenticatedRooms]));}catch(e){}}
+async function ensureRoomSession(peer){
+  let id=String(peer.id);
+  try{
+    let saved=JSON.parse(localStorage.getItem('mc_admin_pw')||'{}');
+    if(id in saved){
+      await fetch('/api/contacts/manage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:id,action:'login',password:saved[id]})});
+    }
+  }catch(e){}
+}
 function promptRoomChatLogin(peer){
   let id=String(peer.id),name=peer.name||id;
   document.getElementById('mc-room-login-modal')?.remove();
@@ -5636,7 +5657,7 @@ function promptRoomChatLogin(peer){
       let d=await r.json();
       if(!r.ok||!d.ok){err.style.color='#f87171';err.textContent=d.error||'Login failed';loginBtn.disabled=false;return;}
       try{let s=JSON.parse(localStorage.getItem('mc_admin_pw')||'{}');if(remChk.checked&&pw.value)s[id]=pw.value;else delete s[id];localStorage.setItem('mc_admin_pw',JSON.stringify(s));}catch(e){}
-      authenticatedRooms.add(id);ov.remove();
+      authenticatedRooms.add(id);saveAuthenticatedRooms();ov.remove();
     }catch(e){err.style.color='#f87171';err.textContent='Connection error';loginBtn.disabled=false;}
   };
   let divider=document.createElement('div');
@@ -5652,7 +5673,7 @@ function promptRoomChatLogin(peer){
   card.append(closeX,lockWrap,title,sub,pwWrap,remRow,err,loginBtn,divider,guestNote,guestBtn);
   ov.append(card);document.body.append(ov);pw.focus();
 }
-function selectConversation(type,id){let normalized=String(id);if(type==='node'){let peer=mapNodes.find(item=>String(item.id)===normalized)||{id:normalized},repeater=Number(peer.type)===2,isRoom=Number(peer.type)===3,form=document.querySelector('#nodes-view .chat-panel form'),input=document.getElementById('node-message');if(manageNodeId&&manageNodeId!==normalized)closeRepeaterManage();selectedNodeId=normalized;document.getElementById('node-chat-title').textContent=peer.name||normalized;document.getElementById('node-chat-detail').textContent=repeater?'Direct messages are not supported for repeater nodes.':peerSummary(peer);document.getElementById('node-send').disabled=repeater;input.disabled=repeater;form.hidden=repeater;updateConversationMenu('node',peer);renderConversationTargets('node');history('node',normalized,'node-chat-history',true);if(isRoom&&!authenticatedRooms.has(normalized))promptRoomChatLogin(peer);}else{let channel=meshChannels.find(item=>String(item.id)===normalized)||{id:normalized};selectedChannelId=normalized;document.getElementById('channel-chat-title').textContent=channel.name||'Channel '+normalized;document.getElementById('channel-chat-detail').textContent='Channel '+normalized;document.getElementById('channel-send').disabled=false;updateConversationMenu('channel',channel);renderConversationTargets('channel');history('channel',normalized,'channel-chat-history',true)}}
+function selectConversation(type,id){let normalized=String(id);if(type==='node'){let peer=mapNodes.find(item=>String(item.id)===normalized)||{id:normalized},repeater=Number(peer.type)===2,isRoom=Number(peer.type)===3,form=document.querySelector('#nodes-view .chat-panel form'),input=document.getElementById('node-message');if(manageNodeId&&manageNodeId!==normalized)closeRepeaterManage();selectedNodeId=normalized;document.getElementById('node-chat-title').textContent=peer.name||normalized;document.getElementById('node-chat-detail').textContent=repeater?'Direct messages are not supported for repeater nodes.':peerSummary(peer);document.getElementById('node-send').disabled=repeater;input.disabled=repeater;form.hidden=repeater;updateConversationMenu('node',peer);renderConversationTargets('node');history('node',normalized,'node-chat-history',true);if(isRoom){if(!authenticatedRooms.has(normalized))promptRoomChatLogin(peer);else ensureRoomSession(peer);}}else{let channel=meshChannels.find(item=>String(item.id)===normalized)||{id:normalized};selectedChannelId=normalized;document.getElementById('channel-chat-title').textContent=channel.name||'Channel '+normalized;document.getElementById('channel-chat-detail').textContent='Channel '+normalized;document.getElementById('channel-send').disabled=false;updateConversationMenu('channel',channel);renderConversationTargets('channel');history('channel',normalized,'channel-chat-history',true)}}
 let incomingAdvertSignature='';
 function renderAnalyzerStats(){let located=mapNodes.filter(peer=>Number.isFinite(peer.latitude)&&Number.isFinite(peer.longitude)).length;document.getElementById('analyzer-nodes').textContent=String(mapNodes.length);document.getElementById('analyzer-channels').textContent=String(meshChannels.length);document.getElementById('analyzer-located').textContent=String(located)}
 function advertAgeLabel(timestamp){let advertTime=Number(timestamp);if(!Number.isFinite(advertTime)||advertTime<=0)return 'Time unavailable';let elapsed=Math.max(0,Math.floor(Date.now()/1000-advertTime));if(elapsed<60)return 'Less than 1 min ago';if(elapsed<3600)return Math.floor(elapsed/60)+' min ago';if(elapsed<86400)return Math.floor(elapsed/3600)+' hr ago';return Math.floor(elapsed/86400)+' days ago'}
