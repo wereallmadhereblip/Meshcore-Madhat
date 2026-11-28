@@ -5580,64 +5580,70 @@ function promptRoomChatLogin(peer){
   document.getElementById('mc-room-login-modal')?.remove();
   let ov=document.createElement('div');
   ov.id='mc-room-login-modal';
-  ov.style.cssText='position:fixed;inset:0;z-index:9999;background:rgba(4,8,15,0.78);backdrop-filter:blur(2px);display:flex;align-items:center;justify-content:center;padding:16px';
+  ov.style.cssText='position:fixed;inset:0;z-index:9999;background:rgba(4,8,15,0.82);backdrop-filter:blur(2px);display:flex;align-items:center;justify-content:center;padding:16px';
   ov.onclick=e=>{if(e.target===ov){authenticatedRooms.add(id);ov.remove();}};
-
   let card=document.createElement('div');
-  card.style.cssText='width:100%;max-width:380px;background:#0c131d;border:1px solid #1e2d3d;border-radius:10px;box-shadow:0 20px 50px rgba(0,0,0,0.75);padding:18px;color:#e2e8f0;font-family:inherit';
-
-  let top=document.createElement('div');
-  top.style.cssText='display:flex;align-items:center;justify-content:space-between;margin-bottom:8px';
-  let h=document.createElement('div');
-  h.style.cssText='font-size:15px;font-weight:700;letter-spacing:0.02em;color:#f8fafc';
-  h.textContent='Room Server Login — '+name;
+  card.style.cssText='position:relative;width:100%;max-width:340px;background:#111827;border:1px solid #1f2937;border-radius:10px;box-shadow:0 24px 60px rgba(0,0,0,0.8);padding:24px 22px 20px;color:#f3f4f6;font-family:inherit;text-align:center';
   let closeX=document.createElement('button');
   closeX.type='button';closeX.textContent='×';
-  closeX.style.cssText='background:transparent;border:none;color:#94a3b8;font-size:20px;line-height:1;cursor:pointer;padding:0 4px';
+  closeX.style.cssText='position:absolute;top:10px;right:12px;background:transparent;border:none;color:#6b7280;font-size:19px;line-height:1;cursor:pointer';
   closeX.onclick=()=>{authenticatedRooms.add(id);ov.remove();};
-  top.append(h,closeX);
-
-  let sub=document.createElement('p');
-  sub.style.cssText='margin:0 0 12px 0;font-size:12px;line-height:1.45;color:#94a3b8';
-  sub.textContent='Enter the room password to authenticate and sync/post messages.';
-
+  let lockWrap=document.createElement('div');
+  lockWrap.style.cssText='display:flex;justify-content:center;margin-bottom:10px';
+  lockWrap.innerHTML='<svg viewBox="0 0 24 24" width="28" height="28"><path fill="#9ca3af" d="M8 10V7a4 4 0 1 1 8 0v3h-2V7a2 2 0 1 0-4 0v3H8z"/><rect x="5" y="10" width="14" height="11" rx="2" fill="#f59e0b"/><circle cx="12" cy="15.5" r="1.4" fill="#111827"/></svg>';
+  let title=document.createElement('div');
+  title.style.cssText='font-size:15px;font-weight:700;color:#f9fafb;margin-bottom:4px';
+  title.textContent='Authentication Required';
+  let sub=document.createElement('div');
+  sub.style.cssText='font-size:11.5px;color:#9ca3af;margin-bottom:16px';
+  sub.textContent='Please log in to manage '+name;
+  let pwWrap=document.createElement('div');
+  pwWrap.style.cssText='position:relative;margin-bottom:12px';
   let pw=document.createElement('input');
-  pw.type='password';
-  pw.placeholder='Room password (leave blank if none)';
-  pw.style.cssText='width:100%;box-sizing:border-box;padding:9px 11px;border-radius:6px;border:1px solid #263849;background:#070c13;color:#f1f5f9;font-size:13px;outline:none;margin-bottom:8px';
-  try{let saved=JSON.parse(localStorage.getItem('mc_admin_pw')||'{}');if(saved[id])pw.value=saved[id];}catch(e){}
-
+  pw.type='password';pw.placeholder='Password';
+  pw.style.cssText='width:100%;box-sizing:border-box;padding:9px 34px 9px 11px;border-radius:6px;border:1px solid #374151;background:#090d16;color:#f9fafb;font-size:13px;outline:none';
+  let hasSaved=false;
+  try{let saved=JSON.parse(localStorage.getItem('mc_admin_pw')||'{}');if(saved[id]){pw.value=saved[id];hasSaved=true;}}catch(e){}
+  let eyeBtn=document.createElement('button');
+  eyeBtn.type='button';
+  eyeBtn.style.cssText='position:absolute;right:8px;top:50%;transform:translateY(-50%);background:transparent;border:none;color:#9ca3af;cursor:pointer;padding:2px;display:flex;align-items:center';
+  eyeBtn.innerHTML='<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+  eyeBtn.onclick=()=>{pw.type=pw.type==='password'?'text':'password';};
+  pwWrap.append(pw,eyeBtn);
+  let remRow=document.createElement('label');
+  remRow.style.cssText='display:flex;align-items:center;gap:8px;font-size:11.5px;color:#d1d5db;margin-bottom:12px;cursor:pointer;user-select:none';
+  let remChk=document.createElement('input');
+  remChk.type='checkbox';remChk.checked=true;
+  remChk.style.cssText='accent-color:#2563eb;width:14px;height:14px;cursor:pointer';
+  let remTxt=document.createElement('span');remTxt.textContent='Remember Password?';
+  remRow.append(remChk,remTxt);
   let err=document.createElement('div');
-  err.style.cssText='min-height:16px;font-size:12px;color:#f87171;margin-bottom:10px';
-
-  let row=document.createElement('div');
-  row.style.cssText='display:flex;gap:8px;justify-content:flex-end';
-
-  let skipBtn=document.createElement('button');
-  skipBtn.type='button';skipBtn.textContent='Cancel';
-  skipBtn.style.cssText='padding:8px 14px;border-radius:6px;border:1px solid #263849;background:#131d2b;color:#cbd5e1;font-size:12px;font-weight:600;cursor:pointer';
-  skipBtn.onclick=()=>{authenticatedRooms.add(id);ov.remove();};
-
+  err.style.cssText='min-height:14px;font-size:11.5px;color:#f87171;margin-bottom:8px';
   let loginBtn=document.createElement('button');
-  loginBtn.type='button';loginBtn.textContent='Join Room';
-  loginBtn.style.cssText='padding:8px 16px;border-radius:6px;border:1px solid #0284c7;background:#0ea5e9;color:#041019;font-size:12px;font-weight:700;cursor:pointer';
+  loginBtn.type='button';loginBtn.textContent='LOG IN';
+  loginBtn.style.cssText='width:100%;padding:9px 12px;border-radius:6px;border:none;background:#2563eb;color:#ffffff;font-size:11.5px;font-weight:700;letter-spacing:0.05em;cursor:pointer';
   loginBtn.onclick=async()=>{
-    loginBtn.disabled=true;err.style.color='#38bdf8';err.textContent='Authenticating...';
+    loginBtn.disabled=true;err.style.color='#60a5fa';err.textContent='Authenticating...';
     try{
       let r=await fetch('/api/contacts/manage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:id,action:'login',password:pw.value})});
       let d=await r.json();
       if(!r.ok||!d.ok){err.style.color='#f87171';err.textContent=d.error||'Login failed';loginBtn.disabled=false;return;}
-      try{let s=JSON.parse(localStorage.getItem('mc_admin_pw')||'{}');if(pw.value)s[id]=pw.value;localStorage.setItem('mc_admin_pw',JSON.stringify(s));}catch(e){}
+      try{let s=JSON.parse(localStorage.getItem('mc_admin_pw')||'{}');if(remChk.checked&&pw.value)s[id]=pw.value;else delete s[id];localStorage.setItem('mc_admin_pw',JSON.stringify(s));}catch(e){}
       authenticatedRooms.add(id);ov.remove();
     }catch(e){err.style.color='#f87171';err.textContent='Connection error';loginBtn.disabled=false;}
   };
-  pw.addEventListener('keydown',e=>{if(e.key==='Enter')loginBtn.click();if(e.key==='Escape')skipBtn.click();});
-
-  row.append(skipBtn,loginBtn);
-  card.append(top,sub,pw,err,row);
-  ov.append(card);
-  document.body.append(ov);
-  pw.focus();
+  let divider=document.createElement('div');
+  divider.style.cssText='height:1px;background:#1f2937;margin:14px 0 12px';
+  let guestNote=document.createElement('div');
+  guestNote.style.cssText='font-size:10.5px;line-height:1.4;color:#9ca3af;margin-bottom:10px';
+  guestNote.textContent='Some nodes allow guests to view status without a password.';
+  let guestBtn=document.createElement('button');
+  guestBtn.type='button';guestBtn.textContent='VIEW STATUS AS GUEST';
+  guestBtn.style.cssText='width:100%;padding:8px 12px;border-radius:6px;border:1px solid #374151;background:#161f2e;color:#d1d5db;font-size:10.5px;font-weight:600;letter-spacing:0.04em;cursor:pointer';
+  guestBtn.onclick=()=>{authenticatedRooms.add(id);ov.remove();};
+  pw.addEventListener('keydown',e=>{if(e.key==='Enter')loginBtn.click();if(e.key==='Escape')guestBtn.click();});
+  card.append(closeX,lockWrap,title,sub,pwWrap,remRow,err,loginBtn,divider,guestNote,guestBtn);
+  ov.append(card);document.body.append(ov);pw.focus();
 }
 function selectConversation(type,id){let normalized=String(id);if(type==='node'){let peer=mapNodes.find(item=>String(item.id)===normalized)||{id:normalized},repeater=Number(peer.type)===2,isRoom=Number(peer.type)===3,form=document.querySelector('#nodes-view .chat-panel form'),input=document.getElementById('node-message');if(manageNodeId&&manageNodeId!==normalized)closeRepeaterManage();selectedNodeId=normalized;document.getElementById('node-chat-title').textContent=peer.name||normalized;document.getElementById('node-chat-detail').textContent=repeater?'Direct messages are not supported for repeater nodes.':peerSummary(peer);document.getElementById('node-send').disabled=repeater;input.disabled=repeater;form.hidden=repeater;updateConversationMenu('node',peer);renderConversationTargets('node');history('node',normalized,'node-chat-history',true);if(isRoom&&!authenticatedRooms.has(normalized))promptRoomChatLogin(peer);}else{let channel=meshChannels.find(item=>String(item.id)===normalized)||{id:normalized};selectedChannelId=normalized;document.getElementById('channel-chat-title').textContent=channel.name||'Channel '+normalized;document.getElementById('channel-chat-detail').textContent='Channel '+normalized;document.getElementById('channel-send').disabled=false;updateConversationMenu('channel',channel);renderConversationTargets('channel');history('channel',normalized,'channel-chat-history',true)}}
 let incomingAdvertSignature='';
