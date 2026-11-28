@@ -5578,29 +5578,66 @@ const authenticatedRooms=new Set();
 function promptRoomChatLogin(peer){
   let id=String(peer.id),name=peer.name||id;
   document.getElementById('mc-room-login-modal')?.remove();
-  let ov=document.createElement('div');ov.id='mc-room-login-modal';ov.className='mc-admin-overlay';
-  let card=document.createElement('div');card.className='mc-login-card';
-  let h=document.createElement('h3');h.textContent='Join Room Server — '+name;
-  let sub=document.createElement('p');sub.className='muted';sub.textContent='Enter the room password to authenticate and receive/post room messages.';
-  let pw=document.createElement('input');pw.type='password';pw.className='mc-input';pw.placeholder='Room password (leave blank if none)';
+  let ov=document.createElement('div');
+  ov.id='mc-room-login-modal';
+  ov.style.cssText='position:fixed;inset:0;z-index:9999;background:rgba(4,8,15,0.78);backdrop-filter:blur(2px);display:flex;align-items:center;justify-content:center;padding:16px';
+  ov.onclick=e=>{if(e.target===ov){authenticatedRooms.add(id);ov.remove();}};
+
+  let card=document.createElement('div');
+  card.style.cssText='width:100%;max-width:380px;background:#0c131d;border:1px solid #1e2d3d;border-radius:10px;box-shadow:0 20px 50px rgba(0,0,0,0.75);padding:18px;color:#e2e8f0;font-family:inherit';
+
+  let top=document.createElement('div');
+  top.style.cssText='display:flex;align-items:center;justify-content:space-between;margin-bottom:8px';
+  let h=document.createElement('div');
+  h.style.cssText='font-size:15px;font-weight:700;letter-spacing:0.02em;color:#f8fafc';
+  h.textContent='Room Server Login — '+name;
+  let closeX=document.createElement('button');
+  closeX.type='button';closeX.textContent='×';
+  closeX.style.cssText='background:transparent;border:none;color:#94a3b8;font-size:20px;line-height:1;cursor:pointer;padding:0 4px';
+  closeX.onclick=()=>{authenticatedRooms.add(id);ov.remove();};
+  top.append(h,closeX);
+
+  let sub=document.createElement('p');
+  sub.style.cssText='margin:0 0 12px 0;font-size:12px;line-height:1.45;color:#94a3b8';
+  sub.textContent='Enter the room password to authenticate and sync/post messages.';
+
+  let pw=document.createElement('input');
+  pw.type='password';
+  pw.placeholder='Room password (leave blank if none)';
+  pw.style.cssText='width:100%;box-sizing:border-box;padding:9px 11px;border-radius:6px;border:1px solid #263849;background:#070c13;color:#f1f5f9;font-size:13px;outline:none;margin-bottom:8px';
   try{let saved=JSON.parse(localStorage.getItem('mc_admin_pw')||'{}');if(saved[id])pw.value=saved[id];}catch(e){}
-  let err=document.createElement('div');err.className='mc-err';
-  let row=document.createElement('div');row.style.cssText='display:flex;gap:8px;width:100%';
-  let loginBtn=document.createElement('button');loginBtn.type='button';loginBtn.className='mc-btn primary';loginBtn.style.flex='1';loginBtn.textContent='Join Room';
-  let skipBtn=document.createElement('button');skipBtn.type='button';skipBtn.className='mc-btn';skipBtn.textContent='Skip';
+
+  let err=document.createElement('div');
+  err.style.cssText='min-height:16px;font-size:12px;color:#f87171;margin-bottom:10px';
+
+  let row=document.createElement('div');
+  row.style.cssText='display:flex;gap:8px;justify-content:flex-end';
+
+  let skipBtn=document.createElement('button');
+  skipBtn.type='button';skipBtn.textContent='Cancel';
+  skipBtn.style.cssText='padding:8px 14px;border-radius:6px;border:1px solid #263849;background:#131d2b;color:#cbd5e1;font-size:12px;font-weight:600;cursor:pointer';
   skipBtn.onclick=()=>{authenticatedRooms.add(id);ov.remove();};
+
+  let loginBtn=document.createElement('button');
+  loginBtn.type='button';loginBtn.textContent='Join Room';
+  loginBtn.style.cssText='padding:8px 16px;border-radius:6px;border:1px solid #0284c7;background:#0ea5e9;color:#041019;font-size:12px;font-weight:700;cursor:pointer';
   loginBtn.onclick=async()=>{
-    loginBtn.disabled=true;err.textContent='Authenticating...';
+    loginBtn.disabled=true;err.style.color='#38bdf8';err.textContent='Authenticating...';
     try{
       let r=await fetch('/api/contacts/manage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:id,action:'login',password:pw.value})});
       let d=await r.json();
-      if(!r.ok||!d.ok){err.textContent=d.error||'Login failed';loginBtn.disabled=false;return;}
+      if(!r.ok||!d.ok){err.style.color='#f87171';err.textContent=d.error||'Login failed';loginBtn.disabled=false;return;}
       try{let s=JSON.parse(localStorage.getItem('mc_admin_pw')||'{}');if(pw.value)s[id]=pw.value;localStorage.setItem('mc_admin_pw',JSON.stringify(s));}catch(e){}
       authenticatedRooms.add(id);ov.remove();
-    }catch(e){err.textContent='Connection error';loginBtn.disabled=false;}
+    }catch(e){err.style.color='#f87171';err.textContent='Connection error';loginBtn.disabled=false;}
   };
-  pw.addEventListener('keydown',e=>{if(e.key==='Enter')loginBtn.click();});
-  row.append(loginBtn,skipBtn);card.append(h,sub,pw,err,row);ov.append(card);document.body.append(ov);pw.focus();
+  pw.addEventListener('keydown',e=>{if(e.key==='Enter')loginBtn.click();if(e.key==='Escape')skipBtn.click();});
+
+  row.append(skipBtn,loginBtn);
+  card.append(top,sub,pw,err,row);
+  ov.append(card);
+  document.body.append(ov);
+  pw.focus();
 }
 function selectConversation(type,id){let normalized=String(id);if(type==='node'){let peer=mapNodes.find(item=>String(item.id)===normalized)||{id:normalized},repeater=Number(peer.type)===2,isRoom=Number(peer.type)===3,form=document.querySelector('#nodes-view .chat-panel form'),input=document.getElementById('node-message');if(manageNodeId&&manageNodeId!==normalized)closeRepeaterManage();selectedNodeId=normalized;document.getElementById('node-chat-title').textContent=peer.name||normalized;document.getElementById('node-chat-detail').textContent=repeater?'Direct messages are not supported for repeater nodes.':peerSummary(peer);document.getElementById('node-send').disabled=repeater;input.disabled=repeater;form.hidden=repeater;updateConversationMenu('node',peer);renderConversationTargets('node');history('node',normalized,'node-chat-history',true);if(isRoom&&!authenticatedRooms.has(normalized))promptRoomChatLogin(peer);}else{let channel=meshChannels.find(item=>String(item.id)===normalized)||{id:normalized};selectedChannelId=normalized;document.getElementById('channel-chat-title').textContent=channel.name||'Channel '+normalized;document.getElementById('channel-chat-detail').textContent='Channel '+normalized;document.getElementById('channel-send').disabled=false;updateConversationMenu('channel',channel);renderConversationTargets('channel');history('channel',normalized,'channel-chat-history',true)}}
 let incomingAdvertSignature='';
